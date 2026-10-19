@@ -1007,6 +1007,61 @@ describe("TE-1 證據裁圖", () => {
         const r2 = await upload(accountant, sid, await mk());
         expect(r2.body).toMatchObject({ accepted_images: 0, would_withdraw: 0, skipped_duplicate: 1 });
       });
+
+      it("取代模式 M1：冇新圖頂替就唔軟刪——manifest 只有 people[]；新圖唔合格（超大）→ would_withdraw 0、舊圖保留", async () => {
+        const { pb, sid } = await seed();
+        const mb = matchOf(pb);
+        await upload(accountant, sid, await zipOf([{ bytes: J(421), field: "hkid", doc_kind: "printed", priority: 2, match: mb }]));
+        const docRef = { file_name: "x.pdf", page_count: 1, pages_by_kind: {} };
+        // (a) 只有 people[]（冇 items）
+        const onlyPeople = await buildZip({ "manifest.json": JSON.stringify({ version: 1, items: [], replace: [{ doc_kind: "printed", field: "hkid" }], people: [{ match: mb, doc_ref: docRef }] }) });
+        expect((await upload(accountant, sid, onlyPeople, true)).body.would_withdraw).toBe(0);
+        expect((await upload(accountant, sid, onlyPeople)).body.would_withdraw).toBe(0);
+        expect(await imgCount({ sessionId: sid, withdrawnAt: null })).toBe(1);
+        // (b) 新圖唔合格（>120 KB 裁圖規格）
+        const big = fakeJpeg(320, 80, { seed: 422, pad: 130 * 1024 });
+        const f = entryName(big);
+        const bad = await buildZip({ [f]: big, "manifest.json": JSON.stringify({ version: 1, items: [{ file: f, field: "hkid", doc_kind: "printed", priority: 2, match: mb }], replace: [{ doc_kind: "printed", field: "hkid" }] }) });
+        for (const dry of [true, false]) expect((await upload(accountant, sid, bad, dry)).body).toMatchObject({ accepted_images: 0, skipped_invalid_image: 1, would_withdraw: 0 });
+        expect(await imgCount({ sessionId: sid, withdrawnAt: null })).toBe(1);
+        // (c) 新圖身份對唔上（match 錯）→ 唔計
+        const other = await buildZip({ [entryName(J(423))]: J(423), "manifest.json": JSON.stringify({ version: 1, items: [{ file: entryName(J(423)), field: "hkid", doc_kind: "printed", priority: 2, match: { hkid: H[7], staff_numbers: ["U99999"] } }], replace: [{ doc_kind: "printed", field: "hkid" }] }) });
+        expect((await upload(accountant, sid, other)).body.would_withdraw).toBe(0);
+        expect(await imgCount({ sessionId: sid, withdrawnAt: null })).toBe(1);
+      });
+
+      it("S2：被取代上載軟刪嘅圖，同 sha 重上載＝恢復（原 row、audit restored、GET 得）；人手撤回（wrong）嘅仍然 skipped_withdrawn", async () => {
+        const { pb, sid } = await seed();
+        const mb = matchOf(pb);
+        const oldP = J(431);
+        const newP = J(432);
+        const item = (b: Uint8Array, extra: object = {}) => zipOf([{ bytes: b, field: "hkid", doc_kind: "printed", priority: 2, match: mb }], {}).then(async (z) => {
+          void extra;
+          return z;
+        });
+        await upload(accountant, sid, await item(oldP));
+        const rowOld = await prisma.triageEvidenceImage.findFirstOrThrow({ where: { sessionId: sid, docKind: "printed" } });
+        const replaceZip = async (b: Uint8Array) => {
+          const f = entryName(b);
+          return buildZip({ [f]: b, "manifest.json": JSON.stringify({ version: 1, items: [{ file: f, field: "hkid", doc_kind: "printed", priority: 2, match: mb }], replace: [{ doc_kind: "printed", field: "hkid" }] }) });
+        };
+        expect((await upload(accountant, sid, await replaceZip(newP))).body).toMatchObject({ accepted_images: 1, would_withdraw: 1 });
+        expect((await prisma.triageEvidenceImage.findUniqueOrThrow({ where: { id: rowOld.id } })).withdrawnReason).toBe("replaced_by_upload");
+        // 舊圖重上載（唔帶 replace）→ 恢復
+        const back = await upload(accountant, sid, await item(oldP));
+        expect(back.body).toMatchObject({ accepted_images: 1, skipped_withdrawn: 0 });
+        const restored = await prisma.triageEvidenceImage.findUniqueOrThrow({ where: { id: rowOld.id } });
+        expect(restored.withdrawnAt).toBeNull();
+        expect(restored.withdrawnReason).toBeNull();
+        expect(restored.imageBytes.length).toBeGreaterThan(0);
+        expect((await getImage(owner, rowOld.id)).status).toBe(200);
+        expect(await prisma.triageEvidenceImage.count({ where: { sessionId: sid } })).toBe(2); // 冇多 insert
+        const au = await prisma.auditLog.findMany({ where: { action: "triage_evidence_withdraw", tableName: "triage_evidence_images", rowId: rowOld.id } });
+        expect(au.map((x) => (x.after as { reason: string }).reason).sort()).toEqual(["replaced_by_upload", "restored"]);
+        // 人手撤回（wrong）嘅唔恢復
+        expect((await withdraw(accountant, rowOld.id)).status).toBe(200);
+        expect((await upload(accountant, sid, await item(oldP))).body).toMatchObject({ accepted_images: 0, skipped_withdrawn: 1 });
+      });
     });
 
     describe("TE-7 整頁原稿暫存圖＋doc_ref（抽取失敗人）", () => {

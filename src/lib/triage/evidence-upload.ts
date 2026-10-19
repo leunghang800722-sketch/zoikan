@@ -29,6 +29,7 @@ import {
   requiredFieldsFor,
   sha256Hex,
   withdrawImages,
+  restoreEvidenceImage,
   type DocKind,
   type EvidenceField,
 } from "./evidence-images";
@@ -205,6 +206,8 @@ interface Plan {
   anyOpen: boolean;
   qids: string[];
   pageNo: number | null;
+  /** TE-8 S2：恢復被取代上載軟刪嘅同 sha 圖（更新原 row，唔 insert） */
+  restoreId: string | null;
 }
 
 /**
@@ -221,44 +224,29 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
     const qs = await db.triageQuestion.findMany({ where: { sessionId, status: { in: ["open", "skipped"] }, personKey: { not: null } }, orderBy: [{ sort: "asc" }, { id: "asc" }] });
     const byKey = new Map<string, TriageQuestion[]>();
     for (const q of qs) byKey.set(q.personKey!, [...(byKey.get(q.personKey!) ?? []), q]);
-    const existing = await db.triageEvidenceImage.findMany({ where: { sessionId }, select: { id: true, personKey: true, field: true, docKind: true, sha256: true, withdrawnAt: true } });
-    // TE-8：取代模式——manifest 入面有圖嘅每個人，同欄同 doc_kind 嘅舊圖（sha 唔喺今次 manifest）要軟刪
-    const withdrawIds = new Set<string>();
-    if (manifest.replace?.length) {
-      const known = new Set(byKey.keys());
-      const shaByPerson = new Map<string, Set<string>>();
-      const persons = new Set<string>();
-      const idOk = (m: EvidenceManifest["items"][number]["match"]): string | null => {
-        const pk = derivePersonKey(m, known);
-        return pk && (byKey.get(pk) ?? []).some((q) => matchIdentityOk(q, m)) ? pk : null;
-      };
-      for (const it of manifest.items) {
-        const pk = idOk(it.match);
-        if (!pk) continue;
-        persons.add(pk);
-        const plain = images.get(it.file);
-        if (plain) (shaByPerson.get(pk) ?? shaByPerson.set(pk, new Set()).get(pk)!).add(sha256Hex(plain));
-      }
-      for (const pe of manifest.people ?? []) {
-        const pk = idOk(pe.match);
-        if (pk) persons.add(pk);
-      }
-      for (const e of existing) {
-        if (e.withdrawnAt || !persons.has(e.personKey) || shaByPerson.get(e.personKey)?.has(e.sha256)) continue;
-        if (manifest.replace.some((r) => r.field === e.field && r.doc_kind === e.docKind)) withdrawIds.add(e.id);
-      }
-    }
-    counts.would_withdraw = withdrawIds.size;
     const perField = new Map<string, number>();
     const perPerson = new Map<string, number>();
     const seenSha = new Set<string>();
-    const withdrawnSha = new Set<string>();
+    const existing = await db.triageEvidenceImage.findMany({ where: { sessionId }, select: { id: true, personKey: true, field: true, docKind: true, sha256: true, withdrawnAt: true, withdrawnReason: true } });
+    // TE-8：取代模式——只喺今次真係「接受咗」同一人、同一欄、同一 doc_kind 嘅新圖，先將該組舊圖（sha 唔喺今次 manifest）軟刪；
+    // 只出現喺 people[]、或新圖唔合格／被跳過嘅人唔會被軟刪（見下面逐 item 處理）。
+    const withdrawIds = new Set<string>();
+    const shaByPerson = new Map<string, Set<string>>();
+    if (manifest.replace?.length) {
+      const known = new Set(byKey.keys());
+      for (const it of manifest.items) {
+        const pk = derivePersonKey(it.match, known);
+        if (!pk || !(byKey.get(pk) ?? []).some((q) => matchIdentityOk(q, it.match))) continue;
+        const plain = images.get(it.file);
+        if (plain) (shaByPerson.get(pk) ?? shaByPerson.set(pk, new Set()).get(pk)!).add(sha256Hex(plain));
+      }
+    }
+    const withdrawnSha = new Map<string, { id: string; reason: string | null }>();
     for (const e of existing) {
       if (e.withdrawnAt) {
-        withdrawnSha.add(`${e.personKey}|${e.field}|${e.sha256}`);
+        withdrawnSha.set(`${e.personKey}|${e.field}|${e.sha256}`, { id: e.id, reason: e.withdrawnReason });
         continue;
       }
-      if (withdrawIds.has(e.id)) continue; // 會被取代＝唔佔額度
       perField.set(`${e.personKey}|${e.field}`, (perField.get(`${e.personKey}|${e.field}`) ?? 0) + 1);
       if (e.field !== "page") perPerson.set(e.personKey, (perPerson.get(e.personKey) ?? 0) + 1);
       seenSha.add(`${e.personKey}|${e.field}|${e.sha256}`);
@@ -305,7 +293,9 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
       }
       const sha = sha256Hex(plain);
       const shaKey = `${personKey}|${item.field}|${sha}`;
-      if (withdrawnSha.has(shaKey)) {
+      // TE-8 S2：被「取代上載」軟刪嘅圖，同 sha 重上載＝恢復；人手撤回（wrong／unrelated）嘅圖永遠唔再收
+      const wd = withdrawnSha.get(shaKey);
+      if (wd && wd.reason !== "replaced_by_upload") {
         counts.skipped_withdrawn += 1;
         continue;
       }
@@ -316,16 +306,26 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
       const fk = `${personKey}|${item.field}`;
       // TE-7：整頁原稿另計（每人 ≤8 頁，唔計入 18）
       const isPage = item.field === "page";
-      if ((perField.get(fk) ?? 0) >= (isPage ? MAX_PAGES_PER_PERSON : MAX_PER_FIELD) || (!isPage && (perPerson.get(personKey) ?? 0) >= MAX_PER_PERSON)) {
+      // 取代模式：呢張新圖若被接受，同組舊圖會被軟刪，先暫時釋出佢哋佔嘅額度
+      const freed = manifest.replace?.some((r) => r.field === item.field && r.doc_kind === item.doc_kind)
+        ? existing.filter((e) => !e.withdrawnAt && !withdrawIds.has(e.id) && e.personKey === personKey && e.field === item.field && e.docKind === item.doc_kind && !shaByPerson.get(personKey)?.has(e.sha256))
+        : [];
+      const ofField = (perField.get(fk) ?? 0) - freed.length;
+      const ofPerson = (perPerson.get(personKey) ?? 0) - (isPage ? 0 : freed.length);
+      if (ofField >= (isPage ? MAX_PAGES_PER_PERSON : MAX_PER_FIELD) || (!isPage && ofPerson >= MAX_PER_PERSON)) {
         counts.skipped_over_limit += 1;
         continue;
       }
+      for (const e of freed) withdrawIds.add(e.id);
+      perField.set(fk, ofField);
+      if (!isPage) perPerson.set(personKey, ofPerson);
       seenSha.add(shaKey);
       perField.set(fk, (perField.get(fk) ?? 0) + 1);
       if (!isPage) perPerson.set(personKey, (perPerson.get(personKey) ?? 0) + 1);
       for (const q of allowed) matchedQ.add(q.id);
-      plans.push({ item, personKey, field: item.field, docKind: item.doc_kind, priority: item.priority, plain, info, sha, questionId: allowed[0]!.id, guardId: allowed[0]!.targetGuardId, anyOpen: allowed.some((q) => q.status === "open"), qids: allowed.map((q) => q.id), pageNo: item.page_no ?? null });
+      plans.push({ item, personKey, field: item.field, docKind: item.doc_kind, priority: item.priority, plain, info, sha, questionId: allowed[0]!.id, guardId: allowed[0]!.targetGuardId, anyOpen: allowed.some((q) => q.status === "open"), qids: allowed.map((q) => q.id), pageNo: item.page_no ?? null, restoreId: wd?.id ?? null });
     }
+    counts.would_withdraw = withdrawIds.size;
     counts.accepted_images = plans.length;
     counts.matched_questions = matchedQ.size;
     // TE-7：每人來源檔案線索 doc_ref——寫入該人所有 open／skipped 題嘅 evidence.doc_ref（只補，唔覆蓋）
@@ -362,6 +362,11 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
         if (cur && !ej.doc_ref) await tx.triageQuestion.update({ where: { id: d.qid }, data: { evidenceJson: { ...ej, doc_ref: d.docRef } as never } });
       }
       for (const p of plans) {
+        if (p.restoreId) {
+          await restoreEvidenceImage(tx, p.restoreId, p.plain, p.info, new Date(now.getTime() + (p.anyOpen ? RETENTION_DAYS : SKIPPED_RETENTION_DAYS) * DAY_MS));
+          await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_evidence_images", rowId: p.restoreId, action: "triage_evidence_withdraw", after: { session_id: sessionId, image_id: p.restoreId, field: p.field, doc_kind: p.docKind, reason: "restored" }, ip: opts.ip });
+          continue;
+        }
         await insertEvidenceImage(tx, {
           sessionId,
           questionId: p.questionId,

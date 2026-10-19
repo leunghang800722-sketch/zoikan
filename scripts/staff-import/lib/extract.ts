@@ -542,6 +542,7 @@ export function extractForm(page: number, lines: OcrLine[]): FormResult {
 // ---------------------------------------------------------------- 許可證（互證）
 const RE_HKID_LABEL = /(身份證號碼|身份證|I\.?\s?D\.?\s*Card\s*No\.?|HKID|Identity\s*Card\s*No\.?)\s*[:：]?/i;
 const RE_PERMIT_NO_LINE = /PERMIT\s*NO|許可證編號/i;
+const RE_PERMIT_LABEL_ANY = /PERMIT\s*(?:NO|NUMBER)|許可證編號|許可證號碼/i;
 
 /**
  * TE-3：一頁入面所有身份證號候選（任何頁，唔理分類）。① 每行用「行內任何位置」搜尋（NFKC，唔要求整行），check digit 通過先收；
@@ -593,8 +594,10 @@ export function extractPermit(page: number, lines: OcrLine[]): { hkid: Field | n
   const f = all.find((x) => x.note !== 'ocr_confusion_fixed') ?? all[0]; // 未經混淆修正嘅優先
   if (f) return { hkid: f };
   // TE-8：許可證頁容許「整行淨係一個號碼」（冇括號亦得）——整行本身就係 token，唔會係長序號內嘅子串
-  const whole = lines.find((l) => !RE_PERMIT_NO_LINE.test(l.t) && isHkidFormatLine(l.t));
-  return { hkid: whole ? { value: canonicalHkid(whole.t)!, level: 'medium', conf: whole.c, page, evidence: whole.t } : null };
+  // 跳過緊貼喺「許可證編號／許可證號碼／Permit No」label 下面嘅行（牌照號碼可能 checksum 巧合）；後備值 level low
+  const rows = readingOrder(lines.filter((l) => l.t.trim()));
+  const whole = rows.find((l, i) => !RE_PERMIT_NO_LINE.test(l.t) && !(i > 0 && RE_PERMIT_LABEL_ANY.test(rows[i - 1]!.t)) && isHkidFormatLine(l.t));
+  return { hkid: whole ? { value: canonicalHkid(whole.t)!, level: 'low', conf: whole.c, page, evidence: whole.t, note: 'whole_line_fallback' } : null };
 }
 
 export { canonicalHkid };

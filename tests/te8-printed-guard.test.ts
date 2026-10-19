@@ -1,7 +1,7 @@
 // TE-8：printed HKID 防誤中——token 邊界、label 優先、跨頁多值跳過、裁圖連 label。全部合成（假號碼 X＋6 位數字＋(A)；證書序號 checksum 巧合通過）。
 import { describe, it, expect } from "vitest";
 import { findHkidTokens, hkidCheckDigitValid } from "../scripts/staff-import/lib/hkid";
-import { scanPageHkids } from "../scripts/staff-import/lib/extract";
+import { extractPermit, scanPageHkids } from "../scripts/staff-import/lib/extract";
 import { aggregateDoc } from "../scripts/staff-import/lib/aggregate";
 import { findPrintedHkidLines, planRequests } from "../scripts/staff-import/lib/triage-evidence-core";
 import { emptyStats, produceItems, type Deps, type PersonInput } from "../scripts/staff-import/20-triage-evidence";
@@ -129,5 +129,17 @@ describe("全庫自檢（printed-audit）", () => {
     expect(r.summary).toMatchObject({ persons: 5, old_found: 4, old_embedded: 2, old_no_label: 2, new_found: 2, new_labelled: 2, multi_conflict: 1, changed: 3 });
     expect(r.affected.map((a) => a.person_key).sort()).toEqual(["dry-1", "dry-2", "dry-3"]);
     expect(JSON.stringify(r)).not.toMatch(/A123456|Z900001|QATW/);
+  });
+});
+
+describe("TE-8 S1：extractPermit 整行淨號碼後備", () => {
+  it("Permit No 下一行嘅號碼（checksum 巧合）唔當身份證號；單獨一行先後備（level low）", () => {
+    expect(hkidCheckDigitValid("A1000007")).toBe(true);
+    const under = [L("保安人員許可證", 0.1, 0.9), L("許可證編號 Permit No", 0.1, 0.8, 0.4), L("A1000007", 0.1, 0.77, 0.2)];
+    expect(extractPermit(1, under).hkid).toBeNull();
+    const under2 = [L("PERMIT NO.", 0.1, 0.8, 0.4), L("A1000007", 0.1, 0.77, 0.2)];
+    expect(extractPermit(1, under2).hkid).toBeNull();
+    const alone = extractPermit(1, [L("保安人員許可證", 0.1, 0.9), L("A1000007", 0.1, 0.6, 0.2)]);
+    expect(alone.hkid).toMatchObject({ value: "A1000007", level: "low" });
   });
 });

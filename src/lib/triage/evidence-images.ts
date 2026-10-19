@@ -392,3 +392,12 @@ export async function withdrawImages(db: Db, where: Prisma.TriageEvidenceImageWh
   const r = await db.triageEvidenceImage.updateMany({ where: { ...where, withdrawnAt: null }, data: { withdrawnAt: now, withdrawnReason: reason, imageBytes: new Uint8Array(0), iv: new Uint8Array(0), tag: new Uint8Array(0) } });
   return r.count;
 }
+
+/** TE-8 S2：恢復被「取代上載」軟刪嘅圖（同 sha 重上載）——用原 row id 重新加密寫返 bytes，清走 withdrawn 標記。 */
+export async function restoreEvidenceImage(db: Db, id: string, plain: Uint8Array, info: ImageInfo, expiresAt: Date): Promise<void> {
+  const enc = encryptImage(plain, id);
+  await db.triageEvidenceImage.update({
+    where: { id },
+    data: { imageBytes: new Uint8Array(enc.bytes), iv: new Uint8Array(enc.iv), tag: new Uint8Array(enc.tag), encVersion: ENC_VERSION, width: info.width, height: info.height, mime: info.mime, withdrawnAt: null, withdrawnReason: null, expiresAt },
+  });
+}
