@@ -109,6 +109,9 @@ describe("B 證件為準：planForQuestion（name_not_confirmed／hkid_not_confi
     expect(noEn.type === "answer" && noEn.answer.extra).toBeUndefined();
     for (const bad of [{ confidence: "medium" as const }, { confidence: "low" as const }, { basis: "arbiter" as const }, { doc: "onboarding_form" as const }, { flags: ["card_name_conflict"] }]) expect(planForQuestion(q("name_not_confirmed", opts), props({ nameZh: "卡上名乙" }), meta({ nameZh: bad }))).toMatchObject({ type: "skip", disp: "skipped_value_mismatch" });
     expect(planForQuestion(q("name_not_confirmed", opts), props({ nameZh: "卡上名乙" }))).toMatchObject({ type: "skip" }); // 冇 meta＝照舊
+    // TE-11.1：入職表唔一致（form_differs）／印刷佐證一致只係資訊，唔阻擋
+    for (const f of [["form_differs"], ["printed_corroborated"], ["embedded_card", "printed_corroborated", "form_differs"]]) expect(planForQuestion(q("name_not_confirmed", opts), props({ nameZh: "卡上名乙" }), meta({ nameZh: { flags: f } }))).toMatchObject({ type: "answer", answer: { option: "enter_name" } });
+    expect(planForQuestion(q("name_not_confirmed", opts), props({ nameZh: "卡上名乙" }), meta({ nameZh: { flags: ["printed_card_conflict"] } }))).toMatchObject({ type: "skip" });
     expect(planForQuestion(q("name_not_confirmed", opts), props({ nameZh: "舊名甲" }), meta({ nameZh: {} }))).toMatchObject({ type: "answer", answer: { option: "use_package_name" } });
     // 包內英文名已確認 → 唔帶 extra.name_en（server 會 400）
     const en = planForQuestion(q("name_not_confirmed", opts, { nameEn: { value: "OLD", status: "confirmed" } }), props({ nameZh: "卡上名乙", nameEn: "CHAN" }), meta({ nameZh: {}, nameEn: {} }));
@@ -158,7 +161,7 @@ describe("C import 規則：身份證兩讀一致即 confirmed（入職表唔一
 describe("D 自檢（23-auto-close-audit）", () => {
   it("--dry 固定 fixture：按題型可關閉數；靠卡為準修正 2；輸出冇姓名／號碼", async () => {
     const r = await runAutoClose(autoCloseArgs(["--dry"]));
-    expect(r.summary).toMatchObject({ persons_with_questions: 6, questions_total: 6, closable_total: 4, closable_via_card_truth: 2, questions: { name_not_confirmed: 3, hkid_not_confirmed: 1, field_review: 2 }, closable: { name_not_confirmed: 2, hkid_not_confirmed: 1, field_review: 1 } });
+    expect(r.summary).toMatchObject({ persons_with_questions: 8, questions_total: 8, closable_total: 5, closable_via_card_truth: 3, questions: { name_not_confirmed: 5, hkid_not_confirmed: 1, field_review: 2 }, closable: { name_not_confirmed: 3, hkid_not_confirmed: 1, field_review: 1 } });
     const d = dryData();
     expect(summarizeAutoClose(auditAutoClose(d.persons, d.proposals))).toEqual(r.summary);
     expect(JSON.stringify(r)).not.toMatch(/測試|Z900001/);

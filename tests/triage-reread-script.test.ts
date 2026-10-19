@@ -38,9 +38,9 @@ describe("proposeFromPicks：保守規則", () => {
     expect(o.skipped).toEqual({});
     expect(o.proposals.map((p) => [p.field, p.value, p.basis, p.doc, p.confidence])).toEqual([
       ["nameZh", "測試甲", "two_reads", "id_card", "high"],
-      ["nameEn", "TEST ALPHA", "two_reads", "id_card", "medium"],
-      ["hkid", "Z9000012", "two_reads", "id_card", "medium"],
-      ["dateOfBirth", "1990-01-15", "two_reads", "id_card", "medium"],
+      ["nameEn", "TEST ALPHA", "two_reads", "id_card", "high"], // TE-11.1：身份證頁兩讀一致＝high，唔需要入職表交叉
+      ["hkid", "Z9000012", "two_reads", "id_card", "high"],
+      ["dateOfBirth", "1990-01-15", "two_reads", "id_card", "high"],
       ["phone", "90001111", "two_reads", "onboarding_form", "medium"],
       ["address", "新界火炭示範街99號虛構大廈15樓A室", "two_reads", "address_proof", "medium"],
     ]);
@@ -63,7 +63,8 @@ describe("proposeFromPicks：保守規則", () => {
       address: { doc: "onboarding_form" as const, result: fr("新界火炭示範街99號虛構大廈15樓A室") }, // 住址證明冇 → 入職表地址唔收
     };
     const o = proposeFromPicks(person(), picks, NOW);
-    expect(o.proposals.map((x) => [x.field, x.confidence])).toEqual([["dateOfBirth", "medium"]]);
+    expect(o.proposals.map((x) => [x.field, x.confidence])).toEqual([["dateOfBirth", "high"]]); // TE-11.1：入職表 differs 唔降級（flag form_differs）
+    expect(o.proposals[0]!.flags).toEqual(["form_differs"]);
     expect(o.skipped).toEqual({ not_confirmed: 1, arbiter_agree_a: 1, invalid_format: 1, wrong_source: 2 });
     expect(o.skippedByField).toEqual({ nameZh: { not_confirmed: 1 }, nameEn: { arbiter_agree_a: 1 }, hkid: { invalid_format: 1 }, phone: { wrong_source: 1 }, address: { wrong_source: 1 } });
     const typed = proposeFromPicks(person({ reasons: ["mismatch_nameZh", "phone_differs_from_list", "nameZh_near_match"] }), GOOD, NOW);
@@ -72,9 +73,12 @@ describe("proposeFromPicks：保守規則", () => {
     expect(typed.proposals.map((x) => x.field)).toEqual(["nameEn", "hkid", "dateOfBirth", "address"]);
     expect(proposeFromPicks(person(), {}, NOW).skipped).toEqual({ no_read: 6 });
   });
-  it("TR-2：身份證 differs（入職表手寫唔一致）照建議，confidence=medium；match 先 high", () => {
+  it("TR-2／TE-11.1：身份證 differs（入職表手寫唔一致）照建議，confidence 仍 high，帶 form_differs（資訊）；arbiter 介入照舊（交叉一致先 high）", () => {
     const o = proposeFromPicks(person(), { name_zh: { doc: "id_card", result: fr("測試甲"), cross: "differs" }, hkid: { doc: "id_card", result: fr("Z900001(2)"), cross: "match" } }, NOW);
-    expect(o.proposals.map((x) => [x.field, x.confidence])).toEqual([["nameZh", "medium"], ["hkid", "high"]]);
+    expect(o.proposals.map((x) => [x.field, x.confidence])).toEqual([["nameZh", "high"], ["hkid", "high"]]);
+    expect(o.proposals.map((x) => x.flags)).toEqual([["form_differs"], undefined]);
+    const arb = proposeFromPicks(person(), { name_zh: { doc: "id_card", result: fr("測試甲", "confirmed", "agree_b"), cross: "differs" }, hkid: { doc: "id_card", result: fr("Z900001(2)", "confirmed", "agree_b"), cross: "match" } }, NOW);
+    expect(arb.proposals.map((x) => [x.field, x.basis, x.confidence])).toEqual([["nameZh", "arbiter", "medium"], ["hkid", "arbiter", "high"]]);
   });
   it("arbiter agree_b → basis=arbiter（照收）；日期曆法／電話 8 位／姓名格式把關", () => {
     const o = proposeFromPicks(person(), { ...GOOD, hkid: { doc: "id_card", result: fr("Z900001(2)", "confirmed", "agree_b") }, dob: { doc: "id_card", result: fr("1990-02-30") }, phone: { doc: "onboarding_form", result: fr("1234567") }, name_zh: { doc: "id_card", result: fr("TEST") } }, NOW);

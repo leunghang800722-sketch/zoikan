@@ -38,7 +38,7 @@ const proposalSchema = z
     /** TE-4：low＝只有印刷／唔一致，要人手覆核（唔自動答；計 skipped_low_confidence） */
     confidence: z.enum(["high", "medium", "low"]),
     /** TE-4：可選旗標（例 printed_card_conflict、embedded_card）；只用嚟顯示／統計，伺服器唔據此寫入 */
-    flags: z.array(z.enum(["printed_card_conflict", "embedded_card", "printed_corroborated", "printed_only", "card_name_conflict"])).max(4).optional(),
+    flags: z.array(z.enum(["printed_card_conflict", "embedded_card", "printed_corroborated", "printed_only", "card_name_conflict", "form_differs"])).max(4).optional(),
     /**
      * 配對提示（additive，可選）：題目嘅 personKey 係伺服器 HMAC（serverPersonKey：身份證 → 工號集合 → 包內 key），唔係包內 persons[].key。
      * 本機腳本帶埋包內該人嘅身份證值／工號，伺服器用同一個函數推返 personKey 去配對。只用嚟砌 key，唔寫入任何地方。

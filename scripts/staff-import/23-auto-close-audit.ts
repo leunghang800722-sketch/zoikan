@@ -45,6 +45,8 @@ export function dryData(): { persons: PkgPerson[]; proposals: RereadProposal[] }
       pp('P4', { hkid: lf('Z9000013', 'review') }),
       pp('P5', { nameEn: lf('X', 'review'), dateOfBirth: lf('1990-01-16', 'review') }),
       pp('P6', { nameEn: lf('X', 'review'), dateOfBirth: lf('1990-01-16', 'review') }),
+      pp('P7', { nameZh: lf('測試乙', 'review') }),
+      pp('P8', { nameZh: lf('測試乙', 'review') }),
     ],
     proposals: [
       pr('P1', 'nameZh', '測試乙'), // 同包內一致 → use_package
@@ -54,6 +56,8 @@ export function dryData(): { persons: PkgPerson[]; proposals: RereadProposal[] }
       pr('P5', 'nameEn', 'TEST ALPHA'),
       pr('P5', 'dateOfBirth', '1990-01-15'),
       pr('P6', 'nameEn', 'TEST ALPHA'), // 缺 dob 建議 → 唔關閉
+      pr('P7', 'nameZh', '測試甲', { flags: ['form_differs'] }), // TE-11.1：入職表唔一致只係資訊 → 卡為準自動答
+      pr('P8', 'nameZh', '測試甲', { confidence: 'low', flags: ['embedded_card', 'printed_card_conflict'] }), // 印刷同卡唔一致 → 留人
     ],
   };
 }
