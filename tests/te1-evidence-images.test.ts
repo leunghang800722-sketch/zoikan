@@ -1057,6 +1057,64 @@ describe("TE-1 證據裁圖", () => {
         expect((await getImage(broker, pageId)).status).toBe(403);
       });
 
+      it("TE-7.2 prod_person_key：冇身份證號／工號嘅失敗人（本機 key 同 production 唔同）——用 production key（題目 personKey 或原 package key）配對；仍驗身份集合為空、題型需要 page；有工號嘅人唔准用", async () => {
+        await seed();
+        const keyless = { ...person({ hkid: null, name: "x", nos: [], rating: "fail" }), nameZh: F(null, "missing"), nameEn: F(null, "missing"), dateOfBirth: F(null, "missing"), address: F(null, "missing"), phone: F(null, "missing") } as PackagePerson;
+        const withNo = { ...person({ hkid: null, name: "有工號甲", nos: ["U90081"], rating: "fail" }) } as PackagePerson;
+        const r0 = await applyPkg(accountant, [keyless, withNo]);
+        const sid2 = r0.body.triage.session_id as string;
+        const qk = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card", personKey: { not: null } , evidenceJson: { path: ["person", "staffNumbers"], equals: [] } } });
+        const qs = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card", NOT: { id: qk.id } } });
+        const page = (n: number) => fakeJpeg(1000, 1400, { seed: 920 + n, pad: 80 * 1024 });
+        const docRef = { file_name: "孤兒.pdf", page_count: 1, pages_by_kind: { other: 1 } };
+        const mk = async (match: object, n: number) => {
+          const b = page(n);
+          const f = entryName(b);
+          return buildZip({ [f]: b, "manifest.json": JSON.stringify({ version: 1, items: [{ file: f, field: "page", doc_kind: "full_page", priority: 1, page_no: 1, match }], people: [{ match, doc_ref: docRef }] }) });
+        };
+        // (a) prod_person_key＝題目 personKey（24hex 派生）
+        const a = await upload(accountant, sid2, await mk({ hkid: null, staff_numbers: [], package_key: "local-key-not-in-prod", prod_person_key: qk.personKey }, 1));
+        expect(a.body).toMatchObject({ accepted_images: 1, doc_refs_set: 1, skipped_identity_mismatch: 0 });
+        const view = (await getSession(owner, sid2)).body.questions.find((x: { id: string }) => x.id === qk.id);
+        expect(view.evidence.doc_ref).toMatchObject({ file_name: "孤兒.pdf" });
+        expect(view.evidence_images.filter((i: { field: string }) => i.field === "page")).toHaveLength(1);
+        // (b) prod_person_key＝production 原 package key（經 serverPersonKey 推）
+        const b = await upload(accountant, sid2, await mk({ hkid: null, staff_numbers: [], prod_person_key: keyless.key }, 2), true);
+        expect(b.body).toMatchObject({ accepted_images: 1 });
+        // (c) 有工號嘅人嘅題：即使 prod_person_key 對中，身份集合唔為空 → 唔收
+        const c = await upload(accountant, sid2, await mk({ hkid: null, staff_numbers: [], prod_person_key: qs.personKey }, 3));
+        expect(c.body).toMatchObject({ accepted_images: 0, doc_refs_set: 0 });
+        expect(c.body.skipped_identity_mismatch).toBeGreaterThan(0);
+        // (d) match 帶工號時 prod_person_key 唔生效（照工號推 key）；錯 key → 唔收
+        const d = await upload(accountant, sid2, await mk({ hkid: null, staff_numbers: [], prod_person_key: "deadbeefdeadbeefdeadbeef" }, 4));
+        expect(d.body).toMatchObject({ accepted_images: 0 });
+      });
+
+      it("有工號匹配嘅失敗人：上載（dry＋apply）後 doc_ref 寫入題目，並由 session DTO 回傳（file_name 按權限）；只補唔覆蓋", async () => {
+        await seed();
+        const base = person({ hkid: null, name: "x", nos: ["U90071"], rating: "fail" });
+        const pf = { ...base, nameZh: F(null, "missing"), nameEn: F(null, "missing"), dateOfBirth: F(null, "missing"), address: F(null, "missing"), phone: F(null, "missing") } as PackagePerson;
+        const r0 = await applyPkg(accountant, [pf]);
+        const sid2 = r0.body.triage.session_id as string;
+        const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
+        const match = { hkid: null, staff_numbers: ["U90071"] };
+        const docRef = { file_name: "有工號.pdf", page_count: 5, pages_by_kind: { other: 5 } };
+        const b = fakeJpeg(1000, 1400, { seed: 910, pad: 100 * 1024 });
+        const f = entryName(b);
+        // 圖喺另一個 zip（冇 people）：唔影響；doc_ref 喺只有 people（冇 items）嘅 zip
+        const onlyPeople = await buildZip({ "manifest.json": JSON.stringify({ version: 1, items: [], people: [{ match, doc_ref: docRef }] }) });
+        const dry = await upload(accountant, sid2, onlyPeople, true);
+        expect(dry.body.doc_refs_set).toBe(1);
+        expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).evidenceJson).not.toHaveProperty("doc_ref");
+        expect((await upload(accountant, sid2, onlyPeople)).body.doc_refs_set).toBe(1);
+        const view = (await getSession(owner, sid2)).body.questions.find((x: { id: string }) => x.id === qn.id);
+        expect(view.evidence.doc_ref).toEqual({ file_name: "有工號.pdf", page_count: 5, pages_by_kind: { other: 5 } });
+        // 之後上載頁圖（zip 冇 people）：doc_ref 保持
+        const pages = await buildZip({ [f]: b, "manifest.json": JSON.stringify({ version: 1, items: [{ file: f, field: "page", doc_kind: "full_page", priority: 1, page_no: 1, match }] }) });
+        expect((await upload(accountant, sid2, pages)).body).toMatchObject({ accepted_images: 1, doc_refs_set: 0 });
+        expect((await getSession(owner, sid2)).body.questions.find((x: { id: string }) => x.id === qn.id).evidence.doc_ref.page_count).toBe(5);
+      });
+
       it("rating fail 但有部分欄／工號嘅人：page 照需要（上載收、題 open 時保留）；該人冇 open／skipped 題需要 page 時即刪（deleteUnneeded）", async () => {
         await seed();
         const base = person({ hkid: null, name: "x", nos: ["U90061"], rating: "fail" }); // 有工號、有 phone 以外嘅資料（出生日期 confirmed），但 rating fail
