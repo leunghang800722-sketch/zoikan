@@ -12,7 +12,7 @@ import { ApiError, BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
 import { canonicalHkid } from "@/lib/guards/identity";
 import { fieldValue } from "@/lib/guards/import/package";
 import { normZh } from "@/lib/guards/import/text";
-import { applyOnePerson, extOutcomeOf, summarizeExt, type ApplyOptions } from "@/lib/guards/import/apply";
+import { applyOnePerson, extOutcomeOf, fpDiffPaths, summarizeExt, type ApplyOptions } from "@/lib/guards/import/apply";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
@@ -36,6 +36,19 @@ function hmacKey(): string {
   return k;
 }
 // HMAC（server secret）：冇 secret 就算知道寫入指紋格式都唔可以離線算出 hash 去分辨預覽結果（oracle）
+/** TE-11.6：預覽嘅指紋輸入暫存（in-process，10 分鐘 TTL，最多 300 筆）；只用嚟 409 時診斷差異路徑，唔入 API／DB */
+const fpStash = new Map<string, { at: number; input: unknown }>();
+function stashFp(hash: string, input: unknown): void {
+  const now = Date.now();
+  for (const [k, v] of fpStash) if (now - v.at > 600_000) fpStash.delete(k);
+  while (fpStash.size >= 300) fpStash.delete(fpStash.keys().next().value as string);
+  fpStash.set(hash, { at: now, input });
+}
+const diffAgainstPreview = (hash: string | undefined, input: unknown): string[] => {
+  const prev = hash ? fpStash.get(hash) : undefined;
+  return prev ? fpDiffPaths(prev.input, input) : ["preview_not_cached"];
+};
+
 const hashOf = (qid: string, a: TriageAnswer, fingerprint: string): string => createHmac("sha256", hmacKey()).update(`${qid}|${canon(a)}|${fingerprint}`).digest("hex");
 
 /** audit 摘要唔放 ext_conflicts（衝突數會洩露「同現值唔同」，而 audit 讀者可能冇對應 view） */
@@ -240,12 +253,16 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
       // M2：冇「保安員個人資料:view」＋「保安員:update」嘅人唔出「連結」，只可建新人／跳過
       impact.needs_decision = { reason: decisionReason, candidates, options: caps.pii && caps.guardUpdate ? ["link", "create_new"] : ["create_new"], ...(truncated ? { truncated: true } : {}) };
       impact.reason_text = DECISION_TEXT;
-      return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: false, impact };
+      const ph0 = hashOf(q.id, answer, out.fingerprint);
+      stashFp(ph0, out.fpInput);
+      return { preview_hash: ph0, writes: false, impact };
     }
   }
   // TE-3：唔過嘅原因用人話講清楚；缺姓名而選項容許補姓名就列出要補嘅欄（UI 同一張卡展開輸入）
   if (!impact.can_confirm) Object.assign(impact, explainBlocked(out.result.reasons, answer.option, EXTRA_NAME_OPTIONS, !!answer.extra?.name_zh));
-  return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: impact.can_confirm, impact };
+  const ph = hashOf(q.id, answer, out.fingerprint);
+  stashFp(ph, out.fpInput);
+  return { preview_hash: ph, writes: impact.can_confirm, impact };
 }
 
 function parseAnswer(raw: unknown): TriageAnswer {
@@ -309,6 +326,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
   await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip, caps), {
     kind: "commit",
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
+    diffPaths: (inp) => diffAgainstPreview(previewHash, inp),
     beforeCommit: async (tx, outcome) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
       await assertNoNewer(tx, q, actor);

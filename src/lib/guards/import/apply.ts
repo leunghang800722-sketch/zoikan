@@ -1033,18 +1033,59 @@ export function fpNormalize(v: unknown): unknown {
   return v;
 }
 
-/** 一個人嘅「寫入指紋」：結果 + 每筆寫入（去咗 id／時間戳；update 保留 rowId）。預覽同實際寫入逐字相同先准 commit。 */
-function writeFingerprint(res: PersonResult, changes: readonly WriteChange[]): string {
-  const norm = JSON.parse(
+/** 生成時間戳 key（xxxAt／xxx_at）：每次執行都唔同，唔入指紋 */
+const FP_TS_KEY = /(?:[a-z]At|_at)$/;
+
+/**
+ * 指紋輸入（TE-11.6）：結果 + 每筆寫入（去咗 id／時間戳；update 保留 rowId）。
+ * 本次 run 新生成嘅 row id（create 嗰筆嘅 rowId）喺任何位置出現都換成穩定佔位（按首見次序），
+ * 避免 dry／commit 兩次各自生成唔同 id 令指紋永遠對唔上。
+ */
+export function fingerprintInput(res: PersonResult, changes: readonly WriteChange[]): unknown {
+  const created = new Map<string, string>();
+  for (const c of changes) if (c.action === "create" && typeof c.rowId === "string" && !created.has(c.rowId)) created.set(c.rowId, `<new#${created.size}>`);
+  const raw = JSON.parse(
     JSON.stringify({ res, changes: changes.map((c) => ({ table: c.table, action: c.action, rowId: c.action === "update" ? c.rowId : null, before: c.before, after: c.after })) }),
   ) as unknown;
-  return createHash("sha256").update(JSON.stringify(fpNormalize(norm))).digest("hex");
+  const swap = (v: unknown): unknown => {
+    if (typeof v === "string") return created.get(v) ?? v;
+    if (Array.isArray(v)) return v.map(swap);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([k]) => !FP_TS_KEY.test(k)).map(([k, x]) => [k, swap(x)]));
+    return v;
+  };
+  return fpNormalize(swap(raw));
+}
+
+/** 兩份指紋輸入嘅結構差異：只回路徑＋類型，絕不帶值（診斷 409 用） */
+export function fpDiffPaths(a: unknown, b: unknown, max = 3, path = "", out: string[] = []): string[] {
+  if (out.length >= max) return out;
+  const t = (x: unknown) => (x === null ? "null" : Array.isArray(x) ? "array" : typeof x);
+  if (t(a) !== t(b)) {
+    out.push(`${path || "$"}:type`);
+  } else if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) out.push(`${path || "$"}.length`);
+    for (let i = 0; i < Math.min(a.length, b.length) && out.length < max; i++) fpDiffPaths(a[i], b[i], max, `${path}[${i}]`, out);
+  } else if (a && typeof a === "object") {
+    const ao = a as Record<string, unknown>;
+    const bo = b as Record<string, unknown>;
+    for (const k of [...new Set([...Object.keys(ao), ...Object.keys(bo)])].sort()) {
+      if (out.length >= max) break;
+      const pp = path ? `${path}.${k}` : k;
+      if (!(k in ao) || !(k in bo)) out.push(`${pp}:missing`);
+      else fpDiffPaths(ao[k], bo[k], max, pp, out);
+    }
+  } else if (a !== b) {
+    out.push(`${path || "$"}:value`);
+  }
+  return out;
 }
 
 export interface SingleApplyOutcome {
   result: PersonResult;
   changes: WriteChange[];
   fingerprint: string;
+  /** TE-11.6：指紋輸入（已正規化；只供診斷 diff，唔好出 API） */
+  fpInput: unknown;
 }
 
 export type SingleApplyMode =
@@ -1053,6 +1094,8 @@ export type SingleApplyMode =
       kind: "commit";
       /** 用重算出嚟嘅指紋核對預覽時俾用戶睇嗰次；唔一致＝資料中途變咗 → rollback + 409 */
       verify: (fingerprint: string) => boolean;
+      /** TE-11.6：指紋對唔上時俾診斷路徑（只路徑＋類型，冇值），放入 409 details.diff_paths */
+      diffPaths?: (fpInput: unknown) => string[];
       /** 同一個 transaction 內（寫入之後、commit 之前）做嘅嘢，例如標記問題已答 */
       beforeCommit?: (tx: Prisma.TransactionClient, outcome: SingleApplyOutcome) => Promise<void>;
     };
@@ -1091,9 +1134,13 @@ export async function applyOnePerson(pkg1: ImportPackage, opts: ApplyOptions, mo
           // needs_review 路徑喺任何寫入之前就返，所以重行安全
           result = await applyPerson(tx, ctx, p, gr, { ...(opts.decisions?.[p.key] ?? {}), nameZh: { action: "keep_pending" } }, { ...opts, collect: changes }, acc);
         }
-        outcome = { result, changes, fingerprint: writeFingerprint(result, changes) };
+        const fpInput = fingerprintInput(result, changes);
+        outcome = { result, changes, fingerprint: createHash("sha256").update(JSON.stringify(fpInput)).digest("hex"), fpInput };
         if (mode.kind === "dry") throw new DryRunRollback();
-        if (!mode.verify(outcome.fingerprint)) throw new ApiError(409, "conflict", "資料中途變咗，影響同預覽唔一致，請重新預覽", { field: "preview_hash" });
+        if (!mode.verify(outcome.fingerprint)) {
+          const diff_paths = mode.diffPaths?.(outcome.fpInput) ?? [];
+          throw new ApiError(409, "conflict", "資料中途變咗，影響同預覽唔一致，請重新預覽", { field: "preview_hash", ...(diff_paths.length ? { diff_paths } : {}) });
+        }
         if (result.outcome === "needs_review" || result.outcome === "conflict" || result.outcome === "error") throw new ApiError(422, "unprocessable", "呢個答案唔會寫入任何資料，請揀其他選項或者跳過");
         await mode.beforeCommit?.(tx, outcome);
       },
