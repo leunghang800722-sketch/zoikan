@@ -26,8 +26,8 @@ describe("dry fixture：倒轉嵌入卡 → 轉正 → fake OCR → proposal", (
     const sig = (n: number) => by(n).map((p) => `${p.field}:${p.confidence}:${(p.flags ?? []).join("+")}`).sort();
     // 7：卡（倒轉，第一階段）＋證書印刷一致 → 四欄 high，printed_corroborated
     expect(sig(7)).toEqual(["dateOfBirth:high:embedded_card+printed_corroborated", "hkid:high:embedded_card+printed_corroborated", "nameEn:high:embedded_card+printed_corroborated", "nameZh:high:embedded_card+printed_corroborated"]);
-    // 8：卡只有二階段先讀到、冇印刷 → TE-11.1：卡兩讀一致即 high（唔需要印刷佐證／入職表交叉）
-    expect(sig(8)).toEqual(["dateOfBirth:high:embedded_card", "hkid:high:embedded_card", "nameEn:high:embedded_card", "nameZh:high:embedded_card"]);
+    // 8：卡只有二階段先讀到、冇印刷、冇入職表／名單 → TE-11.2：冇可佐證（card_unverified）→ medium 留人
+    expect(sig(8)).toEqual(["dateOfBirth:medium:embedded_card+card_unverified", "hkid:medium:embedded_card+card_unverified", "nameEn:medium:embedded_card+card_unverified", "nameZh:medium:embedded_card+card_unverified"]);
     // 9：印刷同卡唔一致 → 全部 low＋printed_card_conflict
     expect(sig(9).every((x) => x.endsWith(":low:embedded_card+printed_card_conflict"))).toBe(true);
     expect(sig(9)).toHaveLength(4);
