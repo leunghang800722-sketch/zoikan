@@ -114,3 +114,6 @@ PersonCard 全空→明確 fallback（原因人話、docInfo、下一步）；mi
 
 ## 15. TE-8 printed 防誤中＋錯圖撤回／取代上載
 token 邊界、label 優先、跨頁多值跳過、裁圖連 label；全庫自檢腳本；軟刪（withdrawn）＋取代模式。
+
+## 16. TE-9 身份證號屬現有保安員：連結決定（唔准建新人）
+同一人分裂兩條記錄時，輸入嘅 hkid 等於唯一現有保安員 → needs_decision 只可連結／跳過；proposals 唔自動答。

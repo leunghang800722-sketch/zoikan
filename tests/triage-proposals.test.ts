@@ -298,7 +298,7 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(proposalsBodySchema.safeParse({ version: 2, proposals: [] }).success).toBe(false);
   });
 
-  it("TE-4 no_id_card：嵌入卡 hkid＋姓名＋出生日期 → enter_hkid 帶 extra 建檔；low 信心唔自動答；號碼已屬他人 → skipped_identity_mismatch", async () => {
+  it("TE-4 no_id_card：嵌入卡 hkid＋姓名＋出生日期 → enter_hkid 帶 extra 建檔；low 信心唔自動答；號碼已屬他人 → skipped_needs_decision（TE-9）", async () => {
     const { pn, pa, sid } = await seed(); // 丑（H[12]）已建檔
     const match = { hkid: null, staff_numbers: ["U90003"] };
     // 無名無證：把 no_id_card 人嘅包內姓名清走，模擬 create_no_name（用 evidence 改）
@@ -313,9 +313,12 @@ describe("TR-1 OCR 重讀建議導入", () => {
     const low = await send(accountant, sid, [prop(pn.key, "hkid", NEW, { match, confidence: "low", flags: ["printed_card_conflict"] })]);
     expect(low.body).toMatchObject({ applied: 0, skipped_low_confidence: 1 });
     expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("open");
+    // (1b) TE-9：low 信心（printed_only）但號碼等於系統內一位現有保安員 → 要人一撳連結，計 skipped_needs_decision（唔計低信心）
+    const lowOwner = await send(accountant, sid, [prop(pn.key, "hkid", H[12]!, { match, confidence: "low", flags: ["printed_only"] })]);
+    expect(lowOwner.body).toMatchObject({ applied: 0, skipped_needs_decision: 1, skipped_low_confidence: 0 });
     // (2) 號碼已屬他人（甲嘅 hkid）→ 身份對唔上，唔寫
     const other = await send(accountant, sid, [prop(pn.key, "hkid", H[12]!, { match }), prop(pn.key, "nameZh", "補名測試員", { match })]);
-    expect(other.body).toMatchObject({ applied: 0, skipped_identity_mismatch: 2 });
+    expect(other.body).toMatchObject({ applied: 0, skipped_needs_decision: 2 }); // TE-9：號碼屬系統內一位現有保安員 → 要人一撳連結
     expect((await prisma.guard.findFirstOrThrow({ where: { hkid: H[12]! }, select: { nameZh: true } })).nameZh).toBe("導入測試員丑"); // 丑嘅檔案冇被碰
     // (3) 正常：hkid＋姓名＋出生日期 → 一次過建檔，冇需要人手補姓名
     const ok = await send(accountant, sid, [prop(pn.key, "hkid", NEW, { match, confidence: "high", flags: ["embedded_card", "printed_corroborated"] }), prop(pn.key, "nameZh", "補名測試員", { match }), prop(pn.key, "nameEn", "BO MING", { match }), prop(pn.key, "dateOfBirth", "1991-02-03", { match })]);

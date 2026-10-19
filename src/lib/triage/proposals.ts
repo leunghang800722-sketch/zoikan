@@ -222,7 +222,10 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
     for (const f of [...props.keys()]) {
       const idxs = idxOf.get(`${key}|${f}`) ?? [];
       if (idxs.length > 0 && idxs.every((i) => proposals[i]!.confidence === "low")) {
-        mark(key, [f], "skipped_low_confidence");
+        // TE-9：hkid 建議（含 printed_only 低信心）等於系統內一位現有保安員嘅身份證號 → 要人一撳連結（計 skipped_needs_decision），唔計低信心
+        const canon = f === "hkid" ? canonicalHkid(props.get(f) ?? null) : null;
+        const owners = canon ? await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM guards WHERE regexp_replace(upper(hkid), '[()（）[:space:]]', '', 'g') = ${canon} LIMIT 2` : [];
+        mark(key, [f], owners.length === 1 ? "skipped_needs_decision" : "skipped_low_confidence");
         props.delete(f);
       }
     }

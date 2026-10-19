@@ -371,7 +371,7 @@ export interface ImpactView {
   /** TE-3：補咗呢啲資料就可以過（UI 喺同一張卡展開輸入框）；required=false 嘅欄可以留空 */
   needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
   /** TE-5：系統有同名現有保安員，淨姓名對唔夠硬——要人決定「連結」定「建新人」 */
-  needs_decision?: { reason: "name_only_candidate" | "same_name_different_dob" | "name_multi_candidate"; candidates: DecisionCandidate[]; options: ("link" | "create_new")[]; /** 同名者多過 5 位，只列頭 5 位 */ truncated?: boolean };
+  needs_decision?: { reason: "name_only_candidate" | "same_name_different_dob" | "name_multi_candidate" | "hkid_matches_existing_guard"; candidates: DecisionCandidate[]; options: ("link" | "create_new" | "skip")[]; /** 同名者多過 5 位，只列頭 5 位 */ truncated?: boolean };
 }
 
 export interface DecisionCandidate {
@@ -388,31 +388,26 @@ export interface DecisionCandidate {
   /** 最近出更月份（YYYY-MM；冇更＝null） */
   last_shift_month: string | null;
   active: boolean;
+  /** TE-9：身份證號同導入／輸入嘅號碼相同 */
+  same_hkid?: boolean;
 }
 
 /** TE-5：需要人決定連結／建新人嘅原因碼 */
 export const DECISION_REASONS = ["name_only_candidate", "same_name_different_dob", "name_multi_candidate"] as const;
+export const HKID_OWNER_TEXT = "呢個身份證號已屬於系統內一位保安員，確認係同一人就連結";
 export const DECISION_TEXT = "系統已有一位同名保安員，請確認係咪同一人：係＝連結並補資料；唔係＝建新人";
 
-/** 同名（normZh 相同）現有保安員候選卡（live 讀，欄位級權限過濾）。S3：只 select 需要嘅欄（身份證號／出生日期淨攞「有冇」），SQL 層限制行數；最多回 5 位，多過 5 位 truncated=true。 */
-const DECISION_MAX_CANDIDATES = 5;
-export async function loadDecisionCandidates(nameZh: string, c: ViewerCaps): Promise<{ candidates: DecisionCandidate[]; truncated: boolean }> {
-  const want = normZh(nameZh);
-  if (!want) return { candidates: [], truncated: false };
-  const rows = await prisma.$queryRaw<{ id: string; name_zh: string; name_en: string | null; has_hkid: boolean; has_dob: boolean; tel: string | null; created_at: Date; status: string }[]>`
-    SELECT id, name_zh, name_en, (hkid IS NOT NULL) AS has_hkid, (date_of_birth IS NOT NULL) AS has_dob, tel, created_at, status::text AS status
-    FROM guards WHERE position(${want[0]!} in name_zh) > 0 ORDER BY created_at LIMIT 200`;
-  const all = rows.filter((g) => normZh(g.name_zh) === want);
-  const truncated = all.length > DECISION_MAX_CANDIDATES;
-  const same = all.slice(0, DECISION_MAX_CANDIDATES);
+type GuardRow = { id: string; name_zh: string; name_en: string | null; has_hkid: boolean; has_dob: boolean; tel: string | null; created_at: Date; status: string };
+
+async function decisionCards(same: readonly GuardRow[], c: ViewerCaps, sameHkid = false): Promise<DecisionCandidate[]> {
   const ids = same.map((g) => g.id);
-  if (ids.length === 0) return { candidates: [], truncated: false };
+  if (ids.length === 0) return [];
   const [phones, nos, last] = await Promise.all([
     prisma.guardPhone.findMany({ where: { guardId: { in: ids } }, select: { guardId: true, tel: true } }),
     prisma.guardStaffNumber.findMany({ where: { guardId: { in: ids } }, select: { guardId: true, number: true } }),
     prisma.$queryRaw<{ guard_id: string; last_date: Date }[]>`SELECT guard_id, max(work_date) AS last_date FROM shift_records WHERE guard_id = ANY(${ids}::text[]) AND status <> 'cancelled' GROUP BY guard_id`,
   ]);
-  const candidates = same.map((g) => {
+  return same.map((g) => {
     const tel = phones.find((p) => p.guardId === g.id)?.tel ?? g.tel ?? null;
     const ld = last.find((r) => r.guard_id === g.id)?.last_date ?? null;
     return {
@@ -426,9 +421,28 @@ export async function loadDecisionCandidates(nameZh: string, c: ViewerCaps): Pro
       created_at: g.created_at.toISOString().slice(0, 10),
       last_shift_month: ld ? ld.toISOString().slice(0, 7) : null,
       active: g.status === "active",
+      ...(sameHkid ? { same_hkid: true } : {}),
     };
   });
-  return { candidates, truncated };
+}
+
+/** 同名（normZh 相同）現有保安員候選卡（live 讀，欄位級權限過濾）。S3：只 select 需要嘅欄（身份證號／出生日期淨攞「有冇」），SQL 層限制行數；最多回 5 位，多過 5 位 truncated=true。 */
+const DECISION_MAX_CANDIDATES = 5;
+export async function loadDecisionCandidates(nameZh: string, c: ViewerCaps): Promise<{ candidates: DecisionCandidate[]; truncated: boolean }> {
+  const want = normZh(nameZh);
+  if (!want) return { candidates: [], truncated: false };
+  const rows = await prisma.$queryRaw<GuardRow[]>`
+    SELECT id, name_zh, name_en, (hkid IS NOT NULL) AS has_hkid, (date_of_birth IS NOT NULL) AS has_dob, tel, created_at, status::text AS status
+    FROM guards WHERE position(${want[0]!} in name_zh) > 0 ORDER BY created_at LIMIT 200`;
+  const all = rows.filter((g) => normZh(g.name_zh) === want);
+  return { candidates: await decisionCards(all.slice(0, DECISION_MAX_CANDIDATES), c), truncated: all.length > DECISION_MAX_CANDIDATES };
+}
+
+/** TE-9：身份證號相同嘅現有保安員（唯一一位）候選卡，標 same_hkid。 */
+export async function loadHkidOwnerCard(guardId: string, c: ViewerCaps): Promise<DecisionCandidate[]> {
+  const rows = await prisma.$queryRaw<GuardRow[]>`
+    SELECT id, name_zh, name_en, (hkid IS NOT NULL) AS has_hkid, (date_of_birth IS NOT NULL) AS has_dob, tel, created_at, status::text AS status FROM guards WHERE id = ${guardId} LIMIT 1`;
+  return decisionCards(rows, c, true);
 }
 
 /** TE-3：令 can_confirm=false 嘅原因碼 → 人話＋下一步（唔再淨係「原因碼」）。 */

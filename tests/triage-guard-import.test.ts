@@ -320,9 +320,14 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     const q = await qOfKind("hkid_not_confirmed");
     // 唔合法
     expect((await preview(accountant, q.id, { option: "enter_hkid", value: "Z9999999" })).status).toBe(400);
-    // Minor-1：hkid 屬「非候選」現有保安員，姓名唔同 → 422（留返人手）
+    // Minor-1／TE-9：hkid 屬「非候選」現有保安員，姓名唔同 → 唔再直接攔，回 needs_decision（hkid_matches_existing_guard，只可連結／跳過）；冇 link 直接答 422
     const r422 = await preview(accountant, q.id, { option: "enter_hkid", value: H[13]! });
-    expect(r422.status).toBe(422);
+    expect(r422.status).toBe(200);
+    const body422 = await r422.json();
+    expect(body422.writes).toBe(false);
+    expect(body422.impact.needs_decision.reason).toBe("hkid_matches_existing_guard");
+    expect(body422.impact.needs_decision.options).not.toContain("create_new");
+    expect((await answer(accountant, q.id, { option: "enter_hkid", value: H[13]! }, body422.preview_hash)).status).toBe(422);
     expect(await prisma.guard.count({ where: { hkid: H[13] } })).toBe(1);
     // 姓名完全相同先准，並帶警告
     await prisma.guard.update({ where: { id: other.id }, data: { nameZh: "導入測試員乙" } });
