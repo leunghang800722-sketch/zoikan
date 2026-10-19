@@ -189,7 +189,10 @@ function previewReason(notes: readonly string[], text?: string): string {
 /** commit 失敗原因：ApiError＝狀態＋code；其他＝error */
 export function submitReason(e: unknown): string {
   // 只記狀態＋code（訊息可能帶電話／工號等原值，唔記）
-  return e instanceof ApiError ? `submit:${e.status}:${e.code}` : "submit:error";
+  if (!(e instanceof ApiError)) return "submit:error";
+  // TE-11.6：preview_hash 409 附指紋差異路徑（只路徑＋類型，冇值；最多 3 條，字元白名單）
+  const dp = e.status === 409 && e.details?.field === "preview_hash" && Array.isArray(e.details.diff_paths) ? (e.details.diff_paths as unknown[]).filter((x): x is string => typeof x === "string" && /^[\w.\[\]#<>:$-]{1,80}$/.test(x)).slice(0, 3) : [];
+  return `submit:${e.status}:${e.code}${dp.length ? `:${dp.join(",")}` : ""}`;
 }
 
 export function dispOf(e: unknown): Disp {

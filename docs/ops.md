@@ -472,3 +472,7 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 - **被替者取消唔等於請假**：被替者該更取消原因記 `covered_by_whatsapp`（audit `void`），唔會寫請假；如果訊息講明被替者請病假，另一條請假 intent 會自己處理。
 - **批量接受唔包替更／取消**：「批量接受建議」只處理人名唯一候選／撞更保留舊記錄兩類。
 - 過濾層補咗 RD／SH／NPL 口語（例假、公假、休假…），之前「我21號例假」會被當閒話。
+
+### TE-11.6 指紋差異診斷＋生成值正規化
+- 預覽／commit 指紋改用 `fingerprintInput`：本次 run 新生成嘅 row id（create 嗰筆 rowId）喺任何位置出現都換成穩定佔位 `<new#n>`；key 以 `xxxAt`／`xxx_at` 結尾嘅時間戳唔入指紋（原有 id／guardId／createdAt 等照舊剔除）。
+- commit 時 `preview_hash` 409 會帶 `details.diff_paths`（對比預覽暫存嘅指紋輸入，只路徑＋類型 `:value/:type/:missing/.length`，冇值），`invalid_reasons` 顯示為 `submit:409:conflict:<path>[,<path>]`（最多 3 條）。預覽輸入暫存喺 server 記憶體 10 分鐘；跨 instance／重啟會顯示 `preview_not_cached`。

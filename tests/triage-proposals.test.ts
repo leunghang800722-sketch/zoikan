@@ -9,7 +9,7 @@ import { POST as proposalsRoute } from "@/app/api/triage/sessions/[id]/proposals
 import { GET as sessionRoute } from "@/app/api/triage/sessions/[id]/route";
 import { GET as listRoute } from "@/app/api/triage/sessions/route";
 import { dispOf, planForQuestion, proposalsBodySchema, submitReason, type Proposal } from "@/lib/triage/proposals";
-import { fpNormalize } from "@/lib/guards/import/apply";
+import { fingerprintInput, fpDiffPaths, fpNormalize } from "@/lib/guards/import/apply";
 import { createHash } from "node:crypto";
 import { BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
 import { insertEvidenceImage, inspectImage } from "@/lib/triage/evidence-images";
@@ -465,5 +465,43 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(real.body).toMatchObject({ applied: 1, skipped_duplicate_question: 1, skipped_invalid: 0, errors: 0 });
     expect(real.body.invalid_reasons).toEqual({});
     expect((await qOf("name_not_confirmed")).status).toBe("answered");
+  });
+  it("TE-11.6 fingerprintInput：生成 id／FK／時間戳唔入指紋；同結構兩次必相等；fpDiffPaths 只回路徑＋類型", () => {
+    const res = { key: "k", outcome: "created", reasons: [], fields: {}, staff_numbers_added: 1, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 } as unknown as Parameters<typeof fingerprintInput>[0];
+    const mk = (gid: string, sid: string, ts: string) => [
+      { table: "guards", action: "create", rowId: gid, before: null, after: { id: gid, nameZh: "甲", hireDate: "2026-01-01", confirmedAt: ts, createdAt: ts } },
+      { table: "guard_staff_numbers", action: "create", rowId: sid, before: null, after: { id: sid, guardRef: gid, number: "A1", confirmed_at: ts } },
+      { table: "guard_staff_numbers", action: "update", rowId: sid, before: { guardRef: gid }, after: { number: "A1" } },
+    ];
+    const a = fingerprintInput(res, mk("g-aaa", "s-aaa", "2026-10-01T00:00:00Z"));
+    const b = fingerprintInput(res, mk("g-bbb", "s-bbb", "2026-10-02T09:09:09Z"));
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    expect(JSON.stringify(a)).not.toContain("g-aaa");
+    // 真有內容差異仍然分得出，而且 diff 只講路徑＋類型
+    const c = fingerprintInput(res, mk("g-ccc", "s-ccc", "x").map((x, i) => (i === 0 ? { ...x, after: { ...(x.after as object), nameZh: "乙" } } : x)));
+    expect(JSON.stringify(a)).not.toBe(JSON.stringify(c));
+    const paths = fpDiffPaths(a, c);
+    expect(paths).toHaveLength(1);
+    expect(paths[0]).toMatch(/^changes\[\d\]\.after\.nameZh:value$/);
+    expect(paths.join()).not.toContain("乙");
+    expect(fpDiffPaths({ x: [1, 2] }, { x: [1] })).toEqual(["x.length"]);
+    expect(fpDiffPaths({ x: 1 }, { y: 1 })).toEqual(["x:missing", "y:missing"]);
+    expect(fpDiffPaths({ x: 1 }, { x: "1" })).toEqual(["x:type"]);
+    expect(submitReason(Object.assign(Conflict("x", { field: "preview_hash", diff_paths: ["res.reasons.length", "bad value!", "changes[1].after.a:value", "a", "b"] }), {}))).toBe("submit:409:conflict:res.reasons.length,changes[1].after.a:value,a");
+  });
+
+  it("TE-11.6 同一答案連續預覽兩次（獨立 resolve）：preview_hash 相同（create／enter_hkid／review 姓名）", async () => {
+    const pk = person({ hkid: mkHkid("R", "910001"), hkidStatus: "review", name: "待核姓名一", nameStatus: "review", nos: ["U91001"], tel: "91000091" });
+    const r0 = await applyPkg(accountant, [pk]);
+    const sid = r0.body.triage.session_id as string;
+    const m = { hkid: pk.hkid.value, staff_numbers: pk.staffNumbers.map((n) => n.number) };
+    const props = [prop(pk.key, "hkid", mkHkid("R", "910002"), { match: m, confidence: "high" })];
+    const dry1 = await send(accountant, sid, props, true);
+    const dry2 = await send(accountant, sid, props, true);
+    expect(dry1.body.applied).toBe(1);
+    expect(dry2.body.applied).toBe(1);
+    const real = await send(accountant, sid, props);
+    expect(real.body.applied).toBe(1);
+    expect(real.body.invalid_reasons).toEqual({});
   });
 });
