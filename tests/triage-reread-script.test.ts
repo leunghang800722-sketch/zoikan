@@ -110,12 +110,12 @@ describe("揀頁／工號索引", () => {
 });
 
 describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
-  it("run：16 人入 11 人需重讀（TE-11.2 加 5 個入職表分級個案）、2 人冇文件；38 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
+  it("run：18 人入 13 人需重讀（TE-11.2／11.3 加 7 個入職表分級個案）、2 人冇文件；46 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
     const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
-    expect(r.summary).toMatchObject({ persons_in_package: 16, persons_needing_reread: 11, persons_no_docs: 2, persons_processed: 9, persons_failed: 0, persons_with_proposals: 9, proposals_total: 38, form_differs: 1, form_conflict: 2, card_unverified: 1 });
-    expect(r.summary.proposals_by_field).toEqual({ nameZh: 8, nameEn: 9, dateOfBirth: 8, phone: 4, address: 9 });
-    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 38 });
-    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 6, typed_list_disagrees: 1, arbiter_agree_a: 1 }); // TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
+    expect(r.summary).toMatchObject({ persons_in_package: 18, persons_needing_reread: 13, persons_no_docs: 2, persons_processed: 11, persons_failed: 0, persons_with_proposals: 11, proposals_total: 46, form_differs: 1, form_conflict: 3, card_unverified: 1, form_unproven: 1 });
+    expect(r.summary.proposals_by_field).toEqual({ nameZh: 10, nameEn: 11, dateOfBirth: 10, phone: 4, address: 11 });
+    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 46 });
+    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 8, typed_list_disagrees: 1, arbiter_agree_a: 1 }); // TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
     expect(r.summary.ocr_calls).toBeGreaterThan(0);
     expect(proposalsBodySchema.safeParse({ version: 1, summary: r.summary, proposals: r.proposals }).success).toBe(true);
     const lines = summaryLines(r.summary).join("\n");
@@ -247,21 +247,32 @@ describe("TE-11.2 整頁身份證 vs 入職表分級（錯人卡防線）", () =
     expect(sig(14)).toEqual(["medium:form_conflict"]);
     expect(sig(15)).toEqual(["medium:card_unverified"]);
     expect(sig(16)).toEqual(["high:"]);
+    expect(sig(17)).toEqual(["medium:form_differs"]); // TE-11.3：只得中文可比、差字而冇硬證據（入職表冇 hkid）→ 留人
+    expect(sig(18)).toEqual(["medium:form_conflict"]); // 兄弟姊妹：中文差 1 字、英文唔同 → conflict
     expect(sig(1)).toEqual(["high:"]); // 入職表一致 → 不變
   });
   it("gradeFormAgreement／applyFormGrade 純函數", async () => {
     const { gradeFormAgreement, applyFormGrade, zhOverlap } = await import("../scripts/staff-import/lib/card-reread");
     expect(zhOverlap("測試甲", "測試")).toBeCloseTo(2 / 3, 5);
     expect(gradeFormAgreement({ nameZh: "測試甲" }, { nameZh: "測試甲" })).toBe("agree");
-    expect(gradeFormAgreement({ nameZh: "測試甲" }, { nameZh: "測試" })).toBe("minor"); // 重疊 ≥0.5
+    expect(gradeFormAgreement({ nameZh: "測試甲" }, { nameZh: "測試" })).toBe("minor_unproven"); // 重疊 ≥0.5 但冇硬證據
+    expect(gradeFormAgreement({ nameZh: "測試甲" }, { nameZh: "測試" }, true)).toBe("minor"); // 有硬證據（入職表 hkid＝卡／印刷佐證／名單）
     expect(gradeFormAgreement({ nameZh: "測試甲" }, { nameZh: "張三李" })).toBe("conflict");
     expect(gradeFormAgreement({ nameEn: "CHAN TAI MAN" }, { nameEn: "CHAN T M" })).toBe("minor"); // looseEnglishNameMatch
+    expect(gradeFormAgreement({ nameEn: "CHAN TAI MAN KEI" }, { nameEn: "CHAN TAI MAN" })).toBe("minor"); // S2：入職表係卡 token 子集（漏咗中間名）
+    expect(gradeFormAgreement({ nameEn: "CHAN TAI MAN" }, { nameEn: "CHAN TAI MAN KEI" })).toBe("conflict"); // 入職表多咗 token（唔係子集）
     expect(gradeFormAgreement({ nameEn: "CHAN TAI MAN" }, { nameEn: "WONG SIU MING" })).toBe("conflict");
-    expect(gradeFormAgreement({ nameZh: "測試甲", nameEn: "CHAN TAI MAN" }, { nameZh: "張三李", nameEn: "CHAN T M" })).toBe("minor"); // 任一達標
+    // TE-11.3：中英文兩邊都可比 → 兩樣都要過；任一唔過 conflict（兄弟姊妹：陳大明 vs 陳大文）
+    expect(gradeFormAgreement({ nameZh: "測試甲", nameEn: "CHAN TAI MAN" }, { nameZh: "張三李", nameEn: "CHAN T M" })).toBe("conflict");
+    expect(gradeFormAgreement({ nameZh: "陳大明", nameEn: "CHAN TAI MING" }, { nameZh: "陳大文", nameEn: "CHAN TAI MAN" })).toBe("conflict");
+    expect(gradeFormAgreement({ nameZh: "陳大明", nameEn: "CHAN TAI MING" }, { nameZh: "陳大明", nameEn: "CHAN T M" })).toBe("minor");
+    expect(gradeFormAgreement({ nameZh: "陳大明", nameEn: "CHAN TAI MING" }, { nameZh: "陳大明", nameEn: "chan  tai ming" })).toBe("agree");
+    expect(gradeFormAgreement({ nameZh: "陳大明" }, { nameZh: "陳 大明" })).toBe("agree"); // 空白差異
     expect(gradeFormAgreement({ nameZh: "測試甲", dob: "1990-01-15" }, { nameZh: "測試甲", dob: "1991-02-03" })).toBe("conflict");
     expect(gradeFormAgreement({ nameZh: "測試甲" }, {})).toBe("no_form");
     expect(gradeFormAgreement({ nameZh: "測試甲" }, { nameEn: "CHAN" })).toBe("no_form"); // 冇可比語言
     const P = (f: string, over: object = {}) => ({ person_key: "k", field: f, value: "v", basis: "two_reads", doc: "id_card", confidence: "high", match: { hkid: null, staff_numbers: [] }, ...over }) as never;
+    expect(applyFormGrade([P("nameZh")], "minor_unproven", false)[0]).toMatchObject({ confidence: "medium", flags: ["form_differs"] });
     expect(applyFormGrade([P("nameZh")], "no_form", true)[0]).toMatchObject({ confidence: "high" });
     expect(applyFormGrade([P("nameZh")], "no_form", false)[0]).toMatchObject({ confidence: "medium", flags: ["card_unverified"] });
     expect(applyFormGrade([P("nameZh", { flags: ["printed_corroborated"] })], "no_form", false)[0]).toMatchObject({ confidence: "high" });

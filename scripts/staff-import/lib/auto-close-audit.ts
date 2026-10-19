@@ -6,12 +6,14 @@ import type { PkgPerson, RereadProposal } from './triage-reread-core';
 
 export interface AutoCloseRow {
   key: string;
-  kinds: { kind: 'name_not_confirmed' | 'hkid_not_confirmed' | 'field_review'; closable: boolean; via: 'use_package' | 'card_truth' | 'apply_fields' | null; blockedByFormConflict?: boolean }[];
+  kinds: { kind: 'name_not_confirmed' | 'hkid_not_confirmed' | 'field_review'; closable: boolean; via: 'use_package' | 'card_truth' | 'apply_fields' | null; blockedByFormConflict?: boolean; blockedByUnproven?: boolean }[];
 }
 
 const cardTruth = (p: RereadProposal | undefined): boolean => !!p && p.confidence === 'high' && p.basis === 'two_reads' && p.doc === 'id_card' && !(p.flags ?? []).some((f) => f === 'printed_card_conflict' || f === 'card_name_conflict');
 /** 身份證兩讀一致本來可靠卡為準修正，但入職表完全唔相似（form_conflict）而被降級留人 */
 const formConflictBlocked = (p: RereadProposal): boolean => p.doc === 'id_card' && p.basis === 'two_reads' && (p.flags ?? []).includes('form_conflict');
+/** 中文差 1 字而冇硬證據：medium＋form_differs（TE-11.3） */
+const unprovenBlocked = (p: RereadProposal): boolean => p.doc === 'id_card' && p.basis === 'two_reads' && p.confidence === 'medium' && (p.flags ?? []).includes('form_differs') && !(p.flags ?? []).includes('form_conflict');
 const REVIEW_FIELD_PROPOSALS = ['nameEn', 'dateOfBirth', 'phone', 'address'] as const;
 
 export function auditAutoClose(persons: readonly PkgPerson[], proposals: readonly RereadProposal[]): AutoCloseRow[] {
@@ -24,7 +26,7 @@ export function auditAutoClose(persons: readonly PkgPerson[], proposals: readonl
     if (p.nameZh.status === 'review') {
       const pr = mine.get('nameZh');
       const same = !!pr && !!p.nameZh.value && pr.value.replace(/\s+/g, '') === p.nameZh.value.replace(/\s+/g, '');
-      kinds.push({ kind: 'name_not_confirmed', closable: !!pr && (same || cardTruth(pr)), via: !pr ? null : same ? 'use_package' : cardTruth(pr) ? 'card_truth' : null, ...(!!pr && !same && formConflictBlocked(pr) ? { blockedByFormConflict: true } : {}) });
+      kinds.push({ kind: 'name_not_confirmed', closable: !!pr && (same || cardTruth(pr)), via: !pr ? null : same ? 'use_package' : cardTruth(pr) ? 'card_truth' : null, ...(!!pr && !same && formConflictBlocked(pr) ? { blockedByFormConflict: true } : {}), ...(!!pr && !same && unprovenBlocked(pr) ? { blockedByUnproven: true } : {}) });
     }
     if (p.hkid.status === 'review') {
       const pr = mine.get('hkid');
@@ -43,6 +45,8 @@ export function auditAutoClose(persons: readonly PkgPerson[], proposals: readonl
 }
 
 export interface AutoCloseSummary {
+  /** TE-11.3：靠卡修正但中文差 1 字而冇硬證據（medium＋form_differs）而留人嘅題數 */
+  blocked_by_unproven: number;
   /** TE-11.2：靠卡為準修正本來可自動關閉，但入職表姓名／出生日期完全唔相似（form_conflict，疑錯人卡）而留人嘅題數 */
   blocked_by_form_conflict: number;
   persons_with_questions: number;
@@ -53,7 +57,7 @@ export interface AutoCloseSummary {
   questions_total: number;
 }
 export function summarizeAutoClose(rows: readonly AutoCloseRow[]): AutoCloseSummary {
-  const s: AutoCloseSummary = { blocked_by_form_conflict: rows.reduce((a, r) => a + r.kinds.filter((k) => k.blockedByFormConflict).length, 0), persons_with_questions: rows.length, questions: {}, closable: {}, closable_via_card_truth: 0, closable_total: 0, questions_total: 0 };
+  const s: AutoCloseSummary = { blocked_by_unproven: rows.reduce((a, r) => a + r.kinds.filter((k) => k.blockedByUnproven).length, 0), blocked_by_form_conflict: rows.reduce((a, r) => a + r.kinds.filter((k) => k.blockedByFormConflict).length, 0), persons_with_questions: rows.length, questions: {}, closable: {}, closable_via_card_truth: 0, closable_total: 0, questions_total: 0 };
   for (const r of rows) {
     for (const k of r.kinds) {
       s.questions[k.kind] = (s.questions[k.kind] ?? 0) + 1;

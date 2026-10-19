@@ -159,6 +159,8 @@ interface DryPerson {
   docs: boolean;
   /** TE-11.2：打字名單（按工號／電話）佐證呢個人卡上姓名 */
   listMatch?: boolean;
+  /** TE-11.3：導入抽取嘅入職表英文名（aux.formNameEn） */
+  formEn?: string;
   /** TE-4：呢個人有幾頁（page 由 1 起）；lines＝第一階段整頁 OCR 讀到嘅行；hidden＝只有二階段局部 OCR 先讀到嘅行；kinds＝導入分類 */
   pages?: { lines: OcrLine[]; hidden?: OcrLine[]; kinds: string[] }[];
 }
@@ -222,6 +224,8 @@ export function dryFixture(): { persons: DryPerson[] } {
       { p: base(13), truth: truth(13), docs: true, fake: { onboarding_form: { a: { name_zh: '完全唔同' }, b: { name_zh: '完全唔同' } } } }, // 完全唔相似（疑錯人卡）→ medium＋form_conflict
       { p: base(14), truth: truth(14), docs: true, fake: { onboarding_form: { a: { dob: '1991-02-03' }, b: { dob: '1991-02-03' } } } }, // 入職表出生日期唔同 → medium＋form_conflict
       { p: base(15), truth: truth(15), docs: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、冇名單佐證 → medium＋card_unverified
+      { p: base(17), truth: truth(17), docs: true, fake: { onboarding_form: { a: { name_zh: '測試甲乙', hkid: null }, b: { name_zh: '測試甲乙', hkid: null } } } }, // 只得中文可比、差字而冇硬證據（form 冇 hkid）→ medium＋form_differs
+      { p: base(18), truth: truth(18), docs: true, formEn: 'DIFFERENT PERSON', fake: { onboarding_form: { a: { name_zh: '測試乙' }, b: { name_zh: '測試乙' } } } }, // 兄弟姊妹：中文差 1 字、英文唔同 → conflict
       { p: base(16), truth: truth(16), docs: true, listMatch: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、名單一致 → high
       { p: base(6, { nameZh: lf('測試乙', 'confirmed'), nameEn: lf('TEST ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001116', 'confirmed'), address: lf('舊地址', 'confirmed') }), truth: truth(6), docs: true }, // 冇 review 欄 → 唔重讀
     ],
@@ -229,6 +233,7 @@ export function dryFixture(): { persons: DryPerson[] } {
 }
 
 function dryExtractRow(docId: string, d?: DryPerson): ExtractRow {
+  if (d?.formEn) return { docId, aux: { formNameEn: { value: d.formEn } }, address: { page: 2 }, pages: [{ page: 1, kinds: ['id_card'], primary: 'id_card' }, { page: 2, kinds: ['address_proof'], primary: 'address_proof' }, { page: 3, kinds: ['application_form'], primary: 'application_form' }] };
   if (d?.pages) return { docId, pages: d.pages.map((pg, i) => ({ page: i + 1, kinds: pg.kinds, primary: pg.kinds[0] })) };
   return { docId, address: { page: 2 }, pages: [{ page: 1, kinds: ['id_card'], primary: 'id_card' }, { page: 2, kinds: ['address_proof'], primary: 'address_proof' }, { page: 3, kinds: ['application_form'], primary: 'application_form' }] };
 }
@@ -497,14 +502,20 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
           const cardOf = (k: 'name_zh' | 'name_en') => (r.picks[k]?.doc === 'id_card' ? r.picks[k]!.result.value : null);
           const dobCanon = (x: string | null | undefined) => (x ? normalizeField('dob', x, now).canon : null);
           const auxEn = docIds.map((d) => inp.extractBy.get(d)?.aux?.formNameEn?.value).find(Boolean) ?? null;
+          const listOk = !!inp.listAgree?.(docIds, cardOf('name_zh'));
+          // 硬證據：入職表手寫 hkid（checksum 過）＝卡 hkid；印刷佐證一致；打字名單按工號／電話對到而名單姓名＝卡姓名
+          const cardHk = canonicalHkid(r.picks.hkid?.doc === 'id_card' ? r.picks.hkid.result.value : null);
+          const formHk = canonicalHkid(r.formReads.hkid ?? docIds.map((d) => inp.extractBy.get(d)?.aux?.formHkid?.value).find(Boolean) ?? null);
+          const hard = (!!cardHk && !!formHk && cardHk === formHk && hkidCheckDigitValid(formHk)) || o.proposals.some((x) => x.flags?.includes('printed_corroborated')) || listOk;
           const grade = gradeFormAgreement(
             { nameZh: cardOf('name_zh'), nameEn: cardOf('name_en'), dob: r.picks.dob?.doc === 'id_card' ? dobCanon(r.picks.dob.result.value) : null },
             { nameZh: r.formReads.name_zh ?? null, nameEn: auxEn, dob: dobCanon(r.formReads.dob) },
+            hard,
           );
-          const listOk = !!inp.listAgree?.(docIds, cardOf('name_zh'));
           o.proposals = applyFormGrade(o.proposals, grade, listOk);
           if (grade === 'conflict') summary.form_conflict += 1;
           else if (o.proposals.some((x) => x.flags?.includes('card_unverified'))) summary.card_unverified += 1;
+          else if (grade === 'minor_unproven') summary.form_unproven += 1;
           else if (grade === 'minor') summary.form_differs += 1;
         }
         summary.proposals_low_confidence += o.proposals.filter((x) => x.confidence === 'low').length;

@@ -161,7 +161,7 @@ describe("C import 規則：身份證兩讀一致即 confirmed（入職表唔一
 describe("D 自檢（23-auto-close-audit）", () => {
   it("--dry 固定 fixture：按題型可關閉數；靠卡為準修正 2；輸出冇姓名／號碼", async () => {
     const r = await runAutoClose(autoCloseArgs(["--dry"]));
-    expect(r.summary).toMatchObject({ persons_with_questions: 9, questions_total: 9, closable_total: 5, closable_via_card_truth: 3, blocked_by_form_conflict: 1, questions: { name_not_confirmed: 6, hkid_not_confirmed: 1, field_review: 2 }, closable: { name_not_confirmed: 3, hkid_not_confirmed: 1, field_review: 1 } });
+    expect(r.summary).toMatchObject({ persons_with_questions: 10, questions_total: 10, closable_total: 5, closable_via_card_truth: 3, blocked_by_form_conflict: 1, blocked_by_unproven: 1, questions: { name_not_confirmed: 7, hkid_not_confirmed: 1, field_review: 2 }, closable: { name_not_confirmed: 3, hkid_not_confirmed: 1, field_review: 1 } });
     const d = dryData();
     expect(summarizeAutoClose(auditAutoClose(d.persons, d.proposals))).toEqual(r.summary);
     expect(JSON.stringify(r)).not.toMatch(/測試|Z900001/);

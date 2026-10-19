@@ -244,7 +244,7 @@ export function printedOnlyProposal(personKey: string, printed: readonly string[
 // ---------------------------------------------------------------------------
 // TE-11.2：錯人卡防線——卡讀數（整頁身份證／嵌入卡）同入職表讀數分級（證件為準，但夾錯證件要攔）
 // ---------------------------------------------------------------------------
-export type FormGrade = 'agree' | 'minor' | 'conflict' | 'no_form';
+export type FormGrade = 'agree' | 'minor' | 'minor_unproven' | 'conflict' | 'no_form';
 export interface NameDob {
   nameZh?: string | null;
   nameEn?: string | null;
@@ -260,28 +260,38 @@ export function zhOverlap(card: string, form: string): number {
 }
 const enTokenSet = (s: string): string => [...(s.normalize('NFKC').toUpperCase().match(/[A-Z]+/g) ?? [])].sort().join(' ');
 
+const enTokens = (s: string): string[] => s.normalize('NFKC').toUpperCase().match(/[A-Z]+/g) ?? [];
+
 /**
- * 入職表差異分級：
- *  - 出生日期兩邊都讀到而唔同 → conflict；
- *  - 入職表冇可比姓名（冇名，或者卡上對應語言冇名）→ no_form（要打字名單佐證先 high）；
- *  - 有可比姓名：中文字元重疊 ≥0.5 或英文 looseEnglishNameMatch 達標 → 全部完全相同＝agree，否則 minor（form_differs）；兩者都唔達標 → conflict。
+ * 入職表差異分級（TE-11.3：兄弟姊妹證件夾錯防線）：
+ *  - 出生日期兩邊都讀到而唔同 → conflict；入職表冇可比姓名 → no_form（要打字名單／印刷佐證）；
+ *  - 中英文兩邊都可比：**兩樣都要過**先算輕微差異（中文字元重疊 ≥0.5；英文 looseEnglishNameMatch，或入職表 token 係卡 token 子集＝漏咗中間名）；任一唔過 → conflict；
+ *  - 只得中文可比：完全相同 → agree；重疊 ≥0.5 但唔完全相同（例如差 1 字）→ 有硬證據（hard）先 minor（high），冇 → minor_unproven（medium 留人）；重疊 <0.5 → conflict；
+ *  - 只得英文可比：完全相同 → agree；寬鬆一致／子集 → minor；否則 conflict。
+ * hard＝入職表手寫 hkid（checksum 過）＝卡 hkid、印刷佐證一致、或打字名單按工號／電話對到而名單姓名＝卡姓名。
  */
-export function gradeFormAgreement(card: NameDob, form: NameDob): FormGrade {
+export function gradeFormAgreement(card: NameDob, form: NameDob, hard = false): FormGrade {
   if (card.dob && form.dob && card.dob.trim() !== form.dob.trim()) return 'conflict';
   const zhCmp = !!card.nameZh && !!form.nameZh;
   const enCmp = !!card.nameEn && !!form.nameEn;
   if (!zhCmp && !enCmp) return 'no_form';
+  const zhExact = zhCmp && normZh(card.nameZh!) === normZh(form.nameZh!);
   const zhOk = zhCmp && zhOverlap(card.nameZh!, form.nameZh!) >= 0.5;
-  const enOk = enCmp && looseEnglishNameMatch(card.nameEn!, form.nameEn!);
-  if (!zhOk && !enOk) return 'conflict';
-  const zhExact = !zhCmp || normZh(card.nameZh!) === normZh(form.nameZh!);
-  const enExact = !enCmp || enTokenSet(card.nameEn!) === enTokenSet(form.nameEn!);
-  return zhExact && enExact && (!zhCmp || zhOk) && (!enCmp || enOk) ? 'agree' : 'minor';
+  const enExact = enCmp && enTokenSet(card.nameEn!) === enTokenSet(form.nameEn!);
+  const cardEn = new Set(enCmp ? enTokens(card.nameEn!) : []);
+  const enSubset = enCmp && enTokens(form.nameEn!).length > 0 && enTokens(form.nameEn!).every((t) => cardEn.has(t)); // 入職表漏咗中間名
+  const enOk = enCmp && (looseEnglishNameMatch(card.nameEn!, form.nameEn!) || enSubset);
+  if (zhCmp && enCmp) {
+    if (!zhOk || !enOk) return 'conflict';
+    return zhExact && enExact ? 'agree' : 'minor';
+  }
+  if (zhCmp) return zhExact ? 'agree' : zhOk ? (hard ? 'minor' : 'minor_unproven') : 'conflict';
+  return enExact ? 'agree' : enOk ? 'minor' : 'conflict';
 }
 
 /**
  * 套用分級去呢個人嘅「身份證卡」proposals（doc id_card、仲係 high 嘅）：
- *  minor → 維持 high＋form_differs；conflict → medium＋form_conflict（留人）；
+ *  minor → 維持 high＋form_differs；minor_unproven（中文差 1 字而冇硬證據）→ medium＋form_differs（留人）；conflict → medium＋form_conflict（留人）；
  *  no_form → 打字名單（按工號／電話對到、姓名同卡一致）或印刷佐證一致（printed_corroborated）先維持 high，否則 medium＋card_unverified（留人）；agree → 不變。
  */
 export function applyFormGrade(proposals: readonly RereadProposal[], grade: FormGrade, listAgrees: boolean): RereadProposal[] {
@@ -289,6 +299,7 @@ export function applyFormGrade(proposals: readonly RereadProposal[], grade: Form
   return proposals.map((p) => {
     if (p.doc !== 'id_card' || p.confidence !== 'high') return p;
     if (grade === 'minor') return addFlag(p, 'form_differs');
+    if (grade === 'minor_unproven') return { ...addFlag(p, 'form_differs'), confidence: 'medium' }; // 只得中文可比、差 1 字而冇硬證據 → 留人
     if (grade === 'conflict') return { ...addFlag(p, 'form_conflict'), confidence: 'medium' };
     if (grade === 'no_form' && !listAgrees && !(p.flags ?? []).includes('printed_corroborated')) return { ...addFlag(p, 'card_unverified'), confidence: 'medium' };
     return p;

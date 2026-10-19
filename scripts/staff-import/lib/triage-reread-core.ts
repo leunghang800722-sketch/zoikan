@@ -155,7 +155,7 @@ export interface ExtractRow {
   /** 旋轉救援頁嘅度數（OCR 座標係旋轉後嘅頁） */
   rescuedRot?: number | null;
   /** TE-3：導入抽取嘅其他來源 HKID（下次導入先有） */
-  aux?: { printedHkid?: { value: string } | null; permitHkid?: { value: string } | null; formNameEn?: { value: string } | null } | null;
+  aux?: { printedHkid?: { value: string } | null; permitHkid?: { value: string } | null; formNameEn?: { value: string } | null; formHkid?: { value: string } | null } | null;
   /** TE-11.2：導入抽取嘅身份證中文名（打字名單佐證時同卡讀數比） */
   nameZh?: { value: string } | null;
   pages: ExtractPage[];
@@ -329,10 +329,12 @@ export interface RereadSummary {
   form_differs: number;
   form_conflict: number;
   card_unverified: number;
+  /** TE-11.3：中文差 1 字而冇硬證據（medium＋form_differs，留人）嘅人數 */
+  form_unproven: number;
 }
 
 export function emptySummary(now: Date = new Date()): RereadSummary {
-  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0, embedded_cards_found: 0, embedded_second_stage_found: 0, second_stage_pages: 0, card_printed_corroborated: 0, card_printed_conflict: 0, printed_only_review: 0, proposals_low_confidence: 0, card_name_conflict: 0, form_differs: 0, form_conflict: 0, card_unverified: 0 };
+  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0, embedded_cards_found: 0, embedded_second_stage_found: 0, second_stage_pages: 0, card_printed_corroborated: 0, card_printed_conflict: 0, printed_only_review: 0, proposals_low_confidence: 0, card_name_conflict: 0, form_differs: 0, form_conflict: 0, card_unverified: 0, form_unproven: 0 };
 }
 
 export function addOutcome(s: RereadSummary, o: ProposeOutcome): void {
@@ -356,6 +358,6 @@ export function summaryLines(s: RereadSummary): string[] {
     `每欄建議：${JSON.stringify(s.proposals_by_field)}｜依據：${JSON.stringify(s.proposals_by_basis)}`,
     `唔建議原因：${JSON.stringify(s.not_proposed_reasons)}`,
     `每欄唔建議原因：${JSON.stringify(s.skipped_by_field)}｜讀數快取命中 ${s.cache_hits}`,
-    `嵌入身份證副本 ${s.embedded_cards_found}（二階段 ${s.embedded_second_stage_found}／二階段掃描頁 ${s.second_stage_pages}）｜印刷佐證一致 ${s.card_printed_corroborated}｜印刷同卡唔一致 ${s.card_printed_conflict}｜淨印刷待覆核 ${s.printed_only_review}｜low 信心建議 ${s.proposals_low_confidence}｜卡姓名／核對唔一致 ${s.card_name_conflict}｜入職表輕微差異 ${s.form_differs}｜入職表完全唔相似 ${s.form_conflict}｜入職表冇名而冇名單佐證 ${s.card_unverified}`,
+    `嵌入身份證副本 ${s.embedded_cards_found}（二階段 ${s.embedded_second_stage_found}／二階段掃描頁 ${s.second_stage_pages}）｜印刷佐證一致 ${s.card_printed_corroborated}｜印刷同卡唔一致 ${s.card_printed_conflict}｜淨印刷待覆核 ${s.printed_only_review}｜low 信心建議 ${s.proposals_low_confidence}｜卡姓名／核對唔一致 ${s.card_name_conflict}｜入職表輕微差異 ${s.form_differs}｜入職表完全唔相似 ${s.form_conflict}｜入職表冇名而冇名單佐證 ${s.card_unverified}｜中文差字冇硬證據 ${s.form_unproven}`,
   ];
 }

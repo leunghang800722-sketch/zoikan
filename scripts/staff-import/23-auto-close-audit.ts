@@ -48,6 +48,7 @@ export function dryData(): { persons: PkgPerson[]; proposals: RereadProposal[] }
       pp('P7', { nameZh: lf('測試乙', 'review') }),
       pp('P8', { nameZh: lf('測試乙', 'review') }),
       pp('P9', { nameZh: lf('測試乙', 'review') }),
+      pp('P10', { nameZh: lf('測試乙', 'review') }),
     ],
     proposals: [
       pr('P1', 'nameZh', '測試乙'), // 同包內一致 → use_package
@@ -60,6 +61,7 @@ export function dryData(): { persons: PkgPerson[]; proposals: RereadProposal[] }
       pr('P7', 'nameZh', '測試甲', { flags: ['form_differs'] }), // TE-11.1：入職表唔一致只係資訊 → 卡為準自動答
       pr('P8', 'nameZh', '測試甲', { confidence: 'low', flags: ['embedded_card', 'printed_card_conflict'] }), // 印刷同卡唔一致 → 留人
       pr('P9', 'nameZh', '測試甲', { confidence: 'medium', flags: ['form_conflict'] }), // 入職表完全唔相似（疑錯人卡）→ 降級留人（S1 計數）
+      pr('P10', 'nameZh', '測試甲', { confidence: 'medium', flags: ['form_differs'] }), // 中文差 1 字而冇硬證據 → 留人（TE-11.3 計數）
     ],
   };
 }
@@ -89,7 +91,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const r = await run(args);
   const s = r.summary;
   console.log(`[auto-close-audit] 有題嘅人 ${s.persons_with_questions}｜題數 ${s.questions_total}（${JSON.stringify(s.questions)}）`);
-  console.log(`[auto-close-audit] 按證件為準規則可自動關閉 ${s.closable_total}（${JSON.stringify(s.closable)}）｜其中靠「卡為準修正」${s.closable_via_card_truth}｜靠卡修正但入職表完全唔相似而留人 ${s.blocked_by_form_conflict}`);
+  console.log(`[auto-close-audit] 按證件為準規則可自動關閉 ${s.closable_total}（${JSON.stringify(s.closable)}）｜其中靠「卡為準修正」${s.closable_via_card_truth}｜靠卡修正但入職表完全唔相似而留人 ${s.blocked_by_form_conflict}｜中文差 1 字而冇硬證據留人 ${s.blocked_by_unproven}`);
   if (outPath) {
     await mkdir(path.dirname(outPath), { recursive: true });
     await writeFile(outPath, JSON.stringify({ version: 1, summary: s, rows: r.rows }, null, 2));
