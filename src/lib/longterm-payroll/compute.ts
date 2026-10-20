@@ -32,7 +32,12 @@ export const MPF_FIRST_MONTH_RULE_FROM = "2026-09-01";
 // 老闆 2026-09-28（WP-BOSS5 決定 4）確認：病假每月 累積 2 日——第十三版
 // 口徑冇變，唔准手多改（有單元測試 assert 呢個常數＝2，見
 // tests/longterm-payroll-compute.test.ts）。
-export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH
+export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH（舊口徑每月 2 日；條例口徑下係「首 12 個月」每月日數）
+/** HIST-1.1：《僱傭條例》口徑——首 12 個月每月 2 日、之後每月 4 日、累積上限 120 日。 */
+const SL_ACCRUAL_PER_MONTH_AFTER_12 = 4;
+const SL_ACCRUAL_FIRST_MONTHS = 12;
+/** 條例口徑生效日：`asOf` 早過呢日（8／9 月 gate）照舊每月 2 日到頂 120；呢日起（10 月計糧）用條例口徑。 */
+export const SL_ACCRUAL_EFFECTIVE_FROM = new Date(Date.UTC(2026, 9, 1));
 const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
 const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限
 export const SL_MIN_CONSECUTIVE = 4; // BA.SL_MIN_CONSECUTIVE
@@ -241,9 +246,19 @@ export function slCompletedMonths(hireDate: Date, asOf: Date): number {
   return Math.max(0, months);
 }
 
-/** 截至 `asOf` 嘅累積病假結餘（做滿 1 個月先開始儲，之後每月 2 日，
- * 上限 120 日）。 */
+/** 《僱傭條例》口徑累積病假結餘：做滿 1 個月先儲；首 12 個月每月 2 日、之後每月 4 日；上限 120 日。 */
+export function slAccruedStatute(hireDate: Date, asOf: Date): number {
+  const months = slCompletedMonths(hireDate, asOf);
+  if (months < SL_ACCRUAL_START_MONTHS) return 0;
+  const first = Math.min(months, SL_ACCRUAL_FIRST_MONTHS);
+  return Math.min(SL_ACCRUAL_CAP, first * SL_ACCRUAL_PER_MONTH + Math.max(0, months - SL_ACCRUAL_FIRST_MONTHS) * SL_ACCRUAL_PER_MONTH_AFTER_12);
+}
+
+/** 截至 `asOf` 嘅累積病假結餘（做滿 1 個月先開始儲，上限 120 日）。
+ * `asOf` ≥ `SL_ACCRUAL_EFFECTIVE_FROM`（2026-10-01）用條例口徑（首 12 個月每月 2 日、之後每月 4 日）；
+ * 早過生效日照舊每月 2 日（8／9 月已出糧 gate 不變）。 */
 export function slAccrued(hireDate: Date, asOf: Date): number {
+  if (asOf.getTime() >= SL_ACCRUAL_EFFECTIVE_FROM.getTime()) return slAccruedStatute(hireDate, asOf);
   const months = slCompletedMonths(hireDate, asOf);
   if (months < SL_ACCRUAL_START_MONTHS) return 0;
   return Math.min(SL_ACCRUAL_CAP, months * SL_ACCRUAL_PER_MONTH);

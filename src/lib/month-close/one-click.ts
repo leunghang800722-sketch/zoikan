@@ -69,7 +69,8 @@ import { runAutoSettlement } from "./auto/settlement";
 import { autoResolveNeedsBoss, type NeedsBossIdentity } from "./auto/guard-match";
 import { buildAutoReport } from "./auto/report";
 
-export const ONE_CLICK_ADVISORY_LOCK_KEY = 7_710_270_927; // 自己一個 key，唔同 guard-fix(...925)／reconcile-all(...926)
+import { ONE_CLICK_ADVISORY_LOCK_KEY } from "./one-click-lock";
+export { ONE_CLICK_ADVISORY_LOCK_KEY };
 export const ONE_CLICK_STALE_MS = 15 * 60 * 1000;
 /** 保安員修復最多循環幾輪（dev 8 月實測第 3 輪仲有 3 個動作、第 4 輪先 0）。 */
 const GUARD_FIX_MAX_ROUNDS = 5;

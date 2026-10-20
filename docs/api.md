@@ -2926,3 +2926,10 @@ WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W
 
 
 **EMP-P2.3**：`GET /api/reports/payroll?view=person` 回應 additive `external_shifts`（客戶自己人＝結算單位 kind=external 嘅更數，已剔出逐人糧單同 by_card 聚合，唔計人數、唔出行）。LINK 盤（`guards_paid_by_client`）更次舊 snapshot 唔計入 `wage`／`fee`／`total`（`link_shifts` 照計更數）。
+
+## HIST-1：歷史月份（month_closes.historical）
+
+- `POST /api/month-closes` body additive `historical?: boolean`；`true`＝標記歷史月份（只上載更表＋對數＋落更；唔跑月結／糧／介紹費／鎖月，排程跳過）。該月已有未鎖、冇一鍵結算 run、冇長工糧 run 嘅行 → 就地標記回 200；已鎖或做過月結／糧 → 409。回應與 `GET /api/month-closes` 的 DTO 多 `historical`（additive）。
+- 歷史月份下列端點回 409 `historical_month`：`POST /api/month-close/one-click`、`POST /api/month-closes/:id/lock`、`POST /api/month-closes/:id/generate`、`GET /api/reports/month-health`、`GET /api/diagnostics/month`、長工糧計算。`GET /api/roster-uploads/pending-summary` 冇帶 month 嘅總覽唔計歷史月份。
+- 運維腳本 `scripts/db/leave-opening-from-rosters.ts`（見 ops.md「HIST-1」）。
+- HIST-1.1：`POST /api/month-closes { historical:true }` 只限早過 2026-07-01（`HIST_MAX_MONTH`），建新／就地標記皆需未鎖、冇一鍵結算 run、冇未作廢長工糧 run（409），並喺一鍵結算 advisory lock 內進行；`PATCH /api/month-closes/:id { historical:false }` 取消標記（老闆，audit）。`compute.ts` `slAccrued` 自 2026-10-01 起用條例口徑（首 12 個月每月 2 日、之後每月 4 日、上限 120）。

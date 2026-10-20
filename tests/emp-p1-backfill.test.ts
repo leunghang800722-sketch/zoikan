@@ -109,8 +109,12 @@ describe("EMP-P1 回填 shift_records 工號歸屬", () => {
       apply: true,
       months: ["2026-08"],
       chunkSize: 1,
-      afterBatch: async (i) => {
-        if (i === 0 && !locked) {
+      afterBatch: async () => {
+        // 根因（flaky）：腳本按 id（隨機 uuid）升序逐批掃**所有月份**嘅未歸屬更次，--month 篩選係掃咗之後先做——
+        // 第一批可能係 6／7 月嘅更次（被月份篩走、0 寫入），舊寫法固定喺 batch 0 後鎖月 → 8 月第一條都未寫就鎖咗（約 1/6 機率寫 0）。
+        // 改為「8 月已寫到第一條之後」先鎖月，唔受 uuid 次序影響。
+        const augWritten = await prisma.shiftRecord.count({ where: { staffNumberId: { not: null }, workDate: { gte: d("2026-08-01"), lte: d("2026-08-31") } } });
+        if (augWritten >= 1 && !locked) {
           locked = true;
           await prisma.monthClose.upsert({ where: { month: d("2026-08-01") }, update: { lockedAt: new Date() }, create: { month: d("2026-08-01"), lockedAt: new Date(), lockedBy: fx.userIds["老闆"] } });
         }

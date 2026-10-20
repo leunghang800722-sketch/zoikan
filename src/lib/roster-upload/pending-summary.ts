@@ -6,6 +6,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { hkMonthStart } from "@/lib/dates";
+import { historicalMonthKeys } from "@/lib/month-close/historical";
 import { mapLimit } from "@/lib/async/map-limit";
 import { loadReconcileInputs, reconcileRosterUpload } from "@/lib/roster-upload/reconcile";
 
@@ -43,10 +44,13 @@ export interface PendingSummaryResult {
 }
 
 export async function buildPendingSummary(month: Date | null, opts: { months?: number } = {}): Promise<PendingSummaryResult> {
-  const uploads = await prisma.rosterUpload.findMany({
+  const uploadsAll = await prisma.rosterUpload.findMany({
     where: pendingUploadWhere(month, opts.months),
     select: { id: true, siteId: true, siteNameRaw: true, month: true },
   });
+  // HIST-1：冇指定月份嘅總覽唔計歷史月份（只用嚟計假期結餘，唔入待對數提示）；明確指定嗰個月照出
+  const historical = month ? new Set<number>() : await historicalMonthKeys();
+  const uploads = uploadsAll.filter((u) => !historical.has(u.month.getTime()));
 
   // 效能優化（老闆 2026-09-28 指令）：決定記錄一次過攞齊（原本逐上載一條）。
   const allDecisions = uploads.length

@@ -11,6 +11,7 @@ import { parseBody } from "@/lib/api/validate";
 import { MonthCloseCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
+import { markHistoricalMonth } from "@/lib/month-close/historical";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -57,7 +58,13 @@ export async function POST(req: Request) {
     const parsedDate = new Date(input.month);
     if (Number.isNaN(parsedDate.getTime())) throw BadRequest("month 格式唔啱（YYYY-MM-DD 或 YYYY-MM）");
     const month = monthStart(parsedDate);
-    const created = await prisma.monthClose.create({ data: { month, rosterVersionNote: input.roster_version_note ?? null, createdBy: session.userId } });
+    // HIST-1／HIST-1.1：historical=true 標記歷史月份（只上載更表＋對數＋落更；唔跑月結／糧／介紹費／鎖月，排程 job 跳過）。
+    // 只限早過 HIST_MAX_MONTH（2026-07-01）；建新行同就地標記都喺 tx 內攞一鍵結算 advisory lock，檢查未鎖、冇一鍵結算 run、冇未作廢長工糧 run。
+    if (input.historical) {
+      const { row, created: isNew } = await markHistoricalMonth(month, session.userId, { rosterVersionNote: input.roster_version_note ?? null, ip: getClientIp(req) });
+      return ok(await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(row)), isNew ? 201 : 200);
+    }
+    const created = await prisma.monthClose.create({ data: { month, rosterVersionNote: input.roster_version_note ?? null, historical: input.historical ?? false, createdBy: session.userId } });
     await writeAudit({ actorUserId: session.userId, tableName: "month_closes", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
     return ok(await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(created)), 201);
   });

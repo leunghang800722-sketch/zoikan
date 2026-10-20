@@ -58,6 +58,7 @@
 //   4. 「平均工資」表未搬入系統（7 月試算用嘅係計糧表 col M 快照）——
 //      AL 離職結算／SL 4/5 一律 fallback 用「日薪＝月薪÷當月曆日數」
 //      （同 `compute.ts` JSDoc 一致嘅 fallback 口徑），會喺 notes 標明。
+import { assertNotHistoricalMonth } from "@/lib/month-close/historical";
 import { ATTENDANCE_CONFLICT_PREFIX } from "./attendance-conflict";
 import { pickBySourcePriority } from "./attendance-priority";
 import type { PrismaClient, Prisma } from "@prisma/client";
@@ -817,6 +818,7 @@ export interface RecomputeLongtermPayrollResult {
  */
 export async function recomputeLongtermPayroll(month: Date, actorUserId: string, ip: string | null = null): Promise<RecomputeLongtermPayrollResult> {
   const monthStartDate = toMonthStart(month);
+  await assertNotHistoricalMonth(monthStartDate, "長工糧計算"); // HIST-1
   // Opus 5.5 驗收修正：假期結餘係「累積到最近結算月」嘅單一記錄——如果之後
   // 嘅月份已經計過（例如 9 月已經重算，再返轉頭重算 8 月），8 月讀到嘅
   // opening 已經包咗 8 月（甚至 9 月）嘅已放日數，會愈計愈多、寫壞結餘

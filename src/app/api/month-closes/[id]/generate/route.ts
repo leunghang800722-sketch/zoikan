@@ -25,6 +25,7 @@ import { toMonthCloseDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate } from "@/lib/api/field-groups";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
+import { assertNotHistoricalMonth } from "@/lib/month-close/historical";
 import { buildMonthlyClose } from "@/lib/reports/monthly-close";
 import { buildReconciliation } from "@/lib/reports/reconciliation";
 import { hasPermission } from "@/lib/rbac/requirePermission";
@@ -34,6 +35,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const session = await requirePermission(req, "月結總表", "view");
     const { id } = await params;
     const monthClose = await resolveMonthCloseIdOrMonth(id, session.userId);
+    await assertNotHistoricalMonth(monthClose.month, "月結對數"); // HIST-1
 
     const [{ mainRows, outsideRows }, reconciliation] = await Promise.all([buildMonthlyClose(monthClose.month), buildReconciliation(monthClose.month)]);
 

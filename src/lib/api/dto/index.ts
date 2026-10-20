@@ -118,7 +118,7 @@ const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", 
 const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "staffNumberId", "staffScheme", "staffNumberSource", "createdAt", "updatedAt", "createdBy"] as const;
 const DAILY_REQUIREMENT_FIELDS = ["id", "siteId", "shiftTypeId", "workDate", "headcountRequired", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const SPECIAL_ITEM_FIELDS = ["id", "month", "siteId", "brokerId", "kind", "shifts", "revenue", "cost", "description", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
-const MONTH_CLOSE_FIELDS = ["id", "month", "lockedAt", "lockedBy", "rosterVersionNote", "createdAt", "updatedAt", "createdBy"] as const;
+const MONTH_CLOSE_FIELDS = ["id", "month", "lockedAt", "lockedBy", "rosterVersionNote", "historical", "createdAt", "updatedAt", "createdBy"] as const;
 const ROLE_FIELDS = ["id", "name", "payoutApprovalLimit", "isCustom", "baseRole", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 // P5：failed_attempts/locked_until/allowed_ip 淨係 用戶管理:view 先見到
 // （route 本身已經要求呢個權限先入得嚟，但抽做獨立 field group 令呢個

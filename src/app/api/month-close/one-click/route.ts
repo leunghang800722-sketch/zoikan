@@ -11,10 +11,11 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
-import { BadRequest, Conflict } from "@/lib/api/errors";
+import { ApiError, BadRequest, Conflict } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { writeAudit } from "@/lib/audit";
 import { findOneClickRuns, findOneClickRunSummaries, oneClickRunToDTO, oneClickRunSummaryToDTO } from "@/lib/month-close/one-click-read";
+import { assertNotHistoricalMonth } from "@/lib/month-close/historical";
 import { runOneClickMonthClose, ONE_CLICK_ADVISORY_LOCK_KEY, ONE_CLICK_STALE_MS } from "@/lib/month-close/one-click";
 
 export async function POST(req: Request) {
@@ -23,11 +24,14 @@ export async function POST(req: Request) {
     const body = (await readJson(req)) as { month?: unknown };
     const month = typeof body.month === "string" ? parseMonthParam(body.month) : null;
     if (!month) throw BadRequest("請傳 month（YYYY-MM 或 YYYY-MM-01）");
+    await assertNotHistoricalMonth(month, "一鍵結算"); // HIST-1
 
     const now = new Date();
     const staleBefore = new Date(now.getTime() - ONE_CLICK_STALE_MS);
     const runId = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${ONE_CLICK_ADVISORY_LOCK_KEY})`);
+      // HIST-1.1：拎咗鎖之後再確認唔係歷史月份（標記歷史月份用同一把鎖，防「檢查後先被標記」嘅並發）
+      if ((await tx.monthClose.findUnique({ where: { month }, select: { historical: true } }))?.historical) throw new ApiError(409, "historical_month", `${month.toISOString().slice(0, 7)} 係歷史月份（只用嚟上載更表計假期結餘），唔做一鍵結算`);
       const other = await tx.monthCloseRun.findFirst({ where: { status: "running", applyStartedAt: { gt: staleBefore } }, select: { id: true } });
       if (other) throw Conflict("另一個一鍵結算執行緊，等佢完成先再撳", { status: "busy" });
       const created = await tx.monthCloseRun.create({ data: { month, status: "running", startedById: session.userId, applyStartedAt: now } });

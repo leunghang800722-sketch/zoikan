@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { hkMonthStart } from "@/lib/dates";
 import { isMonthLocked } from "@/lib/month-lock";
+import { isHistoricalMonth } from "@/lib/month-close/historical";
 import { buildMonthHealth } from "@/lib/ops/month-health";
 import { createNotification } from "@/lib/notify/create";
 import { getJobReaderSession } from "./session";
@@ -31,6 +32,7 @@ export async function runNightlyMonthHealth(now: Date): Promise<JobResult> {
 
   for (const month of [cur, prev]) {
     if (await isMonthLocked(month)) continue;
+    if (await isHistoricalMonth(month)) continue; // HIST-1
     const label = month.toISOString().slice(0, 7);
     const health = await buildMonthHealth(month, session);
     const red = health.findings.filter((f) => f.severity === "critical").map((f) => `${f.code}:${f.count}`).sort();
