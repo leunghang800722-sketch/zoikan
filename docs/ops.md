@@ -573,3 +573,16 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 3. 撳「全部套用」→ `POST /api/sites/staff-scheme-prefill { apply:true, overrides?:[{site_id, scheme}] }`（要「盤:update」）：只寫未設定嘅盤（`UPDATE … WHERE staff_scheme IS NULL`，重覆撳冪等）；audit 一條 summary（`site_staff_scheme_prefill`，只有計數）。
 4. 寫完即刻對該批盤嘅更次補推導工號歸屬（`backfillSiteStaffNumbers`，重用 EMP-P1「盤 scheme＋期間」規則 range／sole）：**只填 `staff_number_id IS NULL` 而且冇側表歸屬嘅 shift／ot**；未鎖月直接寫三個歸屬欄（唔掂金額、唔觸發 updated_at），已鎖月寫 `shift_record_staff_attributions` 側表；冇法分（多張冇日期卡／唯一卡唔包日期）唔推。回應 `backfilled`（實際寫入數）＋ `backfill.{written_direct, written_side_table, unresolved}`。老闆一撳，歸屬即刻有。
 - 注意：回應 `by_scheme` 係 `[{scheme,count}]` 陣列（物件 key U／MP 會被 snake_case 轉壞）。單個盤逐個改體系仍可喺盤編輯抽屜做（唔會自動補推導，要補請用呢頁或 `npm run db:backfill-shift-staff-numbers`）。
+
+### SITE-SCHEME-1.1（盤體系預設建議補充）
+
+- **只對有更次嘅盤出建議**：`GET /api/sites/staff-scheme-prefill` 回 `proposals`（有 shift／ot 更次，而且至少一更係非 external 結算單位）、`not_applicable`（有更次但結算單位全部係 external＝客戶自己人，唔出建議、唔可套用，UI 列喺「唔適用」區）、`no_shifts`（完全冇更次嘅未設盤，只報數量）。
+- **UI 預設唔剔**：每行逐個剔，或「全選建議 U」／「全選建議 MP」，再「套用已剔」＝`POST {apply:true, site_ids:[…], overrides?}`（只寫已剔、屬 proposals、仍未設定嘅盤；冇傳 `site_ids`＝全部 proposals，舊 client 相容）。
+- **補推導改背景（揀咗 `after()`＋`job_runs`，最簡單可靠）**：寫 `staff_scheme` 仍同步（一個 tx）；歸屬補推導用 Next `after()` 喺 response 之後行，進度記喺現有 `job_runs`（jobKey `site_scheme_backfill`）；POST 回 **202**＋`job_id`，頁面每 2 秒輪詢 `GET …/staff-scheme-prefill?job=<id>`（`running`｜`ok`｜`error`＋summary 計數 `backfilled`／`unresolved`／`written_direct`／`written_side_table`）。卡死（running 超過 1 小時）由 scheduler runner 標 `error stale_running`。冇 Next request context（測試）→ 同步行完，202 回應已帶最終 `status`／`summary`。結果 notice：「已設定 N 個盤；補歸屬 M 更；仲有 K 更推唔到（人冇對應體系嘅工號卡）」，連去 `/month-close` 月結健康「未標工號」卡跟進。
+- **改體系後重推導**：盤編輯抽屜改 `staff_scheme`（設成非空值而且真係變咗）→ `PATCH /api/sites/:id` 啟動同一個背景 job（mode reinfer），回應 additive `reinfer { job_id, note }`：對該盤 `staff_number_source IN ('site_scheme','backfill:range','backfill:sole')` 且**未鎖月**嘅更次清走三個歸屬欄再按新體系重推（手動／payload／roster_file／longterm 歸屬唔郁）；**已鎖月**（shift_records 同側表）唔郁，job summary `locked_kept` 報有幾多更要人手處理；audit `site_staff_scheme_reinfer`（只有計數）。
+
+### AI-PII-2.3
+
+- gross-margin `sites[].shiftTypes` 排序改用穩定業務欄（code → label → otHours → kind → revenue → cost → shifts），**唔用 UUID**（先前 tie-breaker 用 shiftTypeId，每次 DB 唔同令 snapshot 次序漂移）。
+- 對數頁「相似保安員」名冊（`loadGuardDirectory`）加 `include_inactive=1`，離職者（status inactive）標「已離職」（`guardStatusLabel`）。
+- HIST merge：as-of 年份冇結餘行而較後年份有行（`!b` 且 later-year）→ 同樣 `merge_rejected_different_year`（唔建 as-of 年份嘅行）。

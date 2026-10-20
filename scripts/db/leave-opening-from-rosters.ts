@@ -194,11 +194,13 @@ export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean
     let action: LeaveOpeningAction;
     // 合併模式（--merge-into-existing）：已有較新行（asOfMonth > as-of）→ 將 as-of 前歷史累積加落現有行（見檔頭）
     let target: LeaveOpeningNumbers = n;
-    if (!b) action = allZero ? "nothing_to_write" : "create";
-    else if (opts.mergeIntoExisting && laterYearRow.has(id) && b.asOfMonth && b.asOfMonth.getTime() > asOfStart.getTime()) {
+    if (opts.mergeIntoExisting && laterYearRow.has(id) && (!b || (b.asOfMonth && b.asOfMonth.getTime() > asOfStart.getTime()))) {
       // aggregate 讀「最新年份」嘅結餘行；該 guard 已有較後年份嘅行 → 呢條同 as-of 同年嘅行唔係實際生效行，合併會落錯行，拒絕（人手處理）
+      // as-of 年份冇行但較後年份有行（!b）：同樣拒絕（建一條 as-of 年份嘅行 aggregate 唔會用）
       action = "skip_existing_newer_or_equal";
       flags.push("merge_rejected_different_year");
+    } else if (!b) {
+      action = allZero ? "nothing_to_write" : "create";
     } else if (b.asOfMonth && b.asOfMonth.getTime() > asOfStart.getTime() && opts.mergeIntoExisting) {
       const prevMerge = mergedBefore.get(id);
       if (prevMerge && prevMerge.asOf >= asOfLabel) action = "already_merged";

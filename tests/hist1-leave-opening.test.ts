@@ -193,4 +193,15 @@ describe("HIST-1 leave-opening 腳本（DB）", () => {
     expect(Number((await prisma.guardLeaveBalance.findUniqueOrThrow({ where: { guardId_year: { guardId: g.id, year: 2026 } } })).alTaken)).toBe(1);
     expect(await prisma.auditLog.count({ where: { action: "backfill_leave_opening_merge", rowId: g.id } })).toBe(0);
   });
+
+  it("AI-PII-2.3 S3：as-of 年份（2026）冇行但較後年份（2027）有行 → 合併模式同樣拒絕（唔建 2026 行）", async () => {
+    const g = await mkLt("測試甲", D(2025, 1, 1), "MG99925");
+    await leave(g.id, D(2026, 5, 10), "AL");
+    await prisma.guardLeaveBalance.create({ data: { guardId: g.id, year: 2027, alTaken: 4, asOfMonth: D(2027, 2, 1) } });
+    const r = await leaveOpeningFromRosters({ asOf: JUN, apply: true, mergeIntoExisting: true });
+    expect(r.rows[0]).toMatchObject({ action: "skip_existing_newer_or_equal", flags: ["merge_rejected_different_year"] });
+    expect(await prisma.guardLeaveBalance.count({ where: { guardId: g.id, year: 2026 } })).toBe(0);
+    // 冇 merge 旗：照舊建 2026 行（行為不變）
+    expect((await leaveOpeningFromRosters({ asOf: JUN, apply: false })).rows[0]!.action).toBe("create");
+  });
 });

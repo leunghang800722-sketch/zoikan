@@ -133,7 +133,7 @@ export function findSimilar(p: Person, guards: GuardLite[], max = 3): SimilarGua
   return out.slice(0, max);
 }
 
-export const guardStatusLabel = (s: string | null | undefined): string => (s === "active" ? "在職" : s ? "非在職" : "狀態未知");
+export const guardStatusLabel = (s: string | null | undefined): string => (s === "active" ? "在職" : s === "inactive" ? "已離職" : s ? "非在職" : "狀態未知");
 
 // ---------------------------------------------------------------------------
 // 未配對原因分類＋人話

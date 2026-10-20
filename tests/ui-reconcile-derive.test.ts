@@ -13,6 +13,7 @@ import {
   surnameCharMatch,
   tel4,
   type GuardLite,
+  guardStatusLabel,
   type NeedsBossItem,
 } from "@/components/reconcile/derive";
 
@@ -129,5 +130,14 @@ describe("冇權限睇姓名／工號", () => {
     const [part] = classifyReason("保安員未配對");
     expect(humanizeReasonPart(part!, null, true)).toContain("冇權限睇姓名／工號");
     expect(humanizeReasonPart(part!, null, true)).not.toContain("冇寫");
+  });
+});
+
+describe("AI-PII-2.3 S2：名冊含離職者，狀態標籤", () => {
+  it("guardStatusLabel：active 在職、inactive 已離職、其他非在職、冇＝狀態未知", () => {
+    expect(guardStatusLabel("active")).toBe("在職");
+    expect(guardStatusLabel("inactive")).toBe("已離職");
+    expect(guardStatusLabel("weird")).toBe("非在職");
+    expect(guardStatusLabel(null)).toBe("狀態未知");
   });
 });
