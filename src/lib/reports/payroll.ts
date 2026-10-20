@@ -12,6 +12,8 @@ import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { n, round2 } from "./money";
 import { memoized } from "./context";
+import { buildPayrollByCard, schemeSubtotalsByBroker, NO_CARD_LABEL, type SchemeSubtotal } from "./payroll-by-card";
+import { buildPayslips } from "./payslips";
 
 export const DEFAULT_REPORT_MONTH = new Date(Date.UTC(2026, 6, 1));
 function monthRange(month: Date): { start: Date; end: Date } {
@@ -28,7 +30,18 @@ function monthRange(month: Date): { start: Date; end: Date } {
 // ——之前呢類記錄逐 broker 查嘅時候完全跌漏，糧明細見唔到）。前端／
 // 匯出見到 `brokerId === null` 就顯示做「未歸屬結算單位」呢一行，等
 // 用戶知呢筆金額／更數仲未有人認領，唔係「唔存在」。
-export type BrokerPayrollTotal = { brokerId: string | null; brokerName: string; brokerCode: string; brokerKind: string; shifts: number; wage: number; fee: number; amount: number };
+export type BrokerPayrollTotal = {
+  brokerId: string | null;
+  brokerName: string;
+  brokerCode: string;
+  brokerKind: string;
+  shifts: number;
+  wage: number;
+  fee: number;
+  amount: number;
+  /** EMP-P2（additive）：按工號體系（U／MP／MG…；scheme=null＝未標工號）嘅小計——總數唔變，只係拆開睇。 */
+  by_scheme: SchemeSubtotal[];
+};
 const UNATTRIBUTED_BROKER_LABEL = "未歸屬結算單位";
 
 // 驗收修正（Opus 5.5，WP-ROSTER-UPLOAD B1）：糧單一律排除 `status=
@@ -46,7 +59,7 @@ async function buildPayrollTotalsUncached(month: Date): Promise<BrokerPayrollTot
   // 一樣由 DB Decimal 精確做）；`settlement_broker_id IS NULL` 嗰組亦係同一
   // 條 query 攞返（下面「未歸屬結算單位」行）。冇記錄嘅雞頭喺 groupBy 唔會
   // 出現 ≡ 原本 count=0／wage=0／fee=0 跳過，結果逐行不變。
-  const [brokers, aggRows] = await Promise.all([
+  const [brokers, aggRows, cardRows] = await Promise.all([
     prisma.broker.findMany({ orderBy: { code: "asc" } }),
     prisma.shiftRecord.groupBy({
       by: ["settlementBrokerId"],
@@ -54,7 +67,9 @@ async function buildPayrollTotalsUncached(month: Date): Promise<BrokerPayrollTot
       _count: { _all: true },
       _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
     }),
+    buildPayrollByCard(month), // EMP-P2：by_scheme 小計用（總數仍然用上面 groupBy，數字唔變）
   ]);
+  const schemeByBroker = schemeSubtotalsByBroker(cardRows);
   const aggByBroker = new Map(aggRows.map((r) => [r.settlementBrokerId, r]));
   const out: BrokerPayrollTotal[] = [];
   for (const b of brokers) {
@@ -72,6 +87,7 @@ async function buildPayrollTotalsUncached(month: Date): Promise<BrokerPayrollTot
       wage,
       fee,
       amount: round2(wage + fee),
+      by_scheme: schemeByBroker.get(b.id) ?? [],
     });
   }
 
@@ -95,6 +111,7 @@ async function buildPayrollTotalsUncached(month: Date): Promise<BrokerPayrollTot
       wage,
       fee,
       amount: round2(wage + fee),
+      by_scheme: schemeByBroker.get("") ?? [],
     });
   }
 
@@ -166,13 +183,14 @@ async function buildPayrollWorkbook(month: Date): Promise<{ wb: ExcelJS.Workbook
   // 逐雞頭 query 冇 orderBy，行次序係 DB 自然次序，改一條大 query 之後次序
   // 會唔同（數字唔變）——加明確 orderBy（workDate→guardId→id）令 Excel 明細
   // 行次序有決定性，唔再靠 DB heap 次序。
-  const [brokers, allRecords] = await Promise.all([
+  const [brokers, allRecords, cardRows] = await Promise.all([
     prisma.broker.findMany(),
     prisma.shiftRecord.findMany({
       where: { settlementBrokerId: { not: null }, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
       include: { guard: true },
       orderBy: [{ workDate: "asc" }, { guardId: "asc" }, { id: "asc" }],
     }),
+    buildPayrollByCard(month),
   ]);
   const recordsByBroker = new Map<string, typeof allRecords>();
   for (const r of allRecords) {
@@ -186,15 +204,7 @@ async function buildPayrollWorkbook(month: Date): Promise<{ wb: ExcelJS.Workbook
   for (const b of brokers) {
     const records = recordsByBroker.get(b.id) ?? [];
     if (records.length === 0) continue;
-    const byGuard = new Map<string, { name: string; staffNo: string; shifts: number; amount: number }>();
     for (const r of records) {
-      const key = r.guardId;
-      if (!byGuard.has(key)) {
-        byGuard.set(key, { name: r.guard.nameZh, staffNo: r.guard.staffNo ?? "", shifts: 0, amount: 0 });
-      }
-      const g = byGuard.get(key)!;
-      g.shifts++;
-      g.amount = round2(g.amount + n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot));
       sourceDetailRows.push({
         date: r.workDate.toISOString().slice(0, 10),
         brokerCode: b.code,
@@ -205,8 +215,15 @@ async function buildPayrollWorkbook(month: Date): Promise<{ wb: ExcelJS.Workbook
     }
     const safeName = b.name.replace(/[\\/:*?"<>|[\]]/g, "_").slice(0, 28);
     const sheet = wb.addWorksheet(`${b.code || "?"}-${safeName}`);
-    sheet.addRow(["Staff No.", "姓名", "更數", "金額"]);
-    for (const g of byGuard.values()) sheet.addRow([g.staffNo, g.name, g.shifts, g.amount]);
+    // EMP-P2：每人每卡一行（聚合 key 含工號卡 id）；工號欄印該卡自己嘅號（MP 更印 MP 號），
+    // 「未標工號」行（冇歸屬）工號欄印 guards.staff_no，體系欄標「未標工號」。
+    sheet.addRow(["Staff No.", "姓名", "體系", "更數", "金額"]);
+    const guardOf = new Map(records.map((r) => [r.guardId, r.guard]));
+    const mine = cardRows.filter((c) => c.settlementBrokerId === b.id).sort((x, y) => (guardOf.get(x.guardId)?.nameZh ?? "").localeCompare(guardOf.get(y.guardId)?.nameZh ?? "", "zh-Hant") || x.guardId.localeCompare(y.guardId) || (x.scheme ?? "\uffff").localeCompare(y.scheme ?? "\uffff") || (x.number ?? "").localeCompare(y.number ?? ""));
+    for (const c of mine) {
+      const g = guardOf.get(c.guardId);
+      sheet.addRow([c.staffNumberId ? (c.number ?? "") : (g?.staffNo ?? ""), g?.nameZh ?? "", c.staffNumberId ? (c.scheme ?? "") : NO_CARD_LABEL, c.shifts, c.amount]);
+    }
   }
 
   // B1-7：頂部摘要——roster_upload 更數 vs 其他來源更數（additive 新
@@ -223,6 +240,19 @@ async function buildPayrollWorkbook(month: Date): Promise<{ wb: ExcelJS.Workbook
   const detailSheet = wb.addWorksheet("逐更來源明細");
   detailSheet.addRow(["日期", "結算單位代號", "Staff No.", "姓名", "來源"]);
   for (const row of sourceDetailRows) detailSheet.addRow([row.date, row.brokerCode, row.guardStaffNo, row.guardName, row.source]);
+
+  // EMP-P2：逐人糧單（additive 新 sheet，放最後，唔改上面任何 sheet 次序）。每人一組：標題行＋每張工號卡一行＋小計行＋空行。
+  const payslips = await buildPayslips(month);
+  const slipSheet = wb.addWorksheet("逐人糧單");
+  slipSheet.addRow(["Staff No.", "姓名／體系", "出糧方", "結算單位", "更數", "工資", "雞頭費", "金額", "備註"]);
+  for (const p of payslips) {
+    slipSheet.addRow([p.staffNo ?? "", p.guardName]).font = { bold: true };
+    for (const l of p.lines) {
+      slipSheet.addRow([l.staffNumberId ? (l.number ?? "") : (p.staffNo ?? ""), l.schemeLabel, l.payerLabel ?? "", l.settlementBrokerCode, l.shifts, l.wage, l.fee, l.amount, l.note ?? ""]);
+    }
+    slipSheet.addRow(["", "小計", "", "", p.lines.reduce((a, l) => a + l.shifts, 0), "", "", p.total, ""]);
+    slipSheet.addRow([]);
+  }
 
   return { wb, totals };
 }
