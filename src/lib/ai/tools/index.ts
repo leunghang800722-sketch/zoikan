@@ -9,6 +9,7 @@ import { createRosterTool } from "./roster";
 import { createBrokerStatsTool } from "./broker-stats";
 import { createRateCardsTool, createExplainRateCardTool } from "./rate-cards";
 import { createGuardLookupTool } from "./guard-lookup";
+import { createLongtermLeaversTool } from "./longterm-leavers";
 import { createShiftHistoryTool } from "./shift-history";
 import { createGrossMarginTool } from "./gross-margin";
 import { createMonthlyCloseTool } from "./monthly-close";
@@ -45,6 +46,7 @@ export function buildAiTools(ctx: AiToolContext) {
     createRateCardsTool(ctx),
     createExplainRateCardTool(ctx),
     createGuardLookupTool(ctx),
+    createLongtermLeaversTool(ctx),
     createShiftHistoryTool(ctx),
     createGrossMarginTool(ctx),
     createMonthlyCloseTool(ctx),

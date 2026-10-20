@@ -227,8 +227,39 @@ const FAKE_DIAG_REPLY = [
   "```",
 ].join("\n");
 
+// AI-PII-2：問「邊個 9 月離職」→ fake client 真係 call `longterm_leavers` 工具（用真 session／真 DB），
+// 將工具回傳嘅姓名砌成固定廣東話句子——e2e 用嚟驗證「助手答到離職者姓名」整條路（工具＋view＋權限）。
+// 唔冒充數據：工具回幾多就答幾多；工具搵唔到／被拒就跌返通用假回覆。
+async function fakeLeaversReply(params: LlmChatParams): Promise<{ text: string; used: string[] } | null> {
+  const m = /(\d{1,2})\s*月[^。？?]*離職|離職[^。？?]*?(\d{1,2})\s*月/.exec(params.userMessage);
+  if (!m) return null;
+  const mm = Number(m[1] ?? m[2]);
+  if (!(mm >= 1 && mm <= 12)) return null;
+  const year = /(20\d{2})/.exec(params.userMessage)?.[1] ?? String(new Date().getUTCFullYear());
+  const tool = params.tools.find((t) => "name" in t && (t as { name?: string }).name === "longterm_leavers");
+  if (!tool) return null;
+  const raw = await (tool as { run: (a: unknown) => Promise<string | unknown> }).run({ month: `${year}-${String(mm).padStart(2, "0")}` });
+  let parsed: { left_in_month?: { guards?: Array<{ name_zh?: string; leave_date?: string }> }; error?: string };
+  try {
+    parsed = JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw));
+  } catch {
+    return null;
+  }
+  if (parsed.error) return null;
+  const list = parsed.left_in_month?.guards ?? [];
+  const text = list.length
+    ? `（開發測試用嘅假回覆）${year} 年 ${mm} 月離職：${list.map((g) => `${g.name_zh}（${g.leave_date}）`).join("、")}。`
+    : `（開發測試用嘅假回覆）${year} 年 ${mm} 月冇人離職。`;
+  return { text, used: ["longterm_leavers"] };
+}
+
 class FakeDevLlmClient implements LlmClient {
   async chat(params: LlmChatParams): Promise<LlmChatResult> {
+    const leavers = params.structured || params.systemPrompt.includes(FEEDBACK_SUMMARIZE_MARKER) ? null : await fakeLeaversReply(params);
+    if (leavers) {
+      for (const ch of leavers.text) params.onTextDelta?.(ch);
+      return { text: leavers.text, toolsUsed: leavers.used, inputTokens: 0, outputTokens: leavers.text.length, provider: "fake", model: "fake" };
+    }
     if (params.structured) {
       // W1：結構化輸出（WhatsApp 解析）——假 client 一律回「純雜訊」，唔會冒充任何業務數據
       const text = JSON.stringify({ noise: true, intents: [] });

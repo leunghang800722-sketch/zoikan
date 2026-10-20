@@ -34,11 +34,18 @@ describe("WP-LTPAY：AI 隔離（zoikan_ai_ro 真連線）", () => {
     await clearAll();
   });
 
-  it("六張新表：ai.* 唔存在、public.* permission denied", async () => {
+  // AI-PII-2：合約／runs／lines 而家有受控 view（欄位白名單，見 migration 20261030000000_ai_pii2_views）；
+  // 假期結餘／平均工資／人手輸入仍然冇 ai view。六張 public 表本身一律 permission denied。
+  const WITH_AI_VIEW = ["guard_longterm_contracts", "longterm_payroll_runs", "longterm_payroll_lines"];
+  it("六張新表：public.* 一律 permission denied；結餘／平均工資／人手輸入冇 ai.* view；合約／runs／lines 有受控 view", async () => {
     for (const t of TABLES) {
-      await expect(aiClient.query(`SELECT * FROM ai.${t} LIMIT 1`)).rejects.toThrow(/does not exist/i);
       await expect(aiClient.query(`SELECT * FROM public.${t} LIMIT 1`)).rejects.toThrow(/permission denied/i);
+      if (WITH_AI_VIEW.includes(t)) await expect(aiClient.query(`SELECT * FROM ai.${t} LIMIT 1`)).resolves.toBeDefined();
+      else await expect(aiClient.query(`SELECT * FROM ai.${t} LIMIT 1`)).rejects.toThrow(/does not exist/i);
     }
+    const cols = await aiClient.query(`SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'ai' AND table_name = ANY($1)`, [WITH_AI_VIEW]);
+    const names = new Set(cols.rows.map((r: { column_name: string }) => r.column_name));
+    for (const banned of ["notes_json", "contract_snapshot", "al_adw_json", "note", "created_by", "bank_account_no", "tel", "hkid"]) expect(names.has(banned), banned).toBe(false);
   });
 
   it("寫咗合約／人手輸入／重算之後，ai.audit_log 睇唔到呢六個 table_name 嘅行（主連線 public.audit_log 有）", async () => {

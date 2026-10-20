@@ -17,7 +17,10 @@ import type { AuthedSession } from "../rbac/requirePermission";
 import { hasPermission } from "../rbac/requirePermission";
 import { CLIENT_RATE_FIELDS, SETTLEMENT_FIELDS, GUARD_PII_FIELDS, GUARD_BANK_FIELDS, type FieldGroupResource } from "../api/field-groups";
 
+import { AI_GUARD_BLOCKED_FIELDS } from "./guard-blocked-fields";
+
 export type { FieldGroupResource };
+export { AI_GUARD_BLOCKED_FIELDS };
 
 /** 攞返「呢個 session 而家睇唔睇得到收客價／出街價／保安員個人資料／保安員
  * 銀行資料」——工具層攞一次，之後同一個 request 入面幾多個工具都可以
@@ -67,6 +70,11 @@ export function scrubRowForResource<T extends Record<string, unknown>>(
   // 16 個新欄（見 prisma/migrations/…wp_ai1_readonly_schema 頂註解），
   // 呢度純粹保持同 applyFieldGroupGate() 一致嘅四層 gate，日後有第二個
   // 工具查到帶呢啲欄嘅 resource 都唔會漏。
+  if (resource === "guards") {
+    // AI-PII-2：保安員資料跟老闆定版 AI 規則——專用遮罩清單永遠剝（唔受權限影響）；
+    // 規則內可講嘅欄（緊急聯絡人姓名／別名／黑名單查核日期／入離職日…）唔再跟人類 RBAC 嘅 GUARD_PII 組。
+    return omit(out, AI_GUARD_BLOCKED_FIELDS);
+  }
   if (!vis.guardPiiVisible) out = omit(out, GUARD_PII_FIELDS[resource]);
   if (!vis.guardBankVisible) out = omit(out, GUARD_BANK_FIELDS[resource]);
   return out;
@@ -120,7 +128,11 @@ function namesWithCamelVariant(names: Iterable<string>): Set<string> {
   return out;
 }
 
-const ALL_GUARD_PII_FIELD_NAMES = namesWithCamelVariant(Object.values(GUARD_PII_FIELDS).flat());
+// AI-PII-2：老闆定版規則下 AI 可講「緊急聯絡人姓名／別名／黑名單查核日期」，唔再喺通用 blocklist 剝走（其餘 PII 欄照舊）。
+const AI_ALLOWED_GUARD_PII_NAMES = new Set(["emergency_contact_name", "blacklist_check_date", "name_aliases"].flatMap((n) => [n, snakeToCamel(n)].map(normalizeKey)));
+const ALL_GUARD_PII_FIELD_NAMES = new Set([...namesWithCamelVariant(Object.values(GUARD_PII_FIELDS).flat())].filter((n) => !AI_ALLOWED_GUARD_PII_NAMES.has(n)));
+// AI 專用遮罩欄（永遠剝，唔理權限）
+const AI_ALWAYS_BLOCKED_NAMES = namesWithCamelVariant(AI_GUARD_BLOCKED_FIELDS);
 const ALL_GUARD_BANK_FIELD_NAMES = namesWithCamelVariant(Object.values(GUARD_BANK_FIELDS).flat());
 
 /** 遞歸剝走物件樹（唔理幾深、唔理 array/object）入面嘅指定欄位名。 */
@@ -143,7 +155,7 @@ function dropKeysDeep<T>(value: T, blocked: ReadonlySet<string>): T {
 }
 
 export function scrubUnknownShape<T>(value: T, vis: AiFieldVisibility): T {
-  let out = value;
+  let out = dropKeysDeep(value, AI_ALWAYS_BLOCKED_NAMES); // AI-PII-2：身份證／出生日期／住址／電話／銀行永遠剝
   if (!vis.clientRateVisible) out = dropKeysDeep(out, ALL_CLIENT_RATE_FIELD_NAMES);
   if (!vis.settlementVisible) out = dropKeysDeep(out, ALL_SETTLEMENT_FIELD_NAMES);
   if (!vis.guardPiiVisible) out = dropKeysDeep(out, ALL_GUARD_PII_FIELD_NAMES);

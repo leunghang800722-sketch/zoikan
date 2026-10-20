@@ -16,7 +16,13 @@
 //      唔淨係靠角色設定）。
 //   4. `src/lib/ai/tools/sql-select.ts` 嘅 tokenizer 再喺 application
 //      層擋 DML/DDL 關鍵字＋`public.`/`pg_catalog`/`information_schema`。
-import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { Pool, types as pgTypes, type ClientConfig, type QueryResult, type QueryResultRow } from "pg";
+
+// AI-PII-2：DATE（oid 1082）一律回 "YYYY-MM-DD" 字串。pg 預設將 DATE 變成本機時區午夜嘅 JS Date，JSON 化後會偏差一日
+// （例如離職日 2026-09-01 變 "2026-08-31T16:00:00.000Z"），AI 答「9/1 邊個離職」會答錯。
+const DATE_AS_STRING_TYPES = {
+  getTypeParser: (oid: number, format?: "text" | "binary") => (oid === 1082 ? (v: string) => v : pgTypes.getTypeParser(oid, format as "text")),
+} as unknown as ClientConfig["types"];
 
 let pool: Pool | undefined;
 
@@ -38,6 +44,7 @@ function getPool(): Pool {
     query_timeout: 5000,
     connectionTimeoutMillis: 5000,
     idleTimeoutMillis: 30000,
+    types: DATE_AS_STRING_TYPES,
   });
   return pool;
 }

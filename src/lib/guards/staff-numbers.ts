@@ -398,6 +398,11 @@ export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, 
   const data: Prisma.GuardUpdateInput = {};
   if (plan.hire !== undefined) data.hireDate = plan.hire;
   if (plan.leave !== undefined) data.leaveDate = plan.leave;
+  // AI-PII-2：人卡離職＝全部工號卡結束——所有工號卡（任何體系）都 former（冇任何 current）而離職日有值 → guards.status 轉 inactive（離職／停用）。
+  // 方向單向：有 current 卡就唔郁（唔准由離職自動轉返在職；復職要人手或開新卡後人手恢復）。
+  const effectiveLeave = plan.leave !== undefined ? plan.leave : before.leaveDate;
+  const statusToInactive = rows.length > 0 && rows.every((r) => r.status !== "current") && !!effectiveLeave && before.status !== "inactive";
+  if (statusToInactive) data.status = "inactive";
   if (Object.keys(data).length === 0) return { changed: false, warnings: plan.warnings };
   const after = await tx.guard.update({ where: { id: guardId }, data });
   await writeAuditTx(tx, { actorUserId: opts?.actorUserId ?? null, tableName: "guards", rowId: guardId, action: "update", before, after: { ...after, auto_source: "staff_number_mirror" }, ip: null });
@@ -405,6 +410,7 @@ export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, 
   const hints = [...plan.warnings];
   if (plan.hire !== undefined) hints.push("hire_date_mirrored：人卡入職日已按 MG 卡鏈頭日期更新（未鎖月份重算會跟新值，已鎖月不變）");
   if (plan.leave !== undefined) hints.push("leave_date_mirrored：人卡離職日已按 MG 卡日期更新（未鎖月份重算會跟新值，已鎖月不變）");
+  if (statusToInactive) hints.push("status_inactive_mirrored：全部工號卡已結束而人卡有離職日，人卡狀態已轉為「離職」（停用，列表預設隱藏）");
   return { changed: true, warnings: hints };
 }
 

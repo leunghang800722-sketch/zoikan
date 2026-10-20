@@ -214,7 +214,8 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
         summary.filled_name_en += 1;
       }
       if (Object.keys(fillData).length) {
-        await tx.guard.update({ where: { id: guard.id }, data: fillData });
+        const filled = await tx.guard.update({ where: { id: guard.id }, data: fillData });
+        await writeAuditTx(tx, { actorUserId, tableName: "guards", rowId: guard.id, action: "update", before: guard, after: { ...filled, auto_source: "maxwell_import" }, ip }); // AI-PII-2：導入補人卡欄位留 audit
         summary.guardFieldsFilled += 1;
       }
       // P14.1：補 MG／MW 工號——照現有 staff_numbers 機制（upsertCurrentStaffNumber＋syncLegacyStaffNoColumns）；
@@ -301,7 +302,8 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
         if (!guard.hireDate && commence) fill.hireDate = commence;
         if (!guard.leaveDate && lastDay && !leaverStale) fill.leaveDate = lastDay;
         if (Object.keys(fill).length && !(await hasDatedLongtermCard(tx, guard.id))) {
-          await tx.guard.update({ where: { id: guard.id }, data: fill });
+          const filled = await tx.guard.update({ where: { id: guard.id }, data: fill });
+          await writeAuditTx(tx, { actorUserId, tableName: "guards", rowId: guard.id, action: "update", before: guard, after: { ...filled, auto_source: "maxwell_import" }, ip }); // AI-PII-2：直接補入職／離職日留 audit
           summary.guardFieldsFilled += 1;
         }
       }
