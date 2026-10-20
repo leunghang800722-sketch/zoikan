@@ -59,6 +59,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
       });
     });
 
+    // LT-UI：totals_json 內 additive 嘅 warningsByGuard（只 code）拆出做 warnings_by_guard，totals 保持原形
+    const { warningsByGuard, ...totalsOnly } = (run.totalsJson ?? {}) as Record<string, unknown> & { warningsByGuard?: Array<{ guardId: string; codes: string[] }> };
     return ok(
       brandSafeResponse({
         month: monthLabel(month),
@@ -66,7 +68,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
         can_void: canVoid,
         run: toLongtermRunDTO(run),
         lines: linesDto,
-        totals: run.totalsJson,
+        totals: run.totalsJson === null ? null : totalsOnly,
+        warnings_by_guard: (warningsByGuard ?? []).map((w) => ({ guard_id: w.guardId, codes: w.codes })),
         prev_month: prevRun ? monthLabel(prevMonth(month)) : null,
       }),
     );
