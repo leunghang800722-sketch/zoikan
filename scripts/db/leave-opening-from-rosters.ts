@@ -18,6 +18,7 @@
 //   --recompute-same-as-of：已有行 asOfMonth 剛好＝as-of（上次腳本寫嘅）→ 覆蓋重算（例如之後補上載咗更多舊更表）。
 //   --merge-into-existing（HIST-1.1）：已有較新行（asOfMonth > as-of，例如已計 7／8／9 月）→ 將 as-of 前歷史累積**加落**現有行嘅
 //     alTaken／slTaken／alTakenOpening／slTakenOpening；slAccrued 按入職日重算到該行 asOfMonth 月尾；asOfMonth 不變。
+//     HIST-1.2：現有結餘行必須同 as-of 同一年——該 guard 已有較後年份嘅結餘行（aggregate 以最新年份為準）→ 拒絕合併（flag merge_rejected_different_year，人手處理）。
 //     HIST-1.2：只可 as-of < HIST_MAX_MONTH（即 ≤ 2026-06）；否則拒絕（as-of 之後月份屬正式月份，已經計入現有行）。
 //     防重複（增量合併）：每個 guard 合併後寫 audit（action=backfill_leave_opening_merge，rowId＝guardId，after.as_of＋after.cum＝該 as-of 累積 al／sl）；
 //     再跑讀上次已合併嘅 as-of：新 as-of 較後 → 只加「上次 as-of 之後至今次 as-of」嘅增量（今次累積 − 上次累積）；新 as-of ≤ 上次 → already_merged。
@@ -159,6 +160,8 @@ export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean
       if (!cur || af.as_of > cur.asOf) mergedBefore.set(a.rowId, { asOf: af.as_of, al: Number(af.cum?.al ?? 0), sl: Number(af.cum?.sl ?? 0) });
     }
   }
+  // 有較後年份結餘行嘅 guard（aggregate 以最新年份行為準）
+  const laterYearRow = new Set((await prisma.guardLeaveBalance.findMany({ where: { guardId: { in: ids }, year: { gt: year } }, select: { guardId: true } })).map((r) => r.guardId));
   const hireOf = new Map(guards.map((g) => [g.id, g.hireDate]));
   const balOf = new Map(balances.map((b) => [b.guardId, b]));
   const slBy = new Map<string, Date[]>();
@@ -192,7 +195,11 @@ export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean
     // 合併模式（--merge-into-existing）：已有較新行（asOfMonth > as-of）→ 將 as-of 前歷史累積加落現有行（見檔頭）
     let target: LeaveOpeningNumbers = n;
     if (!b) action = allZero ? "nothing_to_write" : "create";
-    else if (b.asOfMonth && b.asOfMonth.getTime() > asOfStart.getTime() && opts.mergeIntoExisting) {
+    else if (opts.mergeIntoExisting && laterYearRow.has(id) && b.asOfMonth && b.asOfMonth.getTime() > asOfStart.getTime()) {
+      // aggregate 讀「最新年份」嘅結餘行；該 guard 已有較後年份嘅行 → 呢條同 as-of 同年嘅行唔係實際生效行，合併會落錯行，拒絕（人手處理）
+      action = "skip_existing_newer_or_equal";
+      flags.push("merge_rejected_different_year");
+    } else if (b.asOfMonth && b.asOfMonth.getTime() > asOfStart.getTime() && opts.mergeIntoExisting) {
       const prevMerge = mergedBefore.get(id);
       if (prevMerge && prevMerge.asOf >= asOfLabel) action = "already_merged";
       else {

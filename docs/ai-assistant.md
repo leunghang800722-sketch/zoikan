@@ -691,3 +691,9 @@ session` 就 `429`；續用現有 draft（唔開新嘅）唔受呢個上限影�
 - **狀態轉「離職」只喺離職日 ≤ 今日（HK）（M1）**：工號卡鏡像只喺「全部卡 former 且離職日 ≤ 今日」先將 `guards.status` 轉 `inactive`；未來離職日（例如卡 `valid_to` 係下月）等到期——`nightly_month_health` 加咗一步 `flip_left_guards`（`src/lib/guards/flip-left.ts` `flipLeftGuards`，summary 帶 `flip_left_guards` 數量），到期先轉並寫 audit（`auto_source=flip_left_guards`、`by_job`）。單向，有 current 卡唔郁。
 - `guard_lookup` 長工合約 `monthly_salary`／`daily_rate` 疊「出街價」遮罩（冇權就剝，同 `guards.monthly_salary` 一致）。
 - migration 註釋補充：`sia_permit_no`／`safety_card_no` 屬牌照類，亦加入 `ai.guards`。
+
+### AI-PII-2.2
+
+- 離職生效轉 `inactive` 之後，更表編輯器（`/api/guards?fields=lite` 預設只出 active）對佢當月較早更次會顯示空名。修正：編輯器、價目卡頁等「顯示人名」嘅 lookup 改用 `include_inactive=1`；**揀人選單**（新增更次 `selectableGuards`、價目卡保安員下拉）照舊只出在職。勤工獎資格清單、雞頭 dashboard 用 active 篩選維持——離職生效（status inactive）後唔計（離職月份當月較早嘅出勤獎勵要人手處理）。
+- `gross-margin.ts` `sites[].shiftTypes` 排序加 tie-breaker（code→shiftTypeId→kind），snapshot 次序穩定。
+- HIST 合併模式：該 guard 已有較後年份結餘行（aggregate 以最新年份為準）→ 拒絕合併（flag `merge_rejected_different_year`）。

@@ -139,7 +139,11 @@ export function schemeSubtotalsByBroker(rows: readonly CardPayrollRow[]): Map<st
   return out;
 }
 
-/** EMP-P2.3 M1：客戶自己人（結算單位 kind=external）更數——獨立計數，唔入逐人糧單／by_card 聚合。 */
+/**
+ * EMP-P2.3 M1：客戶自己人（結算單位 kind=external）更數——獨立計數（`external_shifts`）。
+ * 注意（EMP-P2.4）：`buildPayrollByCard` 本身**唔過濾** external（雞頭 sheet／by_scheme／總表口徑不變），只有逐人糧單（payslips.ts）剔走 external 行；
+ * 呢個數係逐人糧單剔走嘅更數，唔係 by_card 聚合少咗嘅更數。
+ */
 export async function countExternalShifts(month: Date): Promise<number> {
   const { start, end } = monthRange(month);
   const r = await prisma.$queryRaw<{ n: bigint | number }[]>(Prisma.sql`

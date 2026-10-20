@@ -65,6 +65,7 @@ interface GuardRow {
   id: string;
   staff_no?: string | null;
   name_zh: string;
+  status?: string;
 }
 
 const emptyForm = {
@@ -296,7 +297,7 @@ export function RateCardsClient({
       const [siteRes, brokerRes, guardRes, shiftTypeRes] = await Promise.all([
         cachedGetAll<SiteRow>("/api/sites"),
         cachedGetAll<BrokerRow>("/api/brokers?include_inactive=1"),
-        cachedGetAll<GuardRow>("/api/guards?fields=lite"),
+        cachedGetAll<GuardRow>("/api/guards?fields=lite&include_inactive=1"), // AI-PII-2.2：名稱對照包括離職者；揀人選單只出在職（＋已揀嗰個）
         cachedGetAll<ShiftTypeRow>("/api/shift-types"),
       ]);
       if (siteRes.ok) setSites(siteRes.data.rows);
@@ -632,7 +633,7 @@ export function RateCardsClient({
           <Field label="保安員" hint="留空＝通用">
             <select className={selectCls} value={form.guard_id} onChange={(e) => setForm((f) => ({ ...f, guard_id: e.target.value }))}>
               <option value="">（通用）</option>
-              {guards.map((g) => (
+              {guards.filter((g) => g.status !== "inactive" || g.id === form.guard_id).map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name_zh}
                   {g.staff_no ? `（${g.staff_no}）` : ""}
