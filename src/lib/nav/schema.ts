@@ -88,6 +88,7 @@ const EXTRA_KICKERS: Record<string, string> = {
   "/feedback/detail": "設定",
   "/settings/cover-rates": "設定",
   "/settings/staff-schemes": "設定",
+  "/sites/staff-scheme-prefill": "資料",
   "/settings/cover-rates/infer": "設定",
   "/whatsapp/intents": "排更",
   "/whatsapp/pending": "排更",

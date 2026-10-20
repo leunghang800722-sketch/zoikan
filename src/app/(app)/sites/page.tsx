@@ -1,6 +1,7 @@
 "use client";
 // P2-A：盤管理頁（README §07）——換皮，邏輯／API 呼叫全部保留。
 import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
 import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
@@ -247,6 +248,7 @@ export default function SitesPage() {
   // 操作——hasMoneyField 就 7 欄，冇就 6 欄（原本寫死 6/5，靠落面
   // colSpan「+1」補返，而家 colCount 本身改啱，colSpan 唔使再 +1）。
   const colCount = hasMoneyField ? 7 : 6;
+  const unsetSchemeCount = rows.filter((r) => !r.staff_scheme && r.status !== "ended").length;
 
   return (
     <div className="space-y-4">
@@ -264,6 +266,17 @@ export default function SitesPage() {
         }
       />
       <Banner kind="success" message={openMonthNotice} />
+      {/* SITE-SCHEME-1：導航卡——未設工號體系嘅盤，一頁套用預設建議（Wilson／威信→U，其餘→MP） */}
+      {unsetSchemeCount > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zk-border bg-white px-3.5 py-2.5" data-testid="sites-unset-scheme-card">
+          <span className="text-zk-base text-zk-text">
+            未設體系 <b>{unsetSchemeCount}</b> 個盤——系統已按客戶名擬好建議（含 Wilson／威信 → U，其餘 → MP）
+          </span>
+          <Link href="/sites/staff-scheme-prefill" className="rounded-md border border-zk-primary px-3 py-1 text-zk-sm font-medium text-zk-primary hover:bg-zk-primary-tint-soft" data-testid="sites-unset-scheme-link">
+            一頁設定 ›
+          </Link>
+        </div>
+      )}
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />

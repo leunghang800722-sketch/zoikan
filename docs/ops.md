@@ -564,3 +564,12 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - `--merge-into-existing` 只可 **as-of < `HIST_MAX_MONTH`（即 ≤ 2026-06）**；as-of ≥ 2026-07 直接拒絕（錯誤：只可用於 as-of 早過 2026-07）——7 月起嘅更次已經計入現有結餘行，再加會雙重計數。
 - **增量合併**：每個 guard 合併後 audit（`backfill_leave_opening_merge`）記低 `after.as_of` 同當時累積 `cum.al`／`cum.sl`。再跑時：新 as-of 較後 → 只加「上次 as-of 之後至今次 as-of」嘅增量（今次累積 − 上次累積）；新 as-of ≤ 上次 → `already_merged`。例：先 as-of 2026-05 再 as-of 2026-06 → 5 月只加一次。四個欄位（`alTaken`／`slTaken`／`alTakenOpening`／`slTakenOpening`）加同一個增量（歷史全部喺現有行起算月份之前，所以 opening 都加全數而唔係「前一個月」累積）。
 - 合併後 `slAccrued` 口徑：歷史段（入職日至 as-of 月尾）用條例口徑（`slAccruedStatute`），as-of 之後至現有行 `asOfMonth` 月尾按舊口徑每月 2 日（7／8／9 月實際計糧用嘅口徑），按月分段，封頂 120。
+
+## SITE-SCHEME-1 盤工號體系預設建議（2026-10）
+
+老闆唔想逐個盤揀體系。流程：
+1. 盤頁（`/sites`）頂見「未設體系 N 個盤」卡 → 「一頁設定」（月結健康 `site_no_staff_scheme` 嘅直達連結亦指去 `/sites/staff-scheme-prefill`）。
+2. 清單每行：盤名／客戶／建議體系（下拉可改 U／MP）／理由。建議規則（`src/lib/sites/staff-scheme-prefill.ts` `proposeStaffScheme`）：客戶名／客戶組／盤名／別名任何一個（大小寫、全半形唔分）含 `wilson` 或 `威信` → **U**，否則 **MP**；LINK 盤（`guards_paid_by_client`）照客戶判（Wilson 旗下 → U）。已設 `staff_scheme` 嘅盤唔會出現、唔會郁。
+3. 撳「全部套用」→ `POST /api/sites/staff-scheme-prefill { apply:true, overrides?:[{site_id, scheme}] }`（要「盤:update」）：只寫未設定嘅盤（`UPDATE … WHERE staff_scheme IS NULL`，重覆撳冪等）；audit 一條 summary（`site_staff_scheme_prefill`，只有計數）。
+4. 寫完即刻對該批盤嘅更次補推導工號歸屬（`backfillSiteStaffNumbers`，重用 EMP-P1「盤 scheme＋期間」規則 range／sole）：**只填 `staff_number_id IS NULL` 而且冇側表歸屬嘅 shift／ot**；未鎖月直接寫三個歸屬欄（唔掂金額、唔觸發 updated_at），已鎖月寫 `shift_record_staff_attributions` 側表；冇法分（多張冇日期卡／唯一卡唔包日期）唔推。回應 `backfilled`（實際寫入數）＋ `backfill.{written_direct, written_side_table, unresolved}`。老闆一撳，歸屬即刻有。
+- 注意：回應 `by_scheme` 係 `[{scheme,count}]` 陣列（物件 key U／MP 會被 snake_case 轉壞）。單個盤逐個改體系仍可喺盤編輯抽屜做（唔會自動補推導，要補請用呢頁或 `npm run db:backfill-shift-staff-numbers`）。
