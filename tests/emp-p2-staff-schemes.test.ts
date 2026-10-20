@@ -21,7 +21,7 @@ describe("EMP-P2 staff_schemes", () => {
     await prisma.staffScheme.deleteMany({});
     await prisma.staffScheme.createMany({
       data: [
-        { code: "U", labelZh: "U（Wilson 盤）", payerCode: "wilson", payerLabelZh: "Wilson 出糧", payMethod: null, isFrontline: true, isLongterm: false, sort: 1 },
+        { code: "U", labelZh: "U（Wilson 盤）", payerCode: "maxwell", payerLabelZh: "在勤出糧", payMethod: null, isFrontline: true, isLongterm: false, sort: 1 },
         { code: "MP", labelZh: "MP（在勤盤）", payerCode: "maxwell", payerLabelZh: "在勤出糧", payMethod: null, isFrontline: true, isLongterm: false, sort: 2 },
         { code: "MG", labelZh: "MG（在勤長工）", payerCode: "maxwell", payerLabelZh: "在勤長工糧", payMethod: "autopay", isFrontline: false, isLongterm: true, sort: 3 },
         { code: "MW", labelZh: "MW（在勤寫字樓）", payerCode: "maxwell", payerLabelZh: "在勤出糧", payMethod: null, isFrontline: false, isLongterm: false, sort: 4 },
@@ -35,6 +35,24 @@ describe("EMP-P2 staff_schemes", () => {
     expect(sql).not.toMatch(/gen_random_uuid|\bRAISE\b|\bUPDATE\s+"|\bDELETE\s+FROM\b|\bDROP\b|\bTRUNCATE\b/i);
     expect(sql).toContain("ON CONFLICT");
     for (const c of ["'U'", "'MP'", "'MG'", "'MW'"]) expect(sql).toContain(c);
+  });
+
+  it("EMP-P2.2：出廠預設四個體系出糧方全部 maxwell（U 都係在勤出糧）；更正 migration 只 UPDATE staff_schemes U 行（wilson→maxwell），冇 RAISE／gen_random_uuid／DELETE／DROP", async () => {
+    await prisma.staffScheme.deleteMany({});
+    const m = await loadStaffSchemes(); // 表空 → 出廠預設
+    for (const c of ["U", "MP", "MG", "MW"]) expect(m.get(c)!.payerCode).toBe("maxwell");
+    expect(m.get("U")).toMatchObject({ payerLabelZh: "在勤出糧", labelZh: expect.stringContaining("Wilson") });
+    const dir = readdirSync(path.join(process.cwd(), "prisma/migrations")).find((d) => d.endsWith("_emp_p2_2_payer_fix"))!;
+    const sql = readFileSync(path.join(process.cwd(), "prisma/migrations", dir, "migration.sql"), "utf-8");
+    expect(sql).not.toMatch(/gen_random_uuid|\bRAISE\b|\bDELETE\s+FROM\b|\bDROP\b|\bTRUNCATE\b|\bINSERT\b/i);
+    expect(sql).toMatch(/UPDATE "staff_schemes" SET "payer_code" = 'maxwell'[^;]*WHERE "code" = 'U' AND "payer_code" = 'wilson'/);
+    // 套用 migration：舊種子 wilson → maxwell；老闆自己改過（非 wilson）就唔郁
+    await prisma.staffScheme.createMany({ data: [{ code: "U", labelZh: "U（Wilson 盤）", payerCode: "wilson", payerLabelZh: "Wilson 出糧", isFrontline: true, isLongterm: false, sort: 1 }, { code: "MP", labelZh: "MP", payerCode: "custom", payerLabelZh: "自訂", isFrontline: true, isLongterm: false, sort: 2 }] });
+    await prisma.$executeRawUnsafe(sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n"));
+    expect(await prisma.staffScheme.findUniqueOrThrow({ where: { code: "U" } })).toMatchObject({ payerCode: "maxwell", payerLabelZh: "在勤出糧" });
+    expect(await prisma.staffScheme.findUniqueOrThrow({ where: { code: "MP" } })).toMatchObject({ payerCode: "custom" });
+    await prisma.$executeRawUnsafe(sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n")); // 冪等
+    expect(await prisma.staffScheme.findUniqueOrThrow({ where: { code: "U" } })).toMatchObject({ payerCode: "maxwell" });
   });
 
   it("loadStaffSchemes：設定表優先、缺行用出廠預設補；未知 scheme 顯示 code", async () => {

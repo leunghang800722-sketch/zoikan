@@ -15,6 +15,15 @@ import { buildPayrollByCard, NO_CARD_LABEL } from "./payroll-by-card";
 import { loadStaffSchemes, schemeInfoOf, type StaffSchemeInfo } from "@/lib/guards/staff-schemes";
 
 export const LONGTERM_NOTE = "見長工糧表";
+export const CHANNEL_DIRECT = "在勤直接";
+export const CHANNEL_UNASSIGNED = "未歸屬";
+
+/** EMP-P2.2：由結算單位推導出糧途徑（純函數）。 */
+export function payChannelOf(broker: { code: string; kind: string; settlementType: string } | null): string {
+  if (!broker) return CHANNEL_UNASSIGNED;
+  if (broker.settlementType === "cash" && broker.kind !== "internal_cash") return `經雞頭（${broker.code}）`;
+  return CHANNEL_DIRECT; // autopay／salary／公司兵 Y／長工 B07／其他
+}
 
 interface PayslipLine {
   staffNumberId: string | null;
@@ -25,6 +34,14 @@ interface PayslipLine {
   payerCode: string | null;
   payerLabel: string | null;
   payMethod: string | null;
+  /**
+   * EMP-P2.2 出糧途徑（由該行結算單位推導；一行可有多個結算單位 → 用「／」連接）：
+   * 結算雞頭 settlementType=cash（外判雞頭）→「經雞頭（代號）」；autopay／salary／公司兵（Y，internal_cash）／長工 → 「在勤直接」；
+   * 未歸屬（settlement null）→「未歸屬」。出糧方（payer）全部係在勤，呢欄講錢點到人手。
+   */
+  payChannel: string;
+  /** EMP-P2.2：其中 LINK 盤（guards_paid_by_client）更數——冇計價，唔入金額 */
+  linkShifts: number;
   /** 呢張卡嘅更次涉及嘅結算單位代號（未歸屬＝「未歸屬」） */
   settlementBrokerCodes: string[];
   settlementBrokerCode: string;
@@ -73,18 +90,21 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
   const brokerIds = [...new Set(rows.map((r) => r.settlementBrokerId).filter((v): v is string => !!v))];
   const [guards, brokers, ltCards] = await Promise.all([
     prisma.guard.findMany({ where: { id: { in: guardIds } }, select: { id: true, nameZh: true, staffNo: true, staffNoMw: true } }),
-    brokerIds.length ? prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, code: true } }) : Promise.resolve([]),
+    brokerIds.length ? prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, code: true, kind: true, settlementType: true } }) : Promise.resolve([]),
     longtermCodes.length ? prisma.guardStaffNumber.findMany({ where: { guardId: { in: [...ltByGuard.keys()] }, scheme: { in: longtermCodes } }, select: { id: true, guardId: true, scheme: true, number: true, status: true } }) : Promise.resolve([]),
   ]);
   const guardById = new Map(guards.map((g) => [g.id, g]));
   const brokerCode = new Map(brokers.map((b) => [b.id, b.code]));
+  const brokerChannel = new Map(brokers.map((b) => [b.id, payChannelOf(b)]));
 
   // 先按 (guard, card) 合併（跨雞頭），仍然保持卡獨立
-  type Acc = { guardId: string; staffNumberId: string | null; scheme: string | null; number: string | null; shifts: number; wage: number; fee: number; brokers: Set<string> };
+  type Acc = { guardId: string; staffNumberId: string | null; scheme: string | null; number: string | null; shifts: number; linkShifts: number; wage: number; fee: number; brokers: Set<string>; channels: Set<string> };
   const accByKey = new Map<string, Acc>();
   for (const r of rows) {
-    const a = accByKey.get(r.key) ?? { guardId: r.guardId, staffNumberId: r.staffNumberId, scheme: r.scheme, number: r.number, shifts: 0, wage: 0, fee: 0, brokers: new Set<string>() };
+    const a = accByKey.get(r.key) ?? { guardId: r.guardId, staffNumberId: r.staffNumberId, scheme: r.scheme, number: r.number, shifts: 0, linkShifts: 0, wage: 0, fee: 0, brokers: new Set<string>(), channels: new Set<string>() };
     a.shifts += r.shifts;
+    a.linkShifts += r.linkShifts;
+    a.channels.add(r.settlementBrokerId ? (brokerChannel.get(r.settlementBrokerId) ?? CHANNEL_UNASSIGNED) : CHANNEL_UNASSIGNED);
     a.wage = round2(a.wage + r.wage);
     a.fee = round2(a.fee + r.fee);
     a.brokers.add(r.settlementBrokerId ? (brokerCode.get(r.settlementBrokerId) ?? "?") : "未歸屬");
@@ -97,6 +117,8 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
     const codes = [...a.brokers].sort();
     const wage = longtermAmount === null ? a.wage : 0;
     const fee = longtermAmount === null ? a.fee : 0;
+    const linkNote = a.linkShifts > 0 ? `LINK 盤更數 ${a.linkShifts}（唔計價）` : "";
+    const fullNote = [note, linkNote].filter(Boolean).join("；");
     // M2：個人金額＝工資，唔含雞頭費（雞頭費係俾雞頭，唔係個人糧）
     return {
       staffNumberId: a.staffNumberId,
@@ -106,6 +128,8 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
       payerCode: info?.payerCode ?? null,
       payerLabel: info?.payerLabelZh ?? null,
       payMethod: info?.payMethod ?? null,
+      payChannel: a.channels.size ? [...a.channels].sort().join("／") : CHANNEL_UNASSIGNED,
+      linkShifts: a.linkShifts,
       settlementBrokerCodes: codes,
       settlementBrokerCode: codes.join("/"),
       shifts: a.shifts,
@@ -113,7 +137,7 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
       fee,
       amount: longtermAmount === null ? round2(wage) : round2(longtermAmount),
       isLongterm: longtermAmount !== null,
-      ...(note ? { note } : {}),
+      ...(fullNote ? { note: fullNote } : {}),
     };
   };
 
@@ -135,7 +159,7 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
       if (ltDone.has(guardId)) continue;
       const card = ltCards.filter((c) => c.guardId === guardId && c.scheme === ltScheme.code).sort((x, y) => (x.status === y.status ? 0 : x.status === "current" ? -1 : 1))[0];
       const g = guardById.get(guardId);
-      push(guardId, lineOf(ltScheme, { guardId, staffNumberId: card?.id ?? null, scheme: ltScheme.code, number: card?.number ?? g?.staffNoMw ?? null, shifts: 0, wage: 0, fee: 0, brokers: new Set() }, n(lt.gross), LONGTERM_NOTE));
+      push(guardId, lineOf(ltScheme, { guardId, staffNumberId: card?.id ?? null, scheme: ltScheme.code, number: card?.number ?? g?.staffNoMw ?? null, shifts: 0, linkShifts: 0, wage: 0, fee: 0, brokers: new Set(), channels: new Set([CHANNEL_DIRECT]) }, n(lt.gross), LONGTERM_NOTE));
     }
   }
 

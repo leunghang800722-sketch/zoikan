@@ -27,6 +27,8 @@ export interface CardPayrollRow {
   number: string | null;
   settlementBrokerId: string | null;
   shifts: number;
+  /** EMP-P2.2：其中 LINK 盤（sites.guards_paid_by_client）嘅更數——本身冇計價（snapshot null），金額照舊唔入 */
+  linkShifts: number;
   wage: number;
   fee: number;
   amount: number;
@@ -38,6 +40,7 @@ interface RawGroup {
   card_id: string | null;
   scheme: string | null;
   shifts: bigint | number;
+  link_shifts: bigint | number;
   wage: Prisma.Decimal | null;
   fee: Prisma.Decimal | null;
 }
@@ -55,10 +58,12 @@ async function buildPayrollByCardUncached(month: Date): Promise<CardPayrollRow[]
            COALESCE(sr.staff_number_id, a.staff_number_id) AS card_id,
            COALESCE(sr.staff_scheme, a.staff_scheme) AS scheme,
            COUNT(*) AS shifts,
+           COUNT(*) FILTER (WHERE st.guards_paid_by_client) AS link_shifts,
            SUM(sr.guard_wage_snapshot) AS wage,
            SUM(sr.broker_fee_snapshot) AS fee
       FROM shift_records sr
       LEFT JOIN shift_record_staff_attributions a ON a.shift_record_id = sr.id
+      LEFT JOIN sites st ON st.id = sr.site_id
      WHERE sr.record_type IN ('shift', 'ot')
        AND sr.work_date >= ${start.toISOString().slice(0, 10)}::date AND sr.work_date <= ${end.toISOString().slice(0, 10)}::date
        AND sr.status <> 'cancelled'
@@ -79,6 +84,7 @@ async function buildPayrollByCardUncached(month: Date): Promise<CardPayrollRow[]
       number: card?.number ?? null,
       settlementBrokerId: g.settlement_broker_id,
       shifts: Number(g.shifts),
+      linkShifts: Number(g.link_shifts),
       wage,
       fee,
       amount: round2(wage + fee),

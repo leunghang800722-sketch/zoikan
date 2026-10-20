@@ -45,7 +45,7 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     cardMP = await prisma.guardStaffNumber.create({ data: { guardId: fx.guardA.id, scheme: "MP", number: "MP90901", status: "current" } });
     await prisma.guard.update({ where: { id: fx.guardA.id }, data: { staffNo: "U90901" } });
     // 還原出廠 staff_schemes（其他測試可能改過）
-    await prisma.staffScheme.upsert({ where: { code: "U" }, update: { payerLabelZh: "Wilson 出糧" }, create: { code: "U", labelZh: "U（Wilson 盤）", payerCode: "wilson", payerLabelZh: "Wilson 出糧", sort: 1 } });
+    await prisma.staffScheme.upsert({ where: { code: "U" }, update: { payerCode: "maxwell", payerLabelZh: "在勤出糧" }, create: { code: "U", labelZh: "U（Wilson 盤）", payerCode: "maxwell", payerLabelZh: "在勤出糧", sort: 1 } });
     await prisma.staffScheme.upsert({ where: { code: "MP" }, update: { payerLabelZh: "在勤出糧" }, create: { code: "MP", labelZh: "MP（在勤盤）", payerCode: "maxwell", payerLabelZh: "在勤出糧", sort: 2 } });
   });
 
@@ -63,13 +63,57 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     expect(slips).toHaveLength(1);
     const p = slips[0]!;
     expect(p.lines.map((l) => [l.scheme, l.number, l.amount, l.fee])).toEqual([["U", "U90901", 400, 40], ["MP", "MP90901", 150, 15], [null, null, 50, 5]]); // U→MP→未標；個人金額＝工資（唔含雞頭費），雞頭費另欄
-    expect(p.lines[0]).toMatchObject({ payerLabel: "Wilson 出糧", schemeLabel: expect.stringContaining("U") });
+    expect(p.lines[0]).toMatchObject({ payerLabel: "在勤出糧", schemeLabel: expect.stringContaining("U") });
     expect(p.lines[1]).toMatchObject({ payerLabel: "在勤出糧" });
     expect(p.lines[2]).toMatchObject({ schemeLabel: "未標工號", staffNumberId: null });
     expect(p.total).toBe(600); // 各行個人金額（工資）之和，唔含雞頭費
     expect(p.feeTotal).toBe(60);
     expect(p.longtermTotal).toBeNull();
     expect(p.total).toBe(p.lines.reduce((s, l) => s + l.amount, 0));
+  });
+
+  it("EMP-P2.2 出糧途徑 pay_channel：cash 外判雞頭→經雞頭（代號）；autopay／公司兵 Y→在勤直接；settlement null→未歸屬；一行多結算單位以「／」連接", async () => {
+    const ba = fx.brokerA; // kind=broker cash
+    const y = await prisma.broker.findFirstOrThrow({ where: { code: "TEST-Y" } }); // internal_cash
+    const lt = await mkBroker("T-LT", "internal_longterm"); // autopay
+    const g2 = await mkGuard({ name: "測試丙" });
+    const c2 = await prisma.guardStaffNumber.create({ data: { guardId: g2.id, scheme: "U", number: "U90902", status: "current" } });
+    const g3 = await mkGuard({ name: "測試丁" });
+    const c3 = await prisma.guardStaffNumber.create({ data: { guardId: g3.id, scheme: "U", number: "U90903", status: "current" } });
+    await rec(fx.guardA.id, { cardId: cardU.id, scheme: "U", brokerId: ba.id });
+    await rec(fx.guardA.id, { cardId: cardMP.id, scheme: "MP", brokerId: y.id });
+    await rec(fx.guardA.id, { cardId: null, brokerId: null });
+    await rec(g2.id, { cardId: c2.id, scheme: "U", brokerId: lt.id });
+    await rec(g3.id, { cardId: c3.id, scheme: "U", brokerId: ba.id });
+    await rec(g3.id, { cardId: c3.id, scheme: "U", brokerId: y.id });
+    const slips = await buildPayslips(AUG);
+    const ch = (gid: string) => slips.find((s) => s.guardId === gid)!.lines.map((l) => [l.scheme, l.payChannel]);
+    expect(ch(fx.guardA.id)).toEqual([["U", "經雞頭（TEST-BA）"], ["MP", "在勤直接"], [null, "未歸屬"]]);
+    expect(ch(g2.id)).toEqual([["U", "在勤直接"]]);
+    expect(ch(g3.id)).toEqual([["U", "在勤直接／經雞頭（TEST-BA）"]]);
+    // 出糧方（payer）全部在勤
+    for (const s of slips) for (const l of s.lines) if (l.scheme) expect(l.payerLabel).toBe("在勤出糧");
+  });
+
+  it("EMP-P2.2 LINK 盤（guards_paid_by_client）：更冇計價唔入金額；該行 note「LINK 盤更數 N（唔計價）」；API／Excel 有 pay_channel 欄", async () => {
+    const link = await prisma.site.create({ data: { canonicalName: "測試LINK盤", clientName: "測試客", billingModel: "per_shift", guardsPaidByClient: true, createdBy: "t" } });
+    const lst = await prisma.shiftType.create({ data: { siteId: link.id, code: "N", hours: 12, createdBy: "t" } });
+    await rec(fx.guardA.id, { cardId: cardU.id, scheme: "U", wage: 300, fee: 30 });
+    for (let i = 0; i < 2; i++) {
+      day += 1;
+      await prisma.shiftRecord.create({ data: { workDate: d(day), siteId: link.id, shiftTypeId: lst.id, guardId: fx.guardA.id, settlementBrokerId: fx.brokerA.id, operationalBrokerId: fx.brokerA.id, recordType: "shift", staffNumberId: cardU.id, staffScheme: "U", createdBy: "t" } });
+    }
+    const p = (await buildPayslips(AUG)).find((s) => s.guardId === fx.guardA.id)!;
+    const u = p.lines.find((l) => l.scheme === "U")!;
+    expect(u).toMatchObject({ shifts: 3, linkShifts: 2, wage: 300, amount: 300 });
+    expect(u.note).toContain("LINK 盤更數 2（唔計價）");
+    const boss = await sessionCookieForUser(fx.userIds["老闆"]);
+    const j = (await (await get(boss, "month=2026-08&view=person")).json()) as { payslips: { lines: { pay_channel: string; link_shifts: number }[] }[] };
+    expect(j.payslips[0]!.lines[0]).toMatchObject({ pay_channel: "經雞頭（TEST-BA）", link_shifts: 2 });
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load((await writePayrollBuffer(AUG)) as unknown as ArrayBuffer);
+    const sheet = wb.getWorksheet("逐人糧單")!;
+    expect(String(sheet.getRow(2).values)).toContain("出糧途徑");
   });
 
   it("M2（Opus 個案）：U 3 更每更工資 500＋MP 2 更每更 620 → U 行 1500、MP 行 1240、散更 total 2740；雞頭費欄 120／60 唔入 total", async () => {
@@ -165,11 +209,11 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     const slipRows: unknown[][] = [];
     slip.eachRow((r) => slipRows.push((r.values as unknown[]).slice(1)));
     const sub = slipRows.find((r) => String(r[1]).startsWith("小計"))!;
-    expect(sub[5]).toBe(400); // 散更個人金額小計（工資，唔含雞頭費）
-    expect(sub[6]).toBe(40); // 雞頭費小計（資料欄）
+    expect(sub[6]).toBe(400); // 散更個人金額小計（工資，唔含雞頭費）
+    expect(sub[7]).toBe(40); // 雞頭費小計（資料欄）
     // 新欄位次序
     expect(slipRows[0]).toEqual(["逐人糧單（個人金額唔含雞頭費；長工毛額另行小計，見長工糧表）"]);
-    expect(slipRows[1]).toEqual(["Staff No.", "姓名／體系", "出糧方", "結算單位", "更數", "個人金額（工資，唔含雞頭費）", "雞頭費（唔入個人金額）", "備註"]);
+    expect(slipRows[1]).toEqual(["Staff No.", "姓名／體系", "出糧方", "出糧途徑", "結算單位", "更數", "個人金額（工資，唔含雞頭費）", "雞頭費（唔入個人金額）", "備註"]);
   });
 
   it("API：?view=person 老闆 200；雞頭 403（跨雞頭）；舊 totals 回應仍有 by_scheme", async () => {

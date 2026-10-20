@@ -1,6 +1,7 @@
 "use client";
 // EMP-P2：工號體系設定（老闆專用）——U／MP／MG／MW 嘅顯示名、出糧方、出糧方式。code 固定，唔可以加減。
-// 出糧方按體系：MP 行＝在勤出糧、U 行＝Wilson 出糧、MG 行＝在勤長工糧（逐人糧單／報表按呢度分組標示）。
+// U＝Wilson 盤（登記工號），出糧全部係在勤（老闆 2026-10-20 更正）：U／MP／MW 行＝在勤出糧、MG 行＝在勤長工糧（逐人糧單／報表按呢度分組標示）；
+// 錢點到人手睇逐人糧單「出糧途徑」欄（經雞頭／在勤直接／未歸屬）。
 import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
