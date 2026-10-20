@@ -403,8 +403,8 @@ export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, 
   // 方向單向：有 current 卡就唔郁（唔准由離職自動轉返在職；復職要人手或開新卡後人手恢復）。
   const effectiveLeave = plan.leave !== undefined ? plan.leave : before.leaveDate;
   // AI-PII-2.1：離職日要 ≤ 今日（HK）先轉；未來離職日由排程 flipLeftGuards（nightly_month_health 一步）到期先轉
-  const statusToInactive = rows.length > 0 && rows.every((r) => r.status !== "current") && !!effectiveLeave && effectiveLeave.toISOString().slice(0, 10) <= hkDateStr() && before.status !== "inactive";
-  if (statusToInactive) data.status = "inactive";
+  const statusToInactive = rows.length > 0 && rows.every((r) => r.status !== "current") && !!effectiveLeave && effectiveLeave.toISOString().slice(0, 10) <= hkDateStr() && before.status === "active";
+  if (statusToInactive) data.status = "left"; // S-batch-1021：離職寫 left（inactive 留畀作廢）
   if (Object.keys(data).length === 0) return { changed: false, warnings: plan.warnings };
   const after = await tx.guard.update({ where: { id: guardId }, data });
   await writeAuditTx(tx, { actorUserId: opts?.actorUserId ?? null, tableName: "guards", rowId: guardId, action: "update", before, after: { ...after, auto_source: "staff_number_mirror" }, ip: null });
@@ -412,7 +412,7 @@ export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, 
   const hints = [...plan.warnings];
   if (plan.hire !== undefined) hints.push("hire_date_mirrored：人卡入職日已按 MG 卡鏈頭日期更新（未鎖月份重算會跟新值，已鎖月不變）");
   if (plan.leave !== undefined) hints.push("leave_date_mirrored：人卡離職日已按 MG 卡日期更新（未鎖月份重算會跟新值，已鎖月不變）");
-  if (statusToInactive) hints.push("status_inactive_mirrored：全部工號卡已結束而人卡有離職日，人卡狀態已轉為「離職」（停用，列表預設隱藏）");
+  if (statusToInactive) hints.push("status_inactive_mirrored：全部工號卡已結束而人卡有離職日，人卡狀態已轉為「已離職」（left，列表預設隱藏）");
   return { changed: true, warnings: hints };
 }
 
