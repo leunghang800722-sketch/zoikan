@@ -61,11 +61,11 @@ export async function backfillShiftStaffNumbers(
   let batchIndex = 0;
   for (;;) {
     const rows = await prisma.shiftRecord.findMany({
-      where: { status: { not: "cancelled" }, staffNumberId: null, staffAttribution: { is: null } },
+      // keyset 分頁（id > cursor）：寫入之後該行唔再符合條件，用 Prisma cursor+skip 會漏一條
+      where: { status: { not: "cancelled" }, staffNumberId: null, staffAttribution: { is: null }, ...(cursor ? { id: { gt: cursor } } : {}) },
       select: { id: true, guardId: true, siteId: true, workDate: true, settlementBrokerId: true, provenance: true },
       orderBy: { id: "asc" },
       take: opts.chunkSize ?? CHUNK,
-      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
     });
     if (rows.length === 0) break;
     cursor = rows[rows.length - 1]!.id;

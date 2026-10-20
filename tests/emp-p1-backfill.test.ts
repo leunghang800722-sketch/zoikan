@@ -101,7 +101,9 @@ describe("EMP-P1 回填 shift_records 工號歸屬", () => {
   });
 
   it("EMP-P1.1 M1：第一批同第二批之間鎖月 → 之後批次 0 寫入（UPDATE 帶 NOT EXISTS month_closes 鎖月檢查）", async () => {
-    // 用未鎖嘅 8 月；chunkSize=1 令每條更次一批；第一批之後鎖 8 月
+    // 用未鎖嘅 8 月；chunkSize=1 令每條更次一批；第一批之後鎖 8 月。
+    // 只留 8 月 4 條一定推到嘅更次（file／lt／rangeA／sole），第一批必然寫 1 條（唔受 uuid 次序影響）
+    await prisma.shiftRecord.deleteMany({ where: { id: { in: [ids.amb!, ids.none!, ids.unsetSite!, ids.cancelled!] } } });
     let locked = false;
     const r = await backfillShiftStaffNumbers({
       apply: true,
@@ -115,10 +117,18 @@ describe("EMP-P1 回填 shift_records 工號歸屬", () => {
       },
     });
     expect(locked).toBe(true);
-    // 8 月可寫嘅有 4 條（file／lt／rangeA／sole），第一批最多寫 1 條，之後鎖月 → 其餘 0 寫入
+    // 8 月可寫嘅有 4 條，第一批（鎖月前）實際寫咗剛好 1 條，之後鎖月 → 其餘 3 條 0 寫入
     const written = await prisma.shiftRecord.count({ where: { staffNumberId: { not: null }, workDate: { gte: d("2026-08-01"), lte: d("2026-08-31") } } });
-    expect(written).toBeLessThanOrEqual(1);
-    expect(r.months.find((m) => m.month === "2026-08")!.written).toBeGreaterThan(written); // 計數係「計劃寫」，實際被鎖月擋咗
+    expect(written).toBe(1);
+    expect(r.months.find((m) => m.month === "2026-08")!.written).toBe(4); // 計數係「計劃寫」，實際被鎖月擋咗
+  });
+
+  it("EMP-P2 回歸：細批量（chunkSize=1）apply 唔漏——keyset 分頁，寫咗嘅行唔會令下一批跳過一條", async () => {
+    const r = await backfillShiftStaffNumbers({ apply: true, chunkSize: 1 });
+    const aug = r.months.find((m) => m.month === "2026-08")!;
+    expect(aug.written).toBe(4);
+    expect(await prisma.shiftRecord.count({ where: { staffNumberId: { not: null }, workDate: { gte: d("2026-08-01"), lte: d("2026-08-31") } } })).toBe(4);
+    expect(await prisma.shiftRecordStaffAttribution.count()).toBe(1);
   });
 
   it("--month 只處理指定月份", async () => {

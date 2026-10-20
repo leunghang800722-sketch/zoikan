@@ -9,11 +9,10 @@ export async function seedShiftStaffNumbers(prisma: PrismaClient): Promise<{ sca
   let cursor: string | undefined;
   for (;;) {
     const rows = await prisma.shiftRecord.findMany({
-      where: { status: { not: "cancelled" }, staffNumberId: null },
+      where: { status: { not: "cancelled" }, staffNumberId: null, ...(cursor ? { id: { gt: cursor } } : {}) },
       select: { id: true, guardId: true, siteId: true, workDate: true, settlementBrokerId: true },
       orderBy: { id: "asc" },
       take: CHUNK,
-      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
     });
     if (rows.length === 0) break;
     cursor = rows[rows.length - 1]!.id;

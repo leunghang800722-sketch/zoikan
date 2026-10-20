@@ -225,7 +225,8 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
         data: { status: "former", endReason: input.replacedEndReason === undefined ? "replaced" : input.replacedEndReason, validTo: hkToday(input.now) },
       });
       convertedFormer = { before: existingCurrent, after };
-      predecessorId = existingCurrent.id;
+      // EMP-P2：舊改號 API（replacedEndReason=null）唔分換號／重新入職，唔串聘用鏈——predecessor 都唔寫
+      predecessorId = input.replacedEndReason === null ? null : existingCurrent.id;
       ignoreIds.push(existingCurrent.id);
     }
   }
