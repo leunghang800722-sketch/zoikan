@@ -204,10 +204,8 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
 
       // 補空——唔覆蓋已有值（鐵則：資料全部保留）。
       const fillData: Prisma.GuardUpdateInput = {};
-      if (!guard.hireDate && row.commencement) fillData.hireDate = isoToDate(row.commencement);
       if (!guard.dateOfBirth && row.dob) fillData.dateOfBirth = isoToDate(row.dob);
       if (guard.probationMonths == null && row.probationMonths != null) fillData.probationMonths = row.probationMonths;
-      if (!guard.leaveDate && row.status === "left" && row.lastDay) fillData.leaveDate = isoToDate(row.lastDay);
       // P14.1：補英文名（銀行 Payroll Editor 對數主鍵）——只補空、永不覆蓋；永不改 monthlySalary。
       const nameEn = row.nameEn?.trim();
       if (!guard.nameEn && nameEn) {
@@ -219,20 +217,72 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
         summary.guardFieldsFilled += 1;
       }
       // P14.1：補 MG／MW 工號——照現有 staff_numbers 機制（upsertCurrentStaffNumber＋syncLegacyStaffNoColumns）；
-      // 只喺 `staffNoMw` 空而且冇任何 MG／MW 行時補；撞號（另一人用緊）→ 只加警告，唔影響其餘導入。
+      // 撞號（另一人用緊）→ 只加警告，唔影響其餘導入。
+      // EMP-P3：入職／離職日改寫落 MG 卡（valid_from＝導入嘅入職日；離職名單 → 卡同時結束 former／resigned／valid_to＝最後一日），
+      // 人卡 hire_date／leave_date 唔再直接寫，由 syncLegacyGuardEmploymentColumns 鏡像決定（見 staff-numbers.ts）：
+      //   (a) 冇任何 MG 卡（舊寫法條件：legacy staffNoMw 空）→ 開 MG 卡；
+      //   (b) 有 MG 卡但全部已結束（former），而導入入職日遲過最後一張卡 valid_to（舊卡 resigned）→ 開新 MG 卡（新聘用段）；
+      //   (c) 有 MG current 卡 + 離職名單 → 結束該卡（resigned，valid_to＝最後一日），令鏡像出嚟嘅人卡離職日跟返名單。
       const mwRaw = row.staffNo ? normalizeStaffNumber(row.staffNo) : "";
-      if (!guard.staffNoMw && mwRaw && STAFF_NUMBER_NUMBER_RE.test(mwRaw)) {
-        const scheme = schemeFromNumber(mwRaw);
-        if (scheme === "MG" || scheme === "MW") {
-          const existingMw = await tx.guardStaffNumber.count({ where: { guardId: guard.id, scheme: { in: ["MG", "MW"] } } });
-          const taken = await tx.guardStaffNumber.findUnique({ where: { number: mwRaw }, select: { id: true } });
-          if (existingMw === 0 && !taken) {
-            await upsertCurrentStaffNumber(tx, { guardId: guard.id, scheme, number: mwRaw, source: "import:maxwell", createdBy: actorUserId });
-            await syncLegacyStaffNoColumns(tx, guard.id);
-            summary.filled_staff_no_mw += 1;
-          } else if (taken) {
-            summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：Maxwell 工號 ${mwRaw} 已經掛喺另一個保安員，唔補工號`);
+      const commence = isoToDate(row.commencement);
+      const lastDay = row.status === "left" && row.lastDay ? isoToDate(row.lastDay) : null;
+      const isMgRow = !!mwRaw && STAFF_NUMBER_NUMBER_RE.test(mwRaw) && schemeFromNumber(mwRaw) === "MG";
+      let mgDatedByImport = false;
+      if (isMgRow) {
+        const mgCards = await tx.guardStaffNumber.findMany({ where: { guardId: guard.id, scheme: "MG" }, orderBy: { createdAt: "asc" } });
+        const currentMg = mgCards.find((c) => c.status === "current") ?? null;
+        const taken = await tx.guardStaffNumber.findUnique({ where: { number: mwRaw }, select: { id: true, guardId: true } });
+        if (!currentMg) {
+          const lastTo = mgCards.reduce<Date | null>((m, c) => (c.validTo && (!m || c.validTo.getTime() > m.getTime()) ? c.validTo : m), null);
+          const firstEver = mgCards.length === 0 && !guard.staffNoMw;
+          const newSegment = mgCards.length > 0 && !!commence && !!lastTo && commence.getTime() > lastTo.getTime();
+          if (taken) {
+            if (taken.guardId !== guard.id) summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：Maxwell 工號 ${mwRaw} 已經掛喺另一個保安員，唔補工號`);
+            else if (newSegment) summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：Maxwell 工號 ${mwRaw} 同舊 MG 卡同號，未開新聘用段 MG 卡（請人手處理）`);
+          } else if (firstEver || newSegment) {
+            try {
+              await upsertCurrentStaffNumber(tx, {
+                guardId: guard.id,
+                scheme: "MG",
+                number: mwRaw,
+                source: "import:maxwell",
+                createdBy: actorUserId,
+                validFrom: commence,
+                ...(lastDay && (!commence || lastDay.getTime() >= commence.getTime()) ? { status: "former" as const, validTo: lastDay, endReason: "resigned" as const } : {}),
+              });
+              await syncLegacyStaffNoColumns(tx, guard.id);
+              summary.filled_staff_no_mw += 1;
+              mgDatedByImport = !!commence || !!lastDay;
+            } catch (e) {
+              if (!(e instanceof ApiError)) throw e;
+              summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：開 MG 卡失敗（${e.message}）`);
+            }
           }
+        } else if (lastDay && !currentMg.validTo && (!currentMg.validFrom || lastDay.getTime() >= currentMg.validFrom.getTime())) {
+          await tx.guardStaffNumber.update({ where: { id: currentMg.id }, data: { status: "former", validTo: lastDay, endReason: "resigned" } });
+          await syncLegacyStaffNoColumns(tx, guard.id);
+          mgDatedByImport = true;
+        }
+      } else if (!guard.staffNoMw && mwRaw && STAFF_NUMBER_NUMBER_RE.test(mwRaw) && schemeFromNumber(mwRaw) === "MW") {
+        // MW（寫字樓）：舊做法不變——只喺冇任何 MG／MW 行時補
+        const existingMw = await tx.guardStaffNumber.count({ where: { guardId: guard.id, scheme: { in: ["MG", "MW"] } } });
+        const taken = await tx.guardStaffNumber.findUnique({ where: { number: mwRaw }, select: { id: true } });
+        if (existingMw === 0 && !taken) {
+          await upsertCurrentStaffNumber(tx, { guardId: guard.id, scheme: "MW", number: mwRaw, source: "import:maxwell", createdBy: actorUserId });
+          await syncLegacyStaffNoColumns(tx, guard.id);
+          summary.filled_staff_no_mw += 1;
+        } else if (taken) {
+          summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：Maxwell 工號 ${mwRaw} 已經掛喺另一個保安員，唔補工號`);
+        }
+      }
+      // 冇 MG 卡可以記日期（例如名單冇 MG 號）→ 照舊補空人卡入職／離職日（唔覆蓋已有值）
+      if (!mgDatedByImport) {
+        const fill: Prisma.GuardUpdateInput = {};
+        if (!guard.hireDate && commence) fill.hireDate = commence;
+        if (!guard.leaveDate && lastDay) fill.leaveDate = lastDay;
+        if (Object.keys(fill).length && !(await hasDatedLongtermCard(tx, guard.id))) {
+          await tx.guard.update({ where: { id: guard.id }, data: fill });
+          summary.guardFieldsFilled += 1;
         }
       }
 
@@ -349,4 +399,10 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
       if (existingAuto.length) summary.contractsUpdated += 1;
     });
   }
+}
+
+/** 呢個人有冇帶日期嘅長工體系（MG）卡——有就人卡日期由鏡像決定，導入唔再直接補。 */
+async function hasDatedLongtermCard(tx: Prisma.TransactionClient, guardId: string): Promise<boolean> {
+  const c = await tx.guardStaffNumber.findFirst({ where: { guardId, scheme: "MG", OR: [{ validFrom: { not: null } }, { validTo: { not: null } }] }, select: { id: true } });
+  return !!c;
 }

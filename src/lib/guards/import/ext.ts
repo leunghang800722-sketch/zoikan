@@ -8,7 +8,7 @@
 //  - 權限：銀行 unit＝「保安員銀行資料」；緊急聯絡人＝「保安員個人資料」；其餘＝「保安員」module。
 import { normZh, normTel8, sameNameStrict } from "./text";
 import { fieldValue, type FieldStatus, type PackagePerson } from "./package";
-import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
+import { normalizeStaffNumber, schemeFromNumber } from "@/lib/guards/staff-numbers";
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 
 /** confirm_id＝「身份確認」（ext_identity_check 照寫入）：只繞過身份／銀行閘，唔繞過長工入職日期閘（N4） */
@@ -55,6 +55,11 @@ export interface ExtGate {
   bank: boolean;
   longtermHire: boolean;
 }
+/** EMP-P3：長工體系（出廠 MG）工號卡嘅入職日期（valid_from）同人層面 hireDate 一樣會影響長工糧——`staffHire.<工號>` 納入長工入職閘。
+ * 長工體系 code 固定（staff_schemes.is_longterm＝MG；設定頁唔可加減 code），呢度係純函數故用常數。 */
+const LONGTERM_STAFF_SCHEMES: ReadonlySet<string> = new Set(["MG"]);
+export const isLongtermStaffHireKey = (key: string): boolean => key.startsWith("staffHire.") && LONGTERM_STAFF_SCHEMES.has(schemeFromNumber(key.slice("staffHire.".length)) ?? "");
+
 export const OPEN_GATE: ExtGate = { scalars: true, bank: true, longtermHire: false };
 export function extGateFor(args: { p: PackagePerson; guard: { hkid: string | null; nameZh: string; longterm: boolean } | null; hkidCanon: string | null; piiView: boolean }): ExtGate {
   const { p, guard, hkidCanon, piiView } = args;
@@ -75,7 +80,7 @@ export function heldAll(gate: ExtGate, key: string): ExtHeld[] {
   const out: ExtHeld[] = [];
   if (!gate.scalars) out.push("identity");
   if (key === "bank" && !gate.bank) out.push("bank");
-  if (key === "hireDate" && gate.longtermHire) out.push("longterm");
+  if ((key === "hireDate" || isLongtermStaffHireKey(key)) && gate.longtermHire) out.push("longterm");
   return out;
 }
 
@@ -305,7 +310,7 @@ export interface EvalOpts {
 export function evaluateExt(p: PackagePerson, snap: GuardExtSnap | null, opts: EvalOpts = {}): ExtItem[] {
   const gate = opts.gate ?? OPEN_GATE;
   return evaluateExtRaw(p, snap, opts).map((i) => {
-    const all = i.key.startsWith("staffHire.") ? (gate.scalars ? [] : (["identity"] as ExtHeld[])) : heldAll(gate, i.key);
+    const all = i.key.startsWith("staffHire.") ? (gate.scalars ? heldAll(gate, i.key) : (["identity"] as ExtHeld[])) : heldAll(gate, i.key);
     const held = all.includes("longterm") && gate.scalars ? "longterm" : all[0] ?? null;
     return held && i.check !== "not_stored" ? { ...i, held } : i;
   });
