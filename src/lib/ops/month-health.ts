@@ -216,7 +216,7 @@ export async function buildMonthHealth(month: Date, session: AuthedSession): Pro
       severity: "info",
       count: noScheme.length,
       message: `${noScheme.length} 個本月有出更嘅盤未設工號體系（staff_scheme）——更表／匯出照舊印 U，更次亦推唔到工號卡`,
-      fixLink: "/sites",
+      fixLink: "/sites/staff-scheme-prefill",
       requires: [ROSTER_VIEW],
       detail: noScheme.map((s) => ({ site_name: s.canonicalName, shifts: shiftsBySiteAll.get(s.id) ?? 0 })).sort((a, b) => b.shifts - a.shifts),
     }),

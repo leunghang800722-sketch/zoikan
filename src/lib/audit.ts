@@ -72,6 +72,8 @@ export type AuditAction =
   | "backfill_shift_staff_numbers"
   // HIST-1：由歷史更表回填長工假期結餘 opening（只有月份＋計數）。
   | "backfill_leave_opening"
+  // SITE-SCHEME-1：一次過套用盤工號體系預設建議（after 只有計數）。
+  | "site_staff_scheme_prefill"
   // HIST-1.1：合併模式逐人 audit（rowId＝guardId，after.as_of＋合併值），再跑時查呢度防重複合併。
   | "backfill_leave_opening_merge"
   // WP-MULTI（老闆 2026-09-19 拍板）：guard_phones／
