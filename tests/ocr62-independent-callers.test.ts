@@ -5,7 +5,6 @@ import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser } from "./fixtures/wp2-fixture";
 import { resetContinuationNonces, resetRefsCredits } from "@/lib/guards/ocr/continuation";
 import { storedPhonesForHkid } from "@/lib/guards/ocr/stored-phones";
-import { stripListPhoneCandidates } from "@/lib/guards/ocr/strip-list";
 import { setVisionClientForTests, type VisionClient } from "@/lib/guards/ocr/vision-client";
 import { POST as ocrRoute } from "@/app/api/guards/ocr/read/route";
 
@@ -37,19 +36,12 @@ describe("storedPhonesForHkid", () => {
     await prisma.guardPhone.create({ data: { guardId: g.id, tel: "90001112" } });
     await prisma.guardPhone.create({ data: { guardId: g.id, tel: "90001111" } });
     expect((await storedPhonesForHkid("z900001(2)")).sort()).toEqual(["90001111", "90001112"]);
+    // OCR-6.3 S1：舊資料 HKID 帶括號／小寫／空白都配對到
+    await prisma.guard.create({ data: { nameZh: "測試丁", employmentType: "cash_casual", hkid: "z900003(4) ", tel: "90003333" } });
+    expect(await storedPhonesForHkid("Z9000034")).toEqual(["90003333"]);
     expect(await storedPhonesForHkid("Z900009(0)")).toEqual([]);
     expect(await storedPhonesForHkid(null)).toEqual([]);
     expect(await storedPhonesForHkid("")).toEqual([]);
-  });
-});
-
-describe("stripListPhoneCandidates：phone_differs_from_list 唔經 endpoint 洩露已存電話", () => {
-  it("candidates 只剩同 OCR 值同號碼嗰啲；其他 reason 唔郁", () => {
-    const r = { fields: { phone: { status: "review", value: "90001111", reason: "phone_differs_from_list", candidates: ["90001111", "90002222"], candidates_ranked: [{ value: "90001111" }, { value: "9000 2222" }] } } } as never;
-    stripListPhoneCandidates(r);
-    const p = (r as { fields: { phone: { candidates: string[]; candidates_ranked: { value: string }[] } } }).fields.phone;
-    expect(p.candidates).toEqual(["90001111"]);
-    expect(p.candidates_ranked.map((x) => x.value)).toEqual(["90001111"]);
   });
 });
 
@@ -92,14 +84,31 @@ describe("POST /api/guards/ocr/read stage b：獨立來源接駁", () => {
     setVisionClientForTests(fake("90001111"));
     expect(await flow()).toMatchObject({ status: "review", value: "90001111", reason: "phone_no_independent_source" });
   });
-  it("配對到但電話唔同 → review＋phone_differs_from_list，回應唔洩露已存電話", async () => {
+  it("OCR-6.3 M1：已存電話只用嚟比對，三種 body（冇傳／傳唔同號／傳相同號）回應都唔含已存電話", async () => {
     setVisionClientForTests(fake("90001111"));
     await prisma.guard.create({ data: { nameZh: "測試丙", employmentType: "cash_casual", hkid: "Z9000012", tel: "90007777" } });
-    const p = await flow();
-    expect(p).toMatchObject({ status: "review", value: "90001111", reason: "phone_differs_from_list" });
-    expect(JSON.stringify(p)).not.toContain("90007777");
+    const none = await flow();
+    expect(none).toMatchObject({ status: "review", value: "90001111", reason: "phone_differs_from_list" });
+    const other = await flow({ independent_phones: ["90002222"] });
+    expect(other).toMatchObject({ status: "review", reason: "phone_differs_from_list" });
+    expect(other.candidates).toContain("90002222"); // client 自己傳嘅可以回
+    const same = await flow({ independent_phones: ["90001111"] });
+    expect(same).toMatchObject({ status: "confirmed", value: "90001111" });
+    for (const p of [none, other, same]) expect(JSON.stringify(p)).not.toContain("90007777");
   });
-  it("client 傳 independent_phones（舊流程）照用；冇傳＋冇配對＝review", async () => {
+  it("confirmed 時回應同形狀：伺服器佐證 vs client 名單命中唔分", async () => {
+    setVisionClientForTests(fake("90001111"));
+    await prisma.guard.create({ data: { nameZh: "測試丙", employmentType: "cash_casual", hkid: "Z9000012", tel: "90001111" } });
+    const viaServer = await flow();
+    await clearAll();
+    resetContinuationNonces();
+    resetRefsCredits();
+    const fx = await seedWp2Fixture();
+    owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    const viaClient = await flow({ independent_phones: ["90001111"] });
+    expect(viaServer).toEqual(viaClient);
+  });
+  it("client 傳 independent_phones（舊流程）照用", async () => {
     setVisionClientForTests(fake("90001111"));
     expect(await flow({ independent_phones: ["90001111"] })).toMatchObject({ status: "confirmed" });
   });

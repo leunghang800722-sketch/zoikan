@@ -7,7 +7,10 @@ import { canonicalHkid } from "@/lib/guards/identity";
 export async function storedPhonesForHkid(hkid: string | null | undefined): Promise<string[]> {
   const canon = hkid ? canonicalHkid(hkid) : null;
   if (!canon) return [];
-  const g = await prisma.guard.findFirst({ where: { hkid: canon }, select: { tel: true, phones: { select: { tel: true } } } });
+  // OCR-6.3：兩邊都 canonical（舊資料可能帶括號／空白／小寫）
+  const ids = await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM guards WHERE upper(regexp_replace(hkid, '[^A-Za-z0-9]', '', 'g')) = ${canon} LIMIT 1`;
+  if (ids.length === 0) return [];
+  const g = await prisma.guard.findUnique({ where: { id: ids[0].id }, select: { tel: true, phones: { select: { tel: true } } } });
   if (!g) return [];
   return [...new Set([g.tel, ...g.phones.map((p) => p.tel)].filter((t): t is string => !!t && t.trim().length > 0))].slice(0, 8);
 }

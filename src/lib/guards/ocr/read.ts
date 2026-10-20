@@ -44,6 +44,8 @@ type ImagesBKind = "tiles" | "field_crops";
 export interface ReadOptions {
   /** 獨立來源電話（打字名單／已存 guards.tel／guard_phones）；電話 confirmed 要三讀一致**且**同其中一個正規化後相同 */
   independentPhones?: readonly string[] | null;
+  /** OCR-6.3：伺服器查到嘅已存電話——只用嚟比對 confirmed，絕不出現喺回應（candidates／reason 以外任何欄） */
+  compareOnlyPhones?: readonly string[] | null;
   /** 電話仲裁用盲讀（prompt 唔帶兩讀候選值）；預設 true */
   phoneBlind?: boolean;
   /** eval 用：結果帶電話三讀正規化值（`phone_reads`）供診斷分類；**唔係 API 回應欄位**（route 唔會輸出） */
@@ -298,7 +300,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   }
 
   const out: Partial<Record<OcrFieldKey, FieldResult>> = {};
-  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined, f === "address" && alsExtra ? [alsExtra] : undefined, f === "phone" ? (c.opts?.independentPhones ?? null) : undefined);
+  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined, f === "address" && alsExtra ? [alsExtra] : undefined, f === "phone" ? (c.opts?.independentPhones ?? null) : undefined, f === "phone" ? (c.opts?.compareOnlyPhones ?? null) : undefined);
   const byProvider: UsageByProvider = { claude: { promptTokens: 0, completionTokens: 0, calls: 0 }, deepseek: { promptTokens: 0, completionTokens: 0, calls: 0 } };
   const used: UsageEntry[] = [...c.priorUsage];
   if (c.rbFirst) used.push({ provider: providerOf(clients.b), promptTokens: c.rbFirst.promptTokens, completionTokens: c.rbFirst.completionTokens, truncated: !!c.rbFirst.truncated });
