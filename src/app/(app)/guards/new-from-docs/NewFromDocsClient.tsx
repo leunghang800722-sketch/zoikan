@@ -35,6 +35,8 @@ const REASON_MSG: Record<string, string> = {
   phone_format: "電話格式唔啱",
   phone_not_hk: "唔係香港 8 位電話",
   phone_gridline_suspect: "電話多咗一兩位，可能將印刷分格線睇成數字 1，請對住圖核對",
+  phone_digit_count: "電話位數唔係 8 位（可能多咗分格線），請對住圖核對",
+  phone_needs_three_way: "手寫電話未三次讀數一致，請對住圖核對先確認",
   name_zh_format: "中文姓名請只填中文字",
   name_en_format: "英文姓名格式唔啱",
   address_format: "地址太短",

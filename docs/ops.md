@@ -244,6 +244,12 @@ OCR-5.6 起，有 `DEEPSEEK_API_KEY` 時另跑 DeepSeek 段（三種文件各 1 
 
 **`GUARD_OCR_ARBITER`**（Zeabur env，預設 `1`）：分歧欄第三讀仲裁開關；`0`／`false`／`off`／`no` 關閉＝回到兩讀。成本：每份文件最多多 1 次 Claude 呼叫（只喺有分歧欄且唔係兩讀 confidence 都係 high 時（OCR-4.4）；地址欄只差形近字亦算分歧），用量計入 audit `guard_ocr_read` 嘅 `usage_by_provider.claude`，另有 `arbiter_calls`。冇 `CLAUDE_API_KEY`（純 DeepSeek 模式）自動冇仲裁。
 
+**OCR-6 手寫電話收緊（老闆 2026-10-20）**：只對 `phone` 欄，其他欄規則不變。背景：OCR 評估 102 人，電話 confirmed-but-wrong 5→7/36（2/3 仲裁放寬代價）。
+- `reconcile`：電話 `confirmed` 必須 **讀 A、讀 B、仲裁三者正規化後逐字相同**（容許空格／`+852`／連字號）＋valid（8 位、首位 2–9、冇分格線嫌疑）。2/3 一致（仲裁同其中一讀）→ `review`，`value` 預填一致嗰個值，`arbiter: agree_a|agree_b`，`reason: phone_needs_three_way`；兩讀相同但冇仲裁／仲裁 unclear／仲裁讀到另一個值 → `review`，`reason: phone_needs_three_way`（`value`＝兩讀值；`arbiter` 為 `unclear`／`independent`／冇）；三讀全唔同照舊 `reads_differ`。任何一讀（A、B、仲裁）去非數字後位數唔係 8（含分格線嫌疑 9–10 位）→ `review`，`reason: phone_digit_count`（分格線推算候選照樣入候選池、排前）。
+- `read.ts`：`disputedFields` 對 `phone` 永遠回 true（兩讀都有值即跑仲裁，即使兩讀一致或都 `high`）。**成本**：每份入職表（有電話欄）多一次 Claude 仲裁讀數（原本兩讀一致時唔跑）；仲裁 prompt 仍只問分歧欄，電話一致時候選淨一個值。冇仲裁 client（`GUARD_OCR_ARBITER=0`、純 DeepSeek 模式、冇全圖）→ 電話永遠 `review`（唔會 `confirmed`），人手覆核量上升，屬預期。
+- 前端 reason 文案：`phone_digit_count`、`phone_needs_three_way`。API 回應形狀不變（additive reason 值）。
+- 評估：`scripts/staff-import/eval-ocr.ts` 報表只存結果類別，唔存三讀原值，所以改動前後要各用真 API 跑一次同一 manifest 比 `phone` 欄 `confirmed 但錯`／`review` 數（`--dry` 合成 fixture 只驗流程）。
+
 **`GUARD_OCR_ALS`**（Zeabur env，預設 `1`＝開，老闆 2026-10-15 決定）：證件辨識（住址證明、入職表）嘅地址欄，喺兩讀完成後（仲裁之前）向香港政府 ALS（Address Lookup Service，`https://www.als.gov.hk/lookup`，免費、免 key）查一次標準地址，作為額外候選（chip 上有細字「政府地址庫」），**唔會自動 confirmed**。
 - **送出去嘅內容**：只有 地區／街道／門牌／屋邨／座／大廈 組成嘅查詢字串；**樓層、室號（15樓、A室、Flat A、15/F、Room 1203、G/F、舖、單位…）一律先剔走先送**（`hk-address.alsQueryFromParts`，送出前再斷言一次；大廈名本身含「樓」字嘅部件亦唔送）；永遠唔送姓名、電話或其他欄位。查詢資訊太少（冇街道／屋邨／大廈）就唔查。ALS 回嚟嘅標準地址由本地拼返樓層室號，樓層室號從來冇出過公司。
 - **呼叫規則**：每份文件最多 1 次、每次辨識請求最多 2 份文件（住址證明＋入職表）、逾時 3 秒；429／5xx／網絡錯誤靜靜略過（不影響辨識）；Score < 60 或冇結果就冇候選。
