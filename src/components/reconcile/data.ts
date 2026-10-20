@@ -22,7 +22,8 @@ function cached<T>(key: string, load: () => Promise<T | null>): Promise<T | null
 export function loadGuardDirectory(): Promise<{ rows: GuardLite[]; total: number } | null> {
   return cached("guards:all", async () => {
     // P3-2.x（階段 1 驗收員補充）：`take=500` 會喺在職保安員 >500 時靜靜截斷——逐頁拉齊。
-    const res = await apiGetAll<GuardLite>("/api/guards");
+    // AI-PII-2.3：名冊包括離職（inactive）保安員——「相似保安員」提示可以認到離職者（UI 標「已離職」）
+    const res = await apiGetAll<GuardLite>("/api/guards?include_inactive=1");
     return res.ok ? { rows: res.data.rows, total: res.data.total } : null;
   });
 }

@@ -71,3 +71,35 @@ export async function backfillSiteStaffNumbers(siteIds: readonly string[]): Prom
   res.backfilled = res.written_direct + res.written_side_table;
   return res;
 }
+
+/** 改體系後重推導會清走嘅「自動推導」歸屬來源（手動／payload／roster_file／longterm 唔郁）。 */
+const AUTO_SOURCES = ["site_scheme", "backfill:range", "backfill:sole"] as const;
+
+export interface ReinferResult extends SiteBackfillResult {
+  /** 未鎖月被清走歸屬嘅更次數 */
+  cleared: number;
+  /** 已鎖月、歸屬來源係自動推導但**冇郁**嘅更次數（shift_records 本身 + 側表）——要人手處理 */
+  locked_kept: number;
+}
+
+/**
+ * SITE-SCHEME-1.1：盤改咗 staff_scheme → 對該盤 `staff_number_source IN (site_scheme, backfill:range, backfill:sole)` 且**未鎖月**嘅更次
+ * 清走歸屬（三欄 NULL，raw SQL，唔掂金額、唔觸發 updated_at）再按新體系重推；已鎖月（shift_records 同側表）唔郁，回 `locked_kept` 俾 caller 出提示。
+ */
+export async function reinferSiteStaffNumbers(siteId: string): Promise<ReinferResult> {
+  const cleared = await prisma.$executeRaw(
+    Prisma.sql`UPDATE shift_records SET staff_number_id = NULL, staff_scheme = NULL, staff_number_source = NULL
+      WHERE site_id = ${siteId} AND staff_number_source IN (${Prisma.join([...AUTO_SOURCES])})
+        AND NOT EXISTS (SELECT 1 FROM month_closes mc WHERE mc.month = date_trunc('month', shift_records.work_date)::date AND mc.locked_at IS NOT NULL)`,
+  );
+  const lk = await prisma.$queryRaw<{ n: bigint | number }[]>(Prisma.sql`
+    SELECT (
+      (SELECT COUNT(*) FROM shift_records sr WHERE sr.site_id = ${siteId} AND sr.staff_number_source IN (${Prisma.join([...AUTO_SOURCES])})
+         AND EXISTS (SELECT 1 FROM month_closes mc WHERE mc.month = date_trunc('month', sr.work_date)::date AND mc.locked_at IS NOT NULL))
+      +
+      (SELECT COUNT(*) FROM shift_record_staff_attributions a JOIN shift_records sr ON sr.id = a.shift_record_id
+        WHERE sr.site_id = ${siteId} AND a.source IN ('backfill:range', 'backfill:sole'))
+    ) AS n`);
+  const bf = await backfillSiteStaffNumbers([siteId]);
+  return { ...bf, cleared, locked_kept: Number(lk[0]?.n ?? 0) };
+}

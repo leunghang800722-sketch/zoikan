@@ -50,6 +50,19 @@ import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type
 
 export const DEFAULT_MARGIN_THRESHOLD_PCT = 8;
 
+/** 排序：只用穩定業務欄（code→label→otHours→kind→revenue→cost→shifts），**唔用 UUID**（uuid 每次 DB 唔同，會令 snapshot 次序漂移）。 */
+function byStableShiftTypeKey(a: GrossMarginShiftTypeRow, b: GrossMarginShiftTypeRow): number {
+  return (
+    a.code.localeCompare(b.code) ||
+    (a.label ?? "").localeCompare(b.label ?? "") ||
+    (a.otHours ?? -1) - (b.otHours ?? -1) ||
+    a.kind.localeCompare(b.kind) ||
+    a.revenue - b.revenue ||
+    a.cost - b.cost ||
+    a.shifts - b.shifts
+  );
+}
+
 export type GrossMarginShiftTypeRow = {
   shiftTypeId: string | null;
   code: string;
@@ -634,7 +647,7 @@ async function buildGrossMarginUncached(month: Date, opts?: { thresholdPct?: num
       billingModel: site.billingModel,
       isMonthlyFee,
       inP0MonthlyClose: base !== undefined,
-      shiftTypes: shiftTypesOut.sort((a, b) => a.code.localeCompare(b.code) || (a.shiftTypeId ?? "").localeCompare(b.shiftTypeId ?? "") || a.kind.localeCompare(b.kind)), // tie-breaker：code → id → kind，避免同 code 時次序隨 DB／Map 漂移（snapshot 穩定）
+      shiftTypes: shiftTypesOut.sort(byStableShiftTypeKey),
       components,
       referralFee,
       longtermSalaryAllocated,
