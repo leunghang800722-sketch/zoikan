@@ -7,7 +7,7 @@ import { wahaApiKey, wahaBaseUrl, wahaSession } from "./config";
 
 const TIMEOUT_MS = 5000;
 /** groups 專用 timeout（群組多時 WAHA 慢；session status 維持 5s）。 */
-export const GROUPS_TIMEOUT_MS = 20000;
+const GROUPS_TIMEOUT_MS = 20000;
 
 export type WahaResult<T> = { ok: true; data: T } | { ok: false; error: "not_configured" | "unreachable" | "timeout" | "http_error" | "bad_response"; status?: number };
 

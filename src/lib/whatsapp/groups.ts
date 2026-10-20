@@ -64,7 +64,7 @@ interface SyncSummary {
   from_messages: number;
 }
 
-export type WahaSyncError = Extract<WahaResult<never>, { ok: false }>["error"];
+type WahaSyncError = Extract<WahaResult<never>, { ok: false }>["error"];
 /** WA-6：WAHA 唔可達／回錯時照樣由訊息補群，回 ok＋waha_error（錯誤碼，唔含 URL／key）。 */
 export interface WahaSyncFailure {
   kind: WahaSyncError;
@@ -77,7 +77,7 @@ export interface WahaSyncFailure {
 export type SyncResult = { ok: true; summary: SyncSummary; waha_error?: WahaSyncFailure };
 
 /** WA-6：WAHA 失敗分類（真正原因唔再壓成「連唔到 WAHA」）。 */
-export function classifyWahaFailure(kind: WahaSyncError, status?: number): WahaSyncFailure {
+function classifyWahaFailure(kind: WahaSyncError, status?: number): WahaSyncFailure {
   const base = status !== undefined ? { status } : {};
   switch (kind) {
     case "timeout":
@@ -93,9 +93,9 @@ export function classifyWahaFailure(kind: WahaSyncError, status?: number): WahaS
   }
 }
 
-export const UNNAMED_GROUP_PREFIX = "未命名群組";
+const UNNAMED_GROUP_PREFIX = "未命名群組";
 /** 由訊息補群嘅預設群名：「未命名群組（尾 6 位 jid）」。 */
-export function unnamedGroupLabel(jid: string): string {
+function unnamedGroupLabel(jid: string): string {
   const bare = jid.replace(/@g\.us$/, "");
   return `${UNNAMED_GROUP_PREFIX}（${bare.slice(-6)}）`;
 }

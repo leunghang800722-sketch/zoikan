@@ -1,6 +1,6 @@
 // 長工糧頁逐人結算篩選（純函數）。
 import { describe, it, expect } from "vitest";
-import { filterCounts, filterLines, isLeaverLine, type FilterableLine } from "@/lib/longterm-payroll/line-filter";
+import { filterCounts, filterLines, isLeaverLine, runWarnGuardSet, type FilterableLine } from "@/lib/longterm-payroll/line-filter";
 
 const L = (over: Partial<FilterableLine> & { id: string }): FilterableLine & { id: string } => ({ work_days: 20, notes_json: [], ...over });
 const lines = [
@@ -29,5 +29,15 @@ describe("longterm-payroll line-filter", () => {
     expect(ids("warn")).toEqual(["d"]);
     expect(filterCounts(lines)).toEqual({ all: 7, leaver: 3, zero: 2, warn: 1 });
     expect(filterCounts([])).toEqual({ all: 0, leaver: 0, zero: 0, warn: 0 });
+  });
+
+  it("有警告：run 層 warnings_by_guard（只 code）按 guard_id 併入計數同篩選；空 codes 唔算", () => {
+    const ls = [L({ id: "a", guard_id: "ga" }), L({ id: "b", guard_id: "gb", notes_json: ["⚠ 警示"] }), L({ id: "c", guard_id: "gc" })];
+    const warn = runWarnGuardSet([{ guard_id: "ga", codes: ["rehire_detected", "two_segments_in_month"] }, { guard_id: "gx", codes: [] }, { guard_id: "gc", codes: [] }]);
+    expect([...warn]).toEqual(["ga"]);
+    expect(filterLines(ls, "warn", warn).map((x) => x.id)).toEqual(["a", "b"]);
+    expect(filterCounts(ls, warn).warn).toBe(2);
+    expect(filterCounts(ls).warn).toBe(1); // 冇 run 警告資料：只睇 notes
+    expect(runWarnGuardSet(undefined).size).toBe(0);
   });
 });

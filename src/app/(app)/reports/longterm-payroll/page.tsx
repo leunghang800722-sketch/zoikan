@@ -26,7 +26,7 @@ import { BankReconcilePanel } from "./BankReconcilePanel";
 import { AttendanceFixPanel } from "./AttendanceFixPanel";
 import { ContractCreateForm } from "./ContractCreateForm";
 import { contractErrorMessage, contractPatchBody, dateInputValue } from "@/lib/longterm-payroll/contract-form";
-import { filterCounts, filterLines, isLeaverLine, isZeroDayLine, type LineFilter } from "@/lib/longterm-payroll/line-filter";
+import { filterCounts, filterLines, runWarnGuardSet, isLeaverLine, isZeroDayLine, type LineFilter } from "@/lib/longterm-payroll/line-filter";
 import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
 import { VoidMonthPanel } from "./VoidMonthPanel";
 import { LeaverAdwCard } from "./LeaverAdwCard";
@@ -73,6 +73,8 @@ interface PayrollMonthDTO {
   locked: boolean;
   run: { id: string; status: string; created_at: string } | null;
   lines: LineDTO[];
+  /** LT-UI：run 層逐人警告代碼（只 code） */
+  warnings_by_guard?: Array<{ guard_id: string; codes: string[] }>;
   totals: { gross_total?: number; autopay_total?: number; mpf_ee_total?: number; mpf_er_total?: number; guard_count?: number } | null;
   prev_month: string | null;
 }
@@ -172,8 +174,9 @@ export default function LongtermPayrollPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [expandedGuard, setExpandedGuard] = useState<string | null>(null);
   const [lineFilter, setLineFilter] = useState<LineFilter>("all");
-  const lineCounts = filterCounts(payroll?.lines ?? []);
-  const shownLines = filterLines(payroll?.lines ?? [], lineFilter);
+  const runWarn = runWarnGuardSet(payroll?.warnings_by_guard);
+  const lineCounts = filterCounts(payroll?.lines ?? [], runWarn);
+  const shownLines = filterLines(payroll?.lines ?? [], lineFilter, runWarn);
   const [autopayPreview, setAutopayPreview] = useState<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string; locked_month_warning?: string | null } | null>(null);
   const [confirmLocked, setConfirmLocked] = useState(false);
 

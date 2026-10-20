@@ -176,6 +176,8 @@ export interface BuildLongtermPayrollResult {
   lines: LongtermPayrollLineResult[];
   totals: LongtermPayrollTotals;
   warnings: string[];
+  /** LT-UI：逐人警告代碼（只 code，唔含姓名／日期）——rehire_detected／card_guard_date_mismatch／two_segments_in_month／segment_starts_after_month／rehire_suspected。 */
+  warningsByGuard?: Array<{ guardId: string; codes: string[] }>;
 }
 
 /** run 合計。`visaPassthrough`＝簽證形式長工（§14 規則 12）嘅部分——
@@ -295,6 +297,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
   const { start, end } = monthRange(month);
   const monthDaysCount = daysInMonth(start.getUTCFullYear(), start.getUTCMonth() + 1);
   const warnings: string[] = [];
+  const warnCodes = new Map<string, Set<string>>();
+  const addWarnCode = (guardId: string, code: string) => (warnCodes.get(guardId) ?? warnCodes.set(guardId, new Set()).get(guardId)!).add(code);
 
   const contracts = await client.guardLongtermContract.findMany({
     where: { voidedAt: null, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] },
@@ -410,13 +414,17 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
 
     // EMP-P3：聘用段入職／離職日——2026-10 起讀 MG 卡鏈（fallback 人卡兩欄）；生效前月份完全讀人卡（同舊行為一致）
     const period = resolveLongtermPeriod({ id: guardId, hireDate: guard.hireDate, leaveDate: guard.leaveDate }, cardsByGuard.get(guardId) ?? [], start, longtermSchemeCodes);
-    for (const w of period.warnings) warnings.push(periodWarningText(w, guard.nameZh));
+    for (const w of period.warnings) {
+      warnings.push(periodWarningText(w, guard.nameZh));
+      addWarnCode(guardId, w.code);
+    }
     const hireEff = period.start;
     const leaveEff = period.end;
     // EMP-P3 警告先行（任何月份，唔改數字）：人卡離職日早過現行合約鏈起點＝疑似再入職而人卡離職日未清
     if (!period.rehire && guard.leaveDate) {
       const chainStartForWarn = firstContractByGuard.get(guardId, end);
       if (chainStartForWarn && toUtcDate(guard.leaveDate).getTime() < chainStartForWarn.getTime()) {
+        addWarnCode(guardId, "rehire_suspected");
         warnings.push(`[rehire_suspected] ${guard.nameZh}（${guardId}）：人卡離職日 ${iso(toUtcDate(guard.leaveDate))} 早過現行合約鏈起點 ${iso(chainStartForWarn)}——疑似再入職，人卡離職日未清（${monthLabel(start)} 數字未受影響）`);
       }
     }
@@ -792,7 +800,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     },
   };
 
-  return { month: start, daysInMonth: monthDaysCount, lines, totals, warnings };
+  const warningsByGuard = [...warnCodes].map(([guardId, codes]) => ({ guardId, codes: [...codes].sort() })).sort((a, b) => a.guardId.localeCompare(b.guardId));
+  return { month: start, daysInMonth: monthDaysCount, lines, totals, warnings, warningsByGuard };
 }
 
 export interface RecomputeLongtermPayrollResult {
@@ -830,7 +839,8 @@ export async function recomputeLongtermPayroll(month: Date, actorUserId: string,
           month: monthStartDate,
           status: "computed",
           createdBy: actorUserId,
-          totalsJson: built.totals as unknown as Prisma.InputJsonValue,
+          // LT-UI：totals 之外 additive 存逐人警告代碼（GET /api/longterm/payroll/:month 拆出做 warnings_by_guard，唔喺 totals 回傳）
+          totalsJson: { ...built.totals, warningsByGuard: built.warningsByGuard ?? [] } as unknown as Prisma.InputJsonValue,
         },
       });
 
