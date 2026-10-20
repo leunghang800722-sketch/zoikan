@@ -179,3 +179,17 @@ describe("對拍腳本 longterm-card-dates-diff（只讀）", () => {
     expect(await prisma.guard.findMany({ orderBy: { id: "asc" }, select: { id: true, hireDate: true, leaveDate: true } })).toEqual(before); // 只讀
   });
 });
+
+describe("對拍腳本 P3.2：resigned_without_valid_to", () => {
+  it("former＋resigned 但冇 valid_to 嘅卡列出 guardId＋cardId；有 valid_to 或 replaced 唔列", async () => {
+    const { diffLongtermCardDates } = await import("../scripts/db/longterm-card-dates-diff");
+    const b = await base();
+    const x = await guard("測試舊資料", D(1, 1, 2023));
+    await contract(b, x.id, D(1, 1, 2023));
+    const bad = await mg(x.id, "MG90711", { status: "former", validFrom: D(1, 1, 2023), endReason: "resigned" });
+    await mg(x.id, "MG90712", { status: "former", validFrom: D(1, 1, 2024), validTo: D(2, 2, 2024), endReason: "resigned" });
+    await mg(x.id, "MG90713", { status: "former", validFrom: D(3, 3, 2024), endReason: "replaced" });
+    const out = await diffLongtermCardDates(D(11, 1));
+    expect(out.resigned_without_valid_to).toEqual([{ guard_id: x.id, card_id: (bad as { id: string }).id }]);
+  });
+});

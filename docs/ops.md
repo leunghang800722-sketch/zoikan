@@ -514,5 +514,6 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 離職再入職：第二段開新 MG 卡（唔好改舊卡）——舊卡「結束」填離職日＋原因 resigned，再開新卡填入職日；系統由卡鏈偵測（有更早、resigned 嘅鏈）→ 當第二段聘用出糧（warning `rehire_detected`），病假／年假以新段 0 開局。換號（replaces_current）唔係再入職：新卡日期欄叫「換號生效日」，唔會改寫入職日。
 - 人卡表格唔可以再直接改有日期 current MG 卡嘅人嘅入職／離職日（409 `use_staff_number_card`）——要喺工號卡「結束卡」（離職日＋原因）或開新卡。Maxwell 離職名單最後一日若屬上一段（早過現行聘用段起點）會警告 `leaver_date_before_segment` 並唔結束卡。
 - 鏡像規則見 api.md「EMP-P3」：只睇長工體系卡；卡全部冇日期就唔郁人卡值。
+- P3.2：Maxwell 離職名單只睇「最後一日」早過卡 valid_from／人卡 hire／合約鏈起點先當上一段（唔結束卡）；導入入職日差幾日唔阻結束卡（只出 `[import_hire_date_differs]` 提示）。鏡像改咗人卡日期會喺工號卡操作後即時顯示 hint（`hire_date_mirrored`／`leave_date_mirrored`／`leave_date_overwritten_by_card`）；**未鎖月份重算會跟新人卡值，已鎖月不變（接受）**。上線前對拍腳本睇 `resigned_without_valid_to`，補晒 valid_to 先令再入職判斷準確。
 - 警告：長工糧 `warnings` 會出 `[rehire_suspected]`（任何月份）、`[card_guard_date_mismatch]`／`[rehire_detected]`（10 月起）。
 

@@ -52,8 +52,8 @@ describe("EMP-P3 鏡像（經真實寫入路徑 POST／PATCH／換號）", () =>
 
   it("T3 鏈頭有日期 → 取鏈頭；換號後鏈頭日期仍然係入職日（換號新卡日期唔改寫）", async () => {
     const g = fx.guardB.id;
-    const first = (await (await post(g, { scheme: "MG", number: "MG99721", valid_from: "2020-01-01" })).json()) as { id: string };
-    void first;
+    const first = (await (await post(g, { scheme: "MG", number: "MG99721", valid_from: "2020-01-01" })).json()) as { id: string; employment_warnings?: string[] };
+    expect(first.employment_warnings?.some((w) => w.startsWith("hire_date_mirrored"))).toBe(true); // P3.2 S1：鏡像改咗人卡入職日 → 回 hint
     expect(dayOf((await gOf(g)).hireDate)).toBe("2020-01-01");
     await post(g, { scheme: "MG", number: "MG99722", valid_from: "2026-10-15", replaces_current: true });
     expect(dayOf((await gOf(g)).hireDate)).toBe("2020-01-01");
@@ -83,7 +83,19 @@ describe("EMP-P3 鏡像（經真實寫入路徑 POST／PATCH／換號）", () =>
     const r = await post(g, { scheme: "U", number: "U99742" }); // 之後任何工號卡寫入（例如加 U 卡）
     expect(r.status).toBe(201);
     expect(dayOf((await gOf(g)).leaveDate)).toBe("2026-12-31");
-    expect(((await r.json()) as { employment_warnings?: string[] }).employment_warnings?.[0]).toContain("leave_date_vs_current_card");
+    expect(((await r.json()) as { employment_warnings?: string[] }).employment_warnings?.some((w) => w.startsWith("leave_date_vs_current_card"))).toBe(true); // POST U 卡 response 有帶（P3.2 S2）
+  });
+
+  it("P3.2 S5：全部 former 而人卡離職日遲過最遲 valid_to → 被卡蓋走，回 leave_date_overwritten_by_card＋leave_date_mirrored", async () => {
+    const g = fx.guardA.id;
+    const a = (await (await post(g, { scheme: "MG", number: "MG99761", valid_from: "2020-01-01" })).json()) as { id: string };
+    await prisma.guard.update({ where: { id: g }, data: { leaveDate: D("2022-01-01") } }); // 人手填較遲離職日
+    const r = await patch(g, a.id, { status: "former", valid_to: "2021-06-30", end_reason: "resigned" });
+    expect(r.status).toBe(200);
+    const w = ((await r.json()) as { employment_warnings?: string[] }).employment_warnings ?? [];
+    expect(w.some((x) => x.startsWith("leave_date_overwritten_by_card"))).toBe(true);
+    expect(w.some((x) => x.startsWith("leave_date_mirrored"))).toBe(true);
+    expect(dayOf((await gOf(g)).leaveDate)).toBe("2021-06-30");
   });
 
   it("M4b 人卡 PATCH 改 hire_date／leave_date：有帶日期嘅 current MG 卡 → 409 use_staff_number_card；值冇變、冇 MG 卡、卡冇日期 → 照舊接受", async () => {
@@ -95,7 +107,9 @@ describe("EMP-P3 鏡像（經真實寫入路徑 POST／PATCH／換號）", () =>
     await prisma.guardStaffNumber.updateMany({ where: { guardId: g }, data: { validFrom: D("2020-01-01") } });
     const blocked = await patchGuard(g, { leave_date: "2027-01-01" });
     expect(blocked.status).toBe(409);
-    expect(((await blocked.json()) as { error: string }).error).toBe("use_staff_number_card");
+    const bj = (await blocked.json()) as { error: string; message?: string };
+    expect(bj.error).toBe("use_staff_number_card");
+    expect(bj.message).toContain("鏈頭（最早一張）卡"); // P3.2 S3
     expect((await patchGuard(g, { hire_date: "2024-04-04", leave_date: "2026-12-31" })).status).toBe(200); // 值冇變（成個 form 一齊送）
     expect(dayOf((await gOf(g)).leaveDate)).toBe("2026-12-31");
   });

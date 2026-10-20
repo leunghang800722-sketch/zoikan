@@ -233,18 +233,22 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
       if (isMgRow) {
         const mgCards = await tx.guardStaffNumber.findMany({ where: { guardId: guard.id, scheme: "MG" }, orderBy: { createdAt: "asc" } });
         const currentMg = mgCards.find((c) => c.status === "current") ?? null;
-        // EMP-P3.1：離職名單嘅最後一日（或導入入職日）早過「將被結束嗰張卡 valid_from」「人卡 hire_date」「現行合約鏈起點」任何一個＝屬於上一段聘用（再入職者），
+        // EMP-P3.1／P3.2：離職名單嘅最後一日早過「將被結束嗰張卡 valid_from」「人卡 hire_date」「現行合約鏈起點」任何一個＝屬於上一段聘用（再入職者），
         // 唔結束張卡，加 summary 警告 leaver_date_before_segment（guardId＋日期），交人手處理。
         let closeDay: Date | null = lastDay;
         if (lastDay) {
           const segs = await tx.guardLongtermContract.findMany({ where: { guardId: guard.id, voidedAt: null }, select: { effectiveFrom: true, effectiveTo: true }, orderBy: { effectiveFrom: "asc" } });
           const chainStart = continuousChainStart(segs.map((c) => ({ effectiveFrom: c.effectiveFrom, effectiveTo: c.effectiveTo })), new Date());
           const refs = [currentMg?.validFrom ?? null, guard.hireDate, chainStart ?? null].filter((d): d is Date => !!d);
-          const hit = refs.find((r) => lastDay.getTime() < r.getTime() || (!!commence && commence.getTime() < r.getTime()));
+          // EMP-P3.2：只睇「最後一日」早過參考日（屬上一段）；導入入職日同人卡／卡差幾日好常見（續約隔幾日、手key差），唔阻結束卡，最多出非阻擋提示
+          const hit = refs.find((r) => lastDay.getTime() < r.getTime());
           if (hit) {
-            summary.warnings.push(`[leaver_date_before_segment] guardId=${guard.id} lastDay=${lastDay.toISOString().slice(0, 10)} segmentRef=${hit.toISOString().slice(0, 10)}：離職日（或導入入職日）早過現行聘用段起點，屬上一段聘用，唔結束 MG 卡`);
+            summary.warnings.push(`[leaver_date_before_segment] guardId=${guard.id} lastDay=${lastDay.toISOString().slice(0, 10)} segmentRef=${hit.toISOString().slice(0, 10)}：離職日早過現行聘用段起點，屬上一段聘用，唔結束 MG 卡`);
             closeDay = null;
             leaverStale = true;
+          } else if (commence) {
+            const differs = refs.find((r) => commence.getTime() < r.getTime());
+            if (differs) summary.warnings.push(`[import_hire_date_differs] guardId=${guard.id} importHire=${commence.toISOString().slice(0, 10)} segmentRef=${differs.toISOString().slice(0, 10)}：導入入職日早過卡／人卡／合約鏈日期（只提示，仍照離職日結束卡）`);
           }
         }
         const taken = await tx.guardStaffNumber.findUnique({ where: { number: mwRaw }, select: { id: true, guardId: true } });

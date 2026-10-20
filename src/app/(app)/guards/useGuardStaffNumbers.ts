@@ -6,6 +6,12 @@ import { apiGet, apiPatch, apiPost } from "@/lib/ui/api-client";
 import type { ConfirmOptions } from "@/components/ui/ConfirmDialog";
 import { emptyStaffNumberForm, type GuardRow, type StaffNumberRow } from "./guards-types";
 
+/** EMP-P3.2：後端 `employment_warnings`（"code：說明"）→ 提示文字（取說明段），附喺 notice 後面；冇就空字串。 */
+function employmentHintText(w: string[] | undefined | null): string {
+  if (!w || w.length === 0) return "";
+  return `（提示：${w.map((x) => x.split("：").slice(1).join("：") || x).join("；")}）`;
+}
+
 export function useGuardStaffNumbers({
   editingId,
   askConfirm,
@@ -57,7 +63,7 @@ export function useGuardStaffNumbers({
     setStaffNumberError(null);
     const scheme = staffNumberForm.scheme === "其他" ? staffNumberForm.schemeOther.trim().toUpperCase() : staffNumberForm.scheme;
     const hist = staffNumberForm.historical;
-    const res = await apiPost<{ converted_former?: { number: string } | null }>(`/api/guards/${editingId}/staff-numbers`, {
+    const res = await apiPost<{ converted_former?: { number: string } | null; employment_warnings?: string[] }>(`/api/guards/${editingId}/staff-numbers`, {
       scheme,
       number: staffNumberForm.number,
       valid_from: staffNumberForm.valid_from || undefined,
@@ -73,11 +79,11 @@ export function useGuardStaffNumbers({
     }
     setStaffNumberForm({ ...emptyStaffNumberForm, scheme: staffNumberForm.scheme });
     setNotice(
-      res.data.converted_former
+      (res.data.converted_former
         ? `已新增 ${scheme} 號，原本嘅 ${res.data.converted_former.number} 已標示為被取代（換號）`
         : hist
           ? `已補 ${scheme} 歷史號`
-          : `已新增 ${scheme} 號`,
+          : `已新增 ${scheme} 號`) + employmentHintText(res.data.employment_warnings),
     );
     await loadStaffNumbers(editingId);
     await reloadList(); // 令列表 chips 即時反映新現用號
@@ -115,13 +121,13 @@ export function useGuardStaffNumbers({
     }
     setNumberActionBusy(true);
     setNumberActionError(null);
-    const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${row.id}`, { status: nextStatus });
+    const res = await apiPatch<{ employment_warnings?: string[] }>(`/api/guards/${editingId}/staff-numbers/${row.id}`, { status: nextStatus });
     setNumberActionBusy(false);
     if (!res.ok) {
       setNumberActionError(res.message);
       return;
     }
-    setNotice(`已將 ${row.number} 改返現用`);
+    setNotice(`已將 ${row.number} 改返現用${employmentHintText(res.data.employment_warnings)}`);
     await loadStaffNumbers(editingId);
     await reloadList();
     // 同 onAddStaffNumber() 一致理由——staff_no／staff_no_mw 可能經
@@ -139,14 +145,14 @@ export function useGuardStaffNumbers({
     }
     setNumberActionBusy(true);
     setNumberActionError(null);
-    const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${numberEndingId}`, { status: "former", valid_to: numberEndForm.valid_to, end_reason: numberEndForm.end_reason });
+    const res = await apiPatch<{ employment_warnings?: string[] }>(`/api/guards/${editingId}/staff-numbers/${numberEndingId}`, { status: "former", valid_to: numberEndForm.valid_to, end_reason: numberEndForm.end_reason });
     setNumberActionBusy(false);
     if (!res.ok) {
       setNumberActionError(res.message);
       return;
     }
     setNumberEndingId(null);
-    setNotice("已結束呢張工號卡");
+    setNotice(`已結束呢張工號卡${employmentHintText(res.data.employment_warnings)}`);
     await loadStaffNumbers(editingId);
     await reloadList();
     const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
@@ -179,7 +185,7 @@ export function useGuardStaffNumbers({
     // 應修 2（Opus 驗收第二輪）：`note`／`valid_from`／`valid_to` 而家
     // 一律送（`|| null`），唔再「空就唔送」——`GuardStaffNumberUpdateSchema`
     // 已經改用 nullable schema，用戶打空咗想清返呢三個欄要真係清得走。
-    const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${numberEditingId}`, {
+    const res = await apiPatch<{ employment_warnings?: string[] }>(`/api/guards/${editingId}/staff-numbers/${numberEditingId}`, {
       number: numberEditForm.number,
       valid_from: numberEditForm.valid_from || null,
       valid_to: numberEditForm.valid_to || null,
@@ -192,7 +198,7 @@ export function useGuardStaffNumbers({
       return;
     }
     setNumberEditingId(null);
-    setNotice("已更新員工編號");
+    setNotice(`已更新員工編號${employmentHintText(res.data.employment_warnings)}`);
     await loadStaffNumbers(editingId);
     await reloadList();
     const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);

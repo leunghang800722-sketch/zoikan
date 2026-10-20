@@ -111,7 +111,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       if (changed) {
         const ltCodes = [...(await loadStaffSchemes()).values()].filter((x) => x.isLongterm).map((x) => x.code);
         const dated = ltCodes.length ? await prisma.guardStaffNumber.findFirst({ where: { guardId: id, status: "current", scheme: { in: ltCodes }, OR: [{ validFrom: { not: null } }, { validTo: { not: null } }] }, select: { id: true } }) : null;
-        if (dated) throw new ApiError(409, "use_staff_number_card", "呢個人有帶日期嘅現用長工（MG）工號卡，入職／離職日要喺工號卡改：結束卡請填離職日＋原因，再入職請開新卡");
+        if (dated) throw new ApiError(409, "use_staff_number_card", "呢個人有帶日期嘅現用長工（MG）工號卡，入職／離職日要喺工號卡改：請改鏈頭（最早一張）卡嘅入職日；換號卡嘅生效日唔影響入職日。結束卡請填離職日＋原因，再入職請開新卡");
       }
     }
     // WP-GUARD-FIX（老闆 2026-09-25 要求）：別名唔可以等於「呢次 PATCH

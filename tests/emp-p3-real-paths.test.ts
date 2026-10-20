@@ -156,3 +156,49 @@ describe("EMP-P3.1 M3 Maxwell 離職名單 vs 再入職者", () => {
     expect(r.lines.find((l) => l.guardId === g.id)).toBeDefined(); // 10 月冇整行跳過
   });
 });
+
+describe("EMP-P3.2 M1' 離職名單：導入入職日同卡／人卡／合約鏈日期有差都要結束卡", () => {
+  const setup = async () => {
+    await clearAll();
+    const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
+    const actor = (await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "t" } })).id;
+    await prisma.staffScheme.upsert({ where: { code: "MG" }, update: { isLongterm: true }, create: { code: "MG", labelZh: "MG", isLongterm: true, isFrontline: false, sort: 3 } });
+    const site = await prisma.site.create({ data: { canonicalName: `測試P32-${Math.random().toString(36).slice(2, 7)}`, clientName: "測試客", billingModel: "per_shift", createdBy: "t" } });
+    const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "t" } });
+    const b07 = await prisma.broker.create({ data: { code: `T-B07-${Math.random().toString(36).slice(2, 6)}`, name: "測試內部長工桶", kind: "internal_longterm", settlementType: "salary", createdBy: "t" } });
+    const work = async (guardId: string, from: number, to: number) => {
+      for (let d = from; d <= to; d++) await prisma.shiftRecord.create({ data: { workDate: D(10, d), siteId: site.id, shiftTypeId: st.id, guardId, settlementBrokerId: b07.id, operationalBrokerId: b07.id, recordType: "shift", createdBy: "t" } });
+    };
+    return { actor, work };
+  };
+  it("情境 A：人卡 hire 2019-05-03、Maxwell 入職 2019-05-01（差 2 日），最後一日 2026-10-15 → 卡結束、leave 補上、10 月 isLeaver=true", async () => {
+    const { actor, work } = await setup();
+    const g = await prisma.guard.create({ data: { nameZh: "測試離職己", employmentType: "longterm_autopay", hireDate: D(5, 3, 2019), createdBy: "t" } });
+    await prisma.guardLongtermContract.create({ data: { guardId: g.id, monthlySalary: 15500, effectiveFrom: D(5, 3, 2019), effectiveTo: null, annualLeaveDays: 7, source: "manual", createdBy: actor } });
+    await prisma.guardStaffNumber.create({ data: { guardId: g.id, scheme: "MG", number: "MG99851", status: "current", validFrom: D(5, 3, 2019) } });
+    const s = await importMaxwellContracts(await wb([{ staffNo: "MG99851", name: "測試離職己", basic: 15500, commencement: "2019-05-01", lastDay: "2026-10-15" }]), actor, null);
+    const card = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { number: "MG99851" } });
+    expect([card.status, card.endReason, dayOf(card.validTo)]).toEqual(["former", "resigned", "2026-10-15"]);
+    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).leaveDate)).toBe("2026-10-15");
+    expect(s.warnings.some((w) => w.includes("[leaver_date_before_segment]") && w.includes(g.id))).toBe(false);
+    expect(s.warnings.some((w) => w.includes("[import_hire_date_differs]") && w.includes(g.id))).toBe(true); // 只係提示
+    await work(g.id, 1, 15);
+    const line = (await buildLongtermPayrollInputs(OCT)).lines.find((l) => l.guardId === g.id);
+    expect(line?.isLeaver).toBe(true);
+  });
+  it("情境 B：合約續約隔 3 日令鏈起點 2025-01-04 遲過入職 2019-05-01，最後一日 2026-10-15 → 卡結束、leave 補上、isLeaver=true", async () => {
+    const { actor, work } = await setup();
+    const g = await prisma.guard.create({ data: { nameZh: "測試離職庚", employmentType: "longterm_autopay", hireDate: D(5, 1, 2019), createdBy: "t" } });
+    await prisma.guardLongtermContract.create({ data: { guardId: g.id, monthlySalary: 15000, effectiveFrom: D(5, 1, 2019), effectiveTo: D(12, 31, 2024), annualLeaveDays: 7, source: "manual", createdBy: actor } });
+    await prisma.guardLongtermContract.create({ data: { guardId: g.id, monthlySalary: 15500, effectiveFrom: D(1, 4, 2025), effectiveTo: null, annualLeaveDays: 7, source: "manual", createdBy: actor } });
+    await prisma.guardStaffNumber.create({ data: { guardId: g.id, scheme: "MG", number: "MG99852", status: "current" } }); // 生產現狀：冇日期
+    const s = await importMaxwellContracts(await wb([{ staffNo: "MG99852", name: "測試離職庚", basic: 15500, commencement: "2019-05-01", lastDay: "2026-10-15" }]), actor, null);
+    const card = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { number: "MG99852" } });
+    expect([card.status, card.endReason, dayOf(card.validTo)]).toEqual(["former", "resigned", "2026-10-15"]);
+    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).leaveDate)).toBe("2026-10-15");
+    expect(s.warnings.some((w) => w.includes("[leaver_date_before_segment]") && w.includes(g.id))).toBe(false);
+    await work(g.id, 1, 15);
+    const line = (await buildLongtermPayrollInputs(OCT)).lines.find((l) => l.guardId === g.id);
+    expect(line?.isLeaver).toBe(true);
+  });
+});

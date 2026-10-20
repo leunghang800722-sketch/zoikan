@@ -2916,6 +2916,8 @@ WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W
 
 **Maxwell 導入**（`import-service.ts`）：(a) 冇 MG 卡 → 開 MG 卡（`source=import:maxwell`、`valid_from`＝導入入職日）；(b) 舊 MG 卡全部已結束而導入入職日遲過最後一張 `valid_to` → 開新 MG 卡（新聘用段）；(c) 離職名單：新卡／現有 current 卡同時結束（former／resigned／`valid_to`＝最後一日），令鏡像出嚟嘅人卡離職日跟返名單；**但**最後一日（或導入入職日）早過「將結束嗰張卡 valid_from」「人卡 hire_date」「現行合約鏈起點」任何一個＝屬上一段聘用（再入職者）→ 唔結束張卡，summary 警告 `[leaver_date_before_segment]`（guardId＋日期）。人卡 `hire_date`／`leave_date` 唔再直接寫（冇 MG 號可記日期時照舊補空）。
 
+**EMP-P3.2 補充**：(1) Maxwell 離職名單只用「最後一日早過參考日（將結束嗰張卡 valid_from／人卡 hire_date／現行合約鏈起點）」判斷屬上一段（`[leaver_date_before_segment]`，唔結束卡）；導入入職日同卡／人卡／合約鏈日期有差（續約隔幾日、手 key 差幾日）**唔阻擋**結束卡，最多出非阻擋提示 `[import_hire_date_differs]`。(2) 工號卡 POST／PATCH 回應 `employment_warnings`（additive）新增 hint：`hire_date_mirrored`／`leave_date_mirrored`（鏡像真係改咗人卡日期）、`leave_date_overwritten_by_card`（全部 former 而人卡離職日遲過最遲 valid_to，被卡日期蓋走）；前端會喺 notice 後面顯示說明。**鏡像會改人卡日期，生效前尚未鎖嘅月份重算會跟新人卡值（已鎖月不變）——已知並接受，唔限制。**(3) `PATCH /api/guards/:id` 409 `use_staff_number_card` 訊息講明「請改鏈頭（最早一張）卡嘅入職日；換號卡嘅生效日唔影響入職日」。(4) 對拍腳本加獨立清單 `resigned_without_valid_to`（former＋resigned 但冇 valid_to 嘅卡，guardId＋cardId；卡鏈判唔到離職／再入職，要補 valid_to）。
+
 **長工入職閘**：`staffHire.MG*`（同任何長工體系工號）同人層面 `hireDate` 一樣納入 `longtermHire` gate——批量 deny（`LONGTERM_HIRE_VIA_TRIAGE_MSG`），出 held／ext_field_review，經分診逐條確認。
 
 **對拍腳本** `npm run db:longterm-card-dates-diff -- --out data/longterm-card-dates-diff.json`（只讀；`--out` 必須喺 `data/` 或 `out/` 之下，唔入 git）：逐個長工分類 consistent／card_no_dates／mismatch／rehire_suspected／no_mg_card，另有兩個獨立清單 `start_after_effective`（選中鏈起點遲過生效日 10/1）同 `mirror_would_change`（鏡像會改人卡 hire／leave 嘅人，列前後日期＋提示碼）；JSON 只有 guardId 同日期；console 只印計數。

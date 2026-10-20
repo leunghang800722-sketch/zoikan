@@ -375,6 +375,8 @@ export function planEmploymentMirror(guard: { hireDate: Date | null; leaveDate: 
     if (tos.length) {
       const leave = new Date(Math.max(...tos.map((d) => d.getTime())));
       if (!guard.leaveDate || guard.leaveDate.getTime() !== leave.getTime()) plan.leave = leave;
+      // EMP-P3.2 S5：全部 former 而人卡離職日遲過最遲 valid_to → 被卡日期蓋走，出 hint（人手填嘅較遲離職日要改返卡嘅 valid_to）
+      if (guard.leaveDate && guard.leaveDate.getTime() > leave.getTime()) plan.warnings.push("leave_date_overwritten_by_card：人卡離職日遲過所有 MG 卡嘅結束日，已被卡嘅最遲結束日蓋走；要保留較遲離職日請改返該卡嘅結束日（valid_to）");
     }
   }
   return plan;
@@ -399,7 +401,11 @@ export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, 
   if (Object.keys(data).length === 0) return { changed: false, warnings: plan.warnings };
   const after = await tx.guard.update({ where: { id: guardId }, data });
   await writeAuditTx(tx, { actorUserId: opts?.actorUserId ?? null, tableName: "guards", rowId: guardId, action: "update", before, after: { ...after, auto_source: "staff_number_mirror" }, ip: null });
-  return { changed: true, warnings: plan.warnings };
+  // EMP-P3.2 S1：鏡像真係改咗人卡日期 → 回 hint（未鎖月份重算會跟新人卡值；已鎖月不變）
+  const hints = [...plan.warnings];
+  if (plan.hire !== undefined) hints.push("hire_date_mirrored：人卡入職日已按 MG 卡鏈頭日期更新（未鎖月份重算會跟新值，已鎖月不變）");
+  if (plan.leave !== undefined) hints.push("leave_date_mirrored：人卡離職日已按 MG 卡日期更新（未鎖月份重算會跟新值，已鎖月不變）");
+  return { changed: true, warnings: hints };
 }
 
 async function syncLegacyStaffNoColumnsInner(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean; actorUserId?: string | null }): Promise<void> {
