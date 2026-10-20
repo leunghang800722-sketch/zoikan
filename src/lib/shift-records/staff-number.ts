@@ -60,7 +60,8 @@ export function resolveFromCards(cards: readonly StaffCardLike[], input: StaffRe
     const range = mg.filter((c) => dated(c) && inPeriod(c, input.workDate));
     if (range.length === 1) return { card: range[0]!, method: "longterm" };
     if (range.length > 1) return { card: null, method: "ambiguous" };
-    const current = mg.filter((c) => c.status === "current");
+    // EMP-P1.1：current 後備只限張卡冇日期，或者 workDate 落喺佢期間內——入職前嘅更次唔掛去之後先發嘅卡
+    const current = mg.filter((c) => c.status === "current" && (!dated(c) || inPeriod(c, input.workDate)));
     if (current.length === 1) return { card: current[0]!, method: "longterm" };
     // 長工但冇 MG 卡 → 跌落第 4 步（盤 scheme）
   }
@@ -99,7 +100,7 @@ export interface ResolvedStaff {
  * 批量推導（帶完整 method，回填腳本逐類計數用）。`explicitStaffNumberId` 唔屬同一個 guard → 400。
  * method=payload 只喺有明確指定時出現；其餘同 resolveFromCards 一致。
  */
-export async function resolveShiftStaffOutcomes(client: PrismaLike, items: readonly ShiftStaffItem[]): Promise<Map<string, StaffResolveOutcome>> {
+export async function resolveShiftStaffOutcomes(client: PrismaLike, items: readonly ShiftStaffItem[], expectedMissing?: Set<string>): Promise<Map<string, StaffResolveOutcome>> {
   const out = new Map<string, StaffResolveOutcome>();
   if (items.length === 0) return out;
   const guardIds = [...new Set(items.map((i) => i.guardId))];
@@ -137,22 +138,19 @@ export async function resolveShiftStaffOutcomes(client: PrismaLike, items: reado
       out.set(it.key, { card: c, method: "payload" });
       continue;
     }
-    out.set(
-      it.key,
-      resolveFromCards(cardsByGuard.get(it.guardId) ?? [], {
-        workDate: it.workDate,
-        rosterStaffNoRaw: it.rosterRowId ? (rawByRow.get(it.rosterRowId) ?? null) : null,
-        isLongterm: !!it.settlementBrokerId && longtermBroker.has(it.settlementBrokerId),
-        siteScheme: schemeBySite.get(it.siteId) ?? null,
-      }),
-    );
+    const isLongterm = !!it.settlementBrokerId && longtermBroker.has(it.settlementBrokerId);
+    const siteScheme = schemeBySite.get(it.siteId) ?? null;
+    const outcome = resolveFromCards(cardsByGuard.get(it.guardId) ?? [], { workDate: it.workDate, rosterStaffNoRaw: it.rosterRowId ? (rawByRow.get(it.rosterRowId) ?? null) : null, isLongterm, siteScheme });
+    out.set(it.key, outcome);
+    // EMP-P1.1 降噪：只有「盤已設 staff_scheme 或 B07 長工」而推唔到，先算應該有但冇（盤未設 scheme 嘅格唔計）
+    if (!outcome.card && (isLongterm || siteScheme)) expectedMissing?.add(it.key);
   }
   return out;
 }
 
 /** 批量推導（寫入點用）：唔中 → Map 值 null。range／sole 都記 site_scheme。 */
-export async function resolveShiftStaffNumbers(client: PrismaLike, items: readonly ShiftStaffItem[]): Promise<Map<string, ResolvedStaff | null>> {
-  const outcomes = await resolveShiftStaffOutcomes(client, items);
+export async function resolveShiftStaffNumbers(client: PrismaLike, items: readonly ShiftStaffItem[], expectedMissing?: Set<string>): Promise<Map<string, ResolvedStaff | null>> {
+  const outcomes = await resolveShiftStaffOutcomes(client, items, expectedMissing);
   const out = new Map<string, ResolvedStaff | null>();
   for (const [key, o] of outcomes) {
     out.set(

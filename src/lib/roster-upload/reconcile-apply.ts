@@ -166,7 +166,12 @@ async function upsertRosterShiftRecord(
   const afterTuple: [number | null, number | null, number | null] = [pricing.clientRate, pricing.guardWage, pricing.brokerFee];
   if (existing) {
     // EMP-P1：工號歸屬（更表檔工號對中 → roster_file 會覆寫；其他推算只填空位）
-    const updated = await tx.shiftRecord.update({ where: { id: existing.id }, data: { ...data, ...staffNumberData(shouldWriteStaffNumber(existing, staff) ? staff : null) } });
+    // EMP-P1.1：重新啟用 cancelled 記錄 → 先清三欄（同 create-or-reuse 一致），再按今次推導重寫
+    const reactivating = existing.status === "cancelled";
+    const updated = await tx.shiftRecord.update({
+      where: { id: existing.id },
+      data: { ...data, ...(reactivating ? { staffNumberId: null, staffScheme: null, staffNumberSource: null } : {}), ...staffNumberData(shouldWriteStaffNumber(reactivating ? { staffNumberId: null } : existing, staff) ? staff : null) },
+    });
     audits.push({ tableName: "shift_records", rowId: updated.id, action: "update", before: existing, after: updated });
     await journalAutoCardUses([{ recordId: updated.id, before: [num(existing.clientRateSnapshot), num(existing.guardWageSnapshot), num(existing.brokerFeeSnapshot)], after: afterTuple, ...pricing.sources }], tx);
     return updated.id;

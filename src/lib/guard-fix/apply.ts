@@ -102,6 +102,14 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
           continue;
         }
         needsStaffNo = !existing;
+        // EMP-P1.1：同一個 guard 同 scheme 已有另一張現用卡 → 加新卡會 409 令成個 tx rollback；改為該項標「交老闆睇」並跳過（成項唔做）
+        if (needsStaffNo) {
+          const hasCurrent = await tx.guardStaffNumber.findFirst({ where: { guardId: la.guardId, scheme: la.addStaffNumber.scheme.trim().toUpperCase(), status: "current" }, select: { id: true } });
+          if (hasCurrent) {
+            diffs.link.skip.push(`${la.seq}（同一種工號已有現用卡，成項唔做，交老闆睇）`);
+            continue;
+          }
+        }
       }
       const needsAlias = !!la.addAlias && !guard.nameAliases.includes(la.addAlias);
       if (!needsStaffNo && !needsAlias) {

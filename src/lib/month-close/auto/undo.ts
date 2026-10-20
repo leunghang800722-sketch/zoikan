@@ -125,16 +125,24 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
           await mark(c.id, "undone", "工號登記已唔存在");
           break;
         }
-        // EMP-P1：工號卡已被更次引用（shift_records／鎖月側表，FK Restrict）→ 唔刪，留低；要先處理嗰啲更次
-        const referenced = (await prisma.shiftRecord.count({ where: { staffNumberId: sn.id } })) + (await prisma.shiftRecordStaffAttribution.count({ where: { staffNumberId: sn.id } }));
-        if (referenced > 0) {
-          await skip(c, `工號卡已經有 ${referenced} 更引用，唔刪（要先處理嗰啲更次嘅工號歸屬）`);
+        // EMP-P1：工號卡已被更次引用（shift_records／鎖月側表，FK Restrict）→ 唔刪，留低；要先處理嗰啲更次。
+        // EMP-P1.1：count 同 delete 喺同一個 tx；就算 count 之後先有人引用（race），delete 撞 FK（P2003）都轉做 skip。
+        let referenced = 0;
+        try {
+          await prisma.$transaction(async (tx) => {
+            referenced = (await tx.shiftRecord.count({ where: { staffNumberId: sn.id } })) + (await tx.shiftRecordStaffAttribution.count({ where: { staffNumberId: sn.id } }));
+            if (referenced > 0) return;
+            await tx.guardStaffNumber.delete({ where: { id: sn.id } });
+            await syncLegacyStaffNoColumns(tx, sn.guardId);
+          });
+        } catch (e) {
+          if (e && typeof e === "object" && "code" in e && (e as { code?: string }).code === "P2003") referenced = -1;
+          else throw e;
+        }
+        if (referenced !== 0) {
+          await skip(c, referenced > 0 ? `工號卡已經有 ${referenced} 更引用，唔刪（要先處理嗰啲更次嘅工號歸屬）` : "工號卡剛被更次引用，唔刪（要先處理嗰啲更次嘅工號歸屬）");
           break;
         }
-        await prisma.$transaction(async (tx) => {
-          await tx.guardStaffNumber.delete({ where: { id: sn.id } });
-          await syncLegacyStaffNoColumns(tx, sn.guardId);
-        });
         await audit("guard_staff_numbers", sn.id, "delete", { id: sn.id }, null);
         bump("guard_staff_numbers");
         await mark(c.id, "undone", null);

@@ -58,6 +58,16 @@ describe("EMP-P1 resolveFromCards（純函數：第 2–4 步）", () => {
     expect(resolveFromCards([card("n", "MP")], { ...base, siteScheme: null }).method).toBe("unresolved");
     expect(resolveFromCards([card("z", "U")], { ...base, siteScheme: "MP" }).method).toBe("unresolved"); // 唔借別個 scheme 充數
   });
+  it("EMP-P1.1 M2：長工 current MG 後備只限冇日期或 workDate 落喺期間內——入職前嘅更次唔掛去之後先發嘅卡", () => {
+    // (a) current MG 09-01 起，workDate 08-15 → unresolved
+    expect(resolveFromCards([card("m", "MG", { validFrom: "2026-09-01", number: "MG90701" })], { ...base, isLongterm: true, workDate: d("2026-08-15") }).method).toBe("unresolved");
+    // (b) former MG 01-01~03-31 ＋ current MG 09-01 起，workDate 05-15（兩張都唔包）→ unresolved
+    const two = [card("f", "MG", { status: "former", validFrom: "2026-01-01", validTo: "2026-03-31", number: "MG90702" }), card("g", "MG", { validFrom: "2026-09-01", number: "MG90703" })];
+    expect(resolveFromCards(two, { ...base, isLongterm: true, workDate: d("2026-05-15") }).method).toBe("unresolved");
+    // 對照：workDate 落喺 current 期間內／current 冇日期 → 照用
+    expect(resolveFromCards([card("m", "MG", { validFrom: "2026-09-01" })], { ...base, isLongterm: true, workDate: d("2026-09-10") })).toMatchObject({ method: "longterm", card: { id: "m" } });
+    expect(resolveFromCards([card("n", "MG")], { ...base, isLongterm: true, workDate: d("2026-01-10") })).toMatchObject({ method: "longterm", card: { id: "n" } });
+  });
   it("shouldWriteStaffNumber：冇舊值就寫；已有歸屬只有 payload／roster_file 先覆寫；同一張卡唔寫", () => {
     const r = (source: "payload" | "roster_file" | "longterm" | "site_scheme") => ({ staffNumberId: "n", scheme: "U", source });
     expect(shouldWriteStaffNumber({ staffNumberId: null }, r("site_scheme"))).toBe(true);
@@ -146,7 +156,7 @@ describe("EMP-P1 寫入點", () => {
     await prisma.site.update({ where: { id: fx.site.id }, data: { staffScheme: null } });
     await prisma.shiftRecord.update({ where: { id: j.id }, data: { status: "cancelled" } });
     const third = await post({ work_date: "2026-08-12", site_id: fx.site.id, shift_type_id: fx.shiftType.id, guard_id: fx.guardA.id, settlement_broker_id: fx.brokerA.id, operational_broker_id: fx.brokerA.id });
-    expect((await third.json()).no_staff_number_count).toBe(1);
+    expect((await third.json()).no_staff_number_count).toBeUndefined(); // EMP-P1.1 降噪：盤未設 scheme 唔計
     expect(await prisma.shiftRecord.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ staffNumberId: null, staffScheme: null, staffNumberSource: null });
   });
 
@@ -206,6 +216,70 @@ describe("EMP-P1 寫入點", () => {
     expect(out.bySource.longterm).toBe(1);
     const again = await seedShiftStaffNumbers(prisma);
     expect(again.assigned).toBe(0); // 冪等：已有歸屬唔再掃
+  });
+
+  it("EMP-P1.1 降噪：no_staff_number_count 只計「盤已設 staff_scheme 或 B07 長工」而推唔到嘅格；盤未設 scheme 嘅唔計", async () => {
+    const mk = async (siteScheme: string | null) => {
+      const site = await prisma.site.create({ data: { canonicalName: `測試降噪盤${siteScheme ?? "未設"}`, clientName: "測試客", billingModel: "per_shift", staffScheme: siteScheme, createdBy: "t" } });
+      const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "t" } });
+      return { site, st };
+    };
+    const g = await mkGuard(); // 冇任何工號卡
+    const unset = await mk(null);
+    const r1 = await batch({ site_id: unset.site.id, month: "2026-08", cells: [{ guard_id: g.id, shift_type_id: unset.st.id, work_date: "2026-08-14", code: "N" }] });
+    expect((await r1.json()).no_staff_number_count).toBe(0);
+    const withScheme = await mk("MP");
+    const r2 = await batch({ site_id: withScheme.site.id, month: "2026-08", cells: [{ guard_id: g.id, shift_type_id: withScheme.st.id, work_date: "2026-08-14", code: "N" }] });
+    expect((await r2.json()).no_staff_number_count).toBe(1);
+    // B07 長工但冇 MG 卡（盤未設 scheme）→ 都計
+    const B07 = await mkBroker("SB07NZ", "internal_longterm");
+    const lt = await mkGuard({ employmentType: "longterm_autopay", defaultBrokerId: B07.id });
+    const r3 = await batch({ site_id: unset.site.id, month: "2026-08", cells: [{ guard_id: lt.id, shift_type_id: unset.st.id, work_date: "2026-08-14", code: "N", settlement_broker_id: B07.id }] });
+    expect((await r3.json()).no_staff_number_count).toBe(1);
+  });
+
+  it("EMP-P1.1 S4：舊 PATCH /api/guards/:id 改號路徑——舊卡 end_reason 為 null（唔標 replaced），新卡仍有 predecessor", async () => {
+    const { applyLegacyStaffNoPatch } = await import("@/lib/guards/staff-numbers");
+    await prisma.guardStaffNumber.deleteMany({ where: { guardId: fx.guardB.id } });
+    await prisma.$transaction((tx) => applyLegacyStaffNoPatch(tx, { guardId: fx.guardB.id, staffNo: "U90601" }));
+    const out = await prisma.$transaction((tx) => applyLegacyStaffNoPatch(tx, { guardId: fx.guardB.id, staffNo: "U90602" }));
+    const old = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { number: "U90601" } });
+    expect(old).toMatchObject({ status: "former", endReason: null });
+    expect(old.validTo).not.toBeNull();
+    expect(out.changes[0]!.created.predecessorId).toBe(old.id);
+  });
+
+  it("EMP-P1.1 S6：更表對數重新啟用 cancelled 記錄 → 先清三欄再按今次推導重寫（推唔到就係 null，唔殘留舊歸屬）", async () => {
+    const mkUp = async (sha: string) =>
+      prisma.rosterUpload.create({ data: { month: aug(1), siteId: fx.site.id, siteNameRaw: "測試盤WP2", uploaderUserId: fx.userIds["老闆"], fileName: `${sha}.xlsx`, fileSha256: sha, fileBytes: Buffer.from("x"), fileSize: 1, version: 1, status: "parsed" } });
+    const up = await mkUp("sha-s6");
+    // 預先有一條 cancelled 記錄，掛住 U 卡（舊歸屬）
+    const old = await prisma.shiftRecord.create({ data: { workDate: aug(24), siteId: fx.site.id, shiftTypeId: fx.shiftType.id, guardId: fx.guardA.id, status: "cancelled", staffNumberId: cardU.id, staffScheme: "U", staffNumberSource: "manual", createdBy: "t" } });
+    await prisma.rosterUploadRow.create({ data: { uploadId: up.id, rowIndex: 1, workDate: aug(24), rawCode: "N", codeKind: "shift", shiftTypeId: fx.shiftType.id, resolvedSiteId: fx.site.id, guardId: fx.guardA.id, guardMatch: "by_staff_no", settlementBrokerId: fx.brokerA.id, brokerCodeRaw: "TEST-BA" } });
+    // 盤唔設 scheme、檔案冇工號 → 推唔到 → 舊歸屬必須被清走
+    await prisma.site.update({ where: { id: fx.site.id }, data: { staffScheme: null } });
+    const { items } = await reconcileUpload(up.id);
+    const ro = items.filter((i) => i.category === "roster_only");
+    expect(ro).toHaveLength(1);
+    const res = await applyReconcileDecisions({ uploadId: up.id, actions: ro.map((i) => ({ key: i.key, action: "apply_roster" as const })), actorUserId: fx.userIds["老闆"], ip: null });
+    expect(res.results.every((r) => r.ok)).toBe(true);
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: old.id } });
+    expect(after.status).toBe("confirmed");
+    expect(after).toMatchObject({ staffNumberId: null, staffScheme: null, staffNumberSource: null });
+  });
+
+  it("EMP-P1.1 S2：undo 刪 guard_staffno_added 工號卡——有更次引用 → skip 唔刪；冇引用 → 刪", async () => {
+    const g = await mkGuard();
+    const mkRun = () => prisma.monthCloseRun.create({ data: { month: SEPT, status: "done", startedById: fx.userIds["老闆"], applyStartedAt: new Date() } });
+    const refCard = await prisma.guardStaffNumber.create({ data: { guardId: g.id, scheme: "U", number: "U90801", status: "current" } });
+    const freeCard = await prisma.guardStaffNumber.create({ data: { guardId: g.id, scheme: "MP", number: "MP90801", status: "current" } });
+    await prisma.shiftRecord.create({ data: { workDate: sep(3), siteId: fx.site.id, shiftTypeId: fx.shiftType.id, guardId: g.id, status: "confirmed", staffNumberId: refCard.id, staffScheme: "U", staffNumberSource: "manual", createdBy: "t" } });
+    const run = await mkRun();
+    for (const c of [refCard, freeCard]) await prisma.monthCloseAutoChange.create({ data: { runId: run.id, kind: "guard_staffno_added", refTable: "guard_staff_numbers", refId: c.id, summary: "t", detailJson: { staffNumberId: c.id } } });
+    const out = await undoAutoChanges(run.id, fx.userIds["老闆"], null);
+    expect(out.skipped.map((s) => s.kind)).toEqual(["guard_staffno_added"]);
+    expect(await prisma.guardStaffNumber.findUnique({ where: { id: refCard.id } })).not.toBeNull();
+    expect(await prisma.guardStaffNumber.findUnique({ where: { id: freeCard.id } })).toBeNull();
   });
 
   it("resolveShiftStaffNumbers：explicit 屬別個 guard → 400；roster_file 經 rosterRowId；多更批量", async () => {

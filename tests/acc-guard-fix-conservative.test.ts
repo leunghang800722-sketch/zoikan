@@ -63,6 +63,19 @@ describe("guard-fix 保守預設（needs_boss → 建獨立保安員）", () => 
     expect(await prisma.guard.count({ where: { nameZh: "測試衝突甲" } })).toBe(1);
   });
 
+  it("EMP-P1.1 S1：link 動作加工號但該 guard 同 scheme 已有另一張現用卡 → 該項標「交老闆睇」跳過，成個 apply 唔 409 rollback", async () => {
+    await setup();
+    const g = await prisma.guard.create({ data: { nameZh: "測試現用甲", employmentType: "cash_casual", createdBy: "t" } });
+    await prisma.guardStaffNumber.create({ data: { guardId: g.id, scheme: "U", number: "U90701", status: "current" } });
+    const plan = await buildGuardFixPlan({ prisma, month: MONTH, uTeamRows: [] });
+    plan.actions.link.push({ type: "link", seq: "T-S1", guardId: g.id, reason: "測試", addStaffNumber: { scheme: "U", number: "U90702" }, addAlias: "測試現用別名" });
+    const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, month: MONTH });
+    expect(diffs.link.skip.some((x) => x.startsWith("T-S1") && x.includes("交老闆睇"))).toBe(true);
+    expect(diffs.link.create).not.toContain("T-S1");
+    expect(await prisma.guardStaffNumber.count({ where: { guardId: g.id } })).toBe(1); // 新號冇加
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).nameAliases).not.toContain("測試現用別名"); // 成項唔做
+  });
+
   it("淨係靠姓名喺名單搵到、電話對唔上 → create_minimal（name_only_unverified），唔用名單資料（冇身份證、冇 U 號）", async () => {
     const { upload, site } = await setup();
     await prisma.rosterUploadRow.create({

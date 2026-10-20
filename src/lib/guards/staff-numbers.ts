@@ -112,6 +112,8 @@ export interface UpsertStaffNumberInput {
   /** EMP-P1：同 scheme 已有 current 時——true＝換號（舊行 former＋replaced＋valid_to=今日，新行 predecessor=舊行）；
    * 冇傳＝409 `current_exists`（要先 PATCH 結束舊卡填離職日＋原因，先開新卡＝重新入職）。 */
   replacesCurrent?: boolean;
+  /** EMP-P1.1：換號時舊卡 `end_reason`（預設 replaced）。舊 `PATCH /api/guards/:id` 改號路徑傳 null——舊 API 唔分換號／重新入職，唔好標 replaced。 */
+  replacedEndReason?: StaffNumberEndReason | null;
   // M2b（Opus 驗收）：409（撞號）response 帶 `guard_id` 呢個結構化 detail
   // 淨係俾內部角色（老闆／主管／會計）見到，雞頭（同其他角色）一律唔
   // 畀——call site 要明確傳 `true`（`src/lib/broker-isolation.ts
@@ -220,7 +222,7 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
       }
       const after = await tx.guardStaffNumber.update({
         where: { id: existingCurrent.id },
-        data: { status: "former", endReason: "replaced", validTo: hkToday(input.now) },
+        data: { status: "former", endReason: input.replacedEndReason === undefined ? "replaced" : input.replacedEndReason, validTo: hkToday(input.now) },
       });
       convertedFormer = { before: existingCurrent, after };
       predecessorId = existingCurrent.id;
@@ -416,7 +418,7 @@ export async function applyLegacyStaffNoPatch(
       throw BadRequest(`staff_no 只收 U 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNo}`);
     }
     changes.push(
-      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNo, source: "manual:legacy-patch(staff_no)", createdBy, now, revealConflictGuardId, replacesCurrent: true }),
+      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNo, source: "manual:legacy-patch(staff_no)", createdBy, now, revealConflictGuardId, replacesCurrent: true, replacedEndReason: null }),
     );
   }
   if (staffNoMw) {
@@ -428,7 +430,7 @@ export async function applyLegacyStaffNoPatch(
       throw BadRequest(`staff_no_mw 只收 MG／MW 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNoMw}`);
     }
     changes.push(
-      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNoMw, source: "manual:legacy-patch(staff_no_mw)", createdBy, now, revealConflictGuardId, replacesCurrent: true }),
+      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNoMw, source: "manual:legacy-patch(staff_no_mw)", createdBy, now, revealConflictGuardId, replacesCurrent: true, replacedEndReason: null }),
     );
   }
   if (changes.length) {

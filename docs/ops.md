@@ -497,4 +497,5 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 冪等（只處理未有歸屬嘅非作廢更次）；每次 `--apply` 寫一條 audit summary（`action=backfill_shift_staff_numbers`，只有逐月計數，唔逐條）。
 - 先去「盤」設定頁設好各盤 `staff_scheme`（U／MP）、並補齊人嘅 MP／MG 卡及入職／離職日期，再回填，`range`／`sole` 先會有結果；盤未設定 scheme 嘅更次只有 `roster_file`／`longterm` 兩條路。
 - Gate 跑法備註（worktree）：`gate:locked-months` 要 `data/`、`tools/importer/out`、`tools/importer/venv` 三個 gitignored 資源（symlink 返主 repo）；缺 venv 會令 `gate:reports (b3)` SKIP 同長工分攤總額由 897652.35 變 899945（環境差異，唔係代碼）。
+- EMP-P1.1 補充：(1) 長工歸屬只認結算單位＝`internal_longterm`（B07）；未結算（`settlement_broker_id` null）嘅更次唔掛 MG 卡，待一鍵結算補結算單位時順便補。長工 MG 卡後備（current）只限張卡冇日期，或 workDate 落喺佢 `valid_from`～`valid_to` 內，否則 `unresolved`（入職前嘅更次唔會掛去之後先發嘅卡，亦唔會永久寫入鎖月側表）。(2) 回填每批 UPDATE 都帶 `NOT EXISTS (month_closes … locked_at IS NOT NULL)`，跑緊期間有人鎖月，後面批次 0 寫入。(3) `no_staff_number_count` 只計「盤已設 `staff_scheme` 或 B07 長工」而推唔到嘅格；盤未設 scheme 嘅格唔計。
 

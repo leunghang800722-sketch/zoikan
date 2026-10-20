@@ -41,7 +41,9 @@ export interface BackfillResult {
 const CHUNK = 2000;
 const monthKey = (d: Date) => d.toISOString().slice(0, 7);
 
-export async function backfillShiftStaffNumbers(opts: { apply: boolean; months?: readonly string[] } = { apply: false }): Promise<BackfillResult> {
+export async function backfillShiftStaffNumbers(
+  opts: { apply: boolean; months?: readonly string[]; chunkSize?: number; /** 測試用：每批處理完之後 call（用嚟模擬跑緊期間有人鎖月） */ afterBatch?: (batchIndex: number) => Promise<void> } = { apply: false },
+): Promise<BackfillResult> {
   const closes = await prisma.monthClose.findMany({ select: { month: true, lockedAt: true } });
   const lockedMonths = new Set(closes.filter((c) => !!c.lockedAt).map((c) => monthKey(c.month)));
   const filter = opts.months?.length ? new Set(opts.months) : null;
@@ -56,12 +58,13 @@ export async function backfillShiftStaffNumbers(opts: { apply: boolean; months?:
   };
 
   let cursor: string | undefined;
+  let batchIndex = 0;
   for (;;) {
     const rows = await prisma.shiftRecord.findMany({
       where: { status: { not: "cancelled" }, staffNumberId: null, staffAttribution: { is: null } },
       select: { id: true, guardId: true, siteId: true, workDate: true, settlementBrokerId: true, provenance: true },
       orderBy: { id: "asc" },
-      take: CHUNK,
+      take: opts.chunkSize ?? CHUNK,
       ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
     });
     if (rows.length === 0) break;
@@ -99,11 +102,16 @@ export async function backfillShiftStaffNumbers(opts: { apply: boolean; months?:
         } else {
           // 用 raw SQL：只更新三個歸屬欄，唔觸發 updated_at、唔掂任何金額欄
           await prisma.$executeRaw(
-            Prisma.sql`UPDATE shift_records SET staff_number_id = ${g.staffNumberId}, staff_scheme = ${g.scheme}, staff_number_source = ${g.source} WHERE id = ANY(${g.ids}::text[]) AND staff_number_id IS NULL`,
+            // EMP-P1.1：鎖月集合只喺開頭讀一次，跑緊期間有人鎖月都要擋——每批 UPDATE 再用 NOT EXISTS 確認該月（寫入一刻）冇鎖。
+            Prisma.sql`UPDATE shift_records SET staff_number_id = ${g.staffNumberId}, staff_scheme = ${g.scheme}, staff_number_source = ${g.source}
+              WHERE id = ANY(${g.ids}::text[]) AND staff_number_id IS NULL
+                AND NOT EXISTS (SELECT 1 FROM month_closes mc WHERE mc.month = date_trunc('month', shift_records.work_date)::date AND mc.locked_at IS NOT NULL)`,
           );
         }
       }
     }
+    await opts.afterBatch?.(batchIndex);
+    batchIndex += 1;
   }
 
   const months = [...stats.values()].sort((a, b) => a.month.localeCompare(b.month));

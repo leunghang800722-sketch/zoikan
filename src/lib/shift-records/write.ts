@@ -252,11 +252,13 @@ export async function applyShiftPlansTx(
   const hasDuplicateCells = new Set(activePlans.map(keyOfPlan)).size !== activePlans.length;
   // EMP-P1：每個 upsert 格推導用邊張工號卡（同一 tx、批量 prefetch；只係歸屬，唔掂金額）。
   const upsertActive = activePlans.filter((p): p is UpsertPlan => p.kind === "upsert");
+  const staffMissing = new Set<string>();
   const staffByKey = await resolveShiftStaffNumbers(
     tx,
     upsertActive.map((p) => ({ key: keyOfPlan(p), guardId: p.cell.guard_id, siteId, workDate: p.cell.work_date, explicitStaffNumberId: p.cell.staff_number_id ?? null, rosterRowId: p.cell.roster_row_id ?? null, settlementBrokerId: p.settlementBrokerId })),
+    staffMissing,
   );
-  const noStaffNumberCount = upsertActive.filter((p) => !staffByKey.get(keyOfPlan(p))).length;
+  const noStaffNumberCount = staffMissing.size; // EMP-P1.1：只計盤已設 staff_scheme 或 B07 長工而推唔到嘅格
   const writeBatchAudits = (t: Prisma.TransactionClient) =>
     writeAuditMany(pendingAudits.map((a) => ({ actorUserId, tableName: "shift_records", rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip })), t);
   if (hasDuplicateCells) {

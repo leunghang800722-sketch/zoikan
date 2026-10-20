@@ -100,6 +100,27 @@ describe("EMP-P1 回填 shift_records 工號歸屬", () => {
     expect(await prisma.shiftRecordStaffAttribution.count()).toBe(1);
   });
 
+  it("EMP-P1.1 M1：第一批同第二批之間鎖月 → 之後批次 0 寫入（UPDATE 帶 NOT EXISTS month_closes 鎖月檢查）", async () => {
+    // 用未鎖嘅 8 月；chunkSize=1 令每條更次一批；第一批之後鎖 8 月
+    let locked = false;
+    const r = await backfillShiftStaffNumbers({
+      apply: true,
+      months: ["2026-08"],
+      chunkSize: 1,
+      afterBatch: async (i) => {
+        if (i === 0 && !locked) {
+          locked = true;
+          await prisma.monthClose.upsert({ where: { month: d("2026-08-01") }, update: { lockedAt: new Date() }, create: { month: d("2026-08-01"), lockedAt: new Date(), lockedBy: fx.userIds["老闆"] } });
+        }
+      },
+    });
+    expect(locked).toBe(true);
+    // 8 月可寫嘅有 4 條（file／lt／rangeA／sole），第一批最多寫 1 條，之後鎖月 → 其餘 0 寫入
+    const written = await prisma.shiftRecord.count({ where: { staffNumberId: { not: null }, workDate: { gte: d("2026-08-01"), lte: d("2026-08-31") } } });
+    expect(written).toBeLessThanOrEqual(1);
+    expect(r.months.find((m) => m.month === "2026-08")!.written).toBeGreaterThan(written); // 計數係「計劃寫」，實際被鎖月擋咗
+  });
+
   it("--month 只處理指定月份", async () => {
     const r = await backfillShiftStaffNumbers({ apply: true, months: ["2026-06"] });
     expect(r.months.map((m) => m.month)).toEqual(["2026-06"]);

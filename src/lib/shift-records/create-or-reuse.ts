@@ -54,10 +54,13 @@ export async function createOrReuseShiftRecord(input: {
   const source = data.source ?? MANUAL_SOURCE;
   return prisma.$transaction(async (tx) => {
     // EMP-P1：推導用邊張工號卡（同一 tx）；payload 明確 staff_number_id 會驗證屬同一個 guard。
+    const staffMissing = new Set<string>();
     const staff = (
-      await resolveShiftStaffNumbers(tx, [
-        { key: "k", guardId: data.guardId, siteId: data.siteId, workDate: data.workDate as Date, explicitStaffNumberId: typeof data.staffNumberId === "string" ? data.staffNumberId : null, settlementBrokerId: (data.settlementBrokerId as string | null | undefined) ?? null },
-      ])
+      await resolveShiftStaffNumbers(
+        tx,
+        [{ key: "k", guardId: data.guardId, siteId: data.siteId, workDate: data.workDate as Date, explicitStaffNumberId: typeof data.staffNumberId === "string" ? data.staffNumberId : null, settlementBrokerId: (data.settlementBrokerId as string | null | undefined) ?? null }],
+        staffMissing,
+      )
     ).get("k") ?? null;
     const staffData = staffNumberData(staff);
     const existing = await tx.shiftRecord.findUnique({
@@ -66,7 +69,7 @@ export async function createOrReuseShiftRecord(input: {
     if (!existing) {
       const created = await tx.shiftRecord.create({ data: { ...data, ...staffData, source, createdBy: actorUserId } });
       await writeAuditTx(tx, { actorUserId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip });
-      return { record: created, reused: false, noStaffNumber: !staff };
+      return { record: created, reused: false, noStaffNumber: staffMissing.has("k") };
     }
     if (existing.status !== "cancelled") {
       // 同現行語意一致：交俾呼叫者轉 409（用同 P2002 一樣嘅 code，route 既有 catch 直接接住）。
@@ -90,7 +93,7 @@ export async function createOrReuseShiftRecord(input: {
     return {
       record: updated,
       reused: true,
-      noStaffNumber: !staff,
+      noStaffNumber: staffMissing.has("k"),
     };
   });
 }
