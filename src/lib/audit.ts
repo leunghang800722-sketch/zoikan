@@ -109,6 +109,8 @@ export type AuditAction =
   | "bulk_avg_wages"
   // W0：WhatsApp 群組由 WAHA 同步（table_name="whatsapp_groups"，row_id="sync"，after 淨係計數）。
   | "whatsapp_group_sync"
+  // WA-6：WAHA 群組列表失敗（after 只有 kind／status）。
+  | "whatsapp_group_sync_failed"
   // TE-1：分流題覆核證據裁圖（只計數，唔記圖／欄值／檔名）。
   | "triage_evidence_upload"
   | "triage_evidence_view"

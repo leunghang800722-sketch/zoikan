@@ -4,7 +4,7 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { writeAuditTx } from "@/lib/audit";
+import { writeAudit, writeAuditTx } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { listGroups, type WahaResult } from "./waha";
 import type { WordPair } from "./dto";
@@ -60,16 +60,55 @@ interface SyncSummary {
   total: number;
   created: number;
   relabelled: number;
+  /** WA-6：由已收訊息（chat_jid 以 @g.us 結尾而 whatsapp_groups 冇）補咗幾個群 */
+  from_messages: number;
 }
 
-export type SyncResult = { ok: true; summary: SyncSummary } | { ok: false; error: Extract<WahaResult<never>, { ok: false }>["error"]; status?: number };
+export type WahaSyncError = Extract<WahaResult<never>, { ok: false }>["error"];
+/** WA-6：WAHA 唔可達／回錯時照樣由訊息補群，回 ok＋waha_error（錯誤碼，唔含 URL／key）。 */
+export interface WahaSyncFailure {
+  kind: WahaSyncError;
+  status?: number;
+  /** 分類碼：waha_timeout／waha_http_error／waha_bad_response／waha_unavailable／waha_not_configured */
+  code: string;
+  /** 人話（唔含 URL／key） */
+  message: string;
+}
+export type SyncResult = { ok: true; summary: SyncSummary; waha_error?: WahaSyncFailure };
 
-/** 由 WAHA 同步群組：新群 kind=ignored（自動寫入全關）；已存在嘅群只更新群名（label），唔改綁定。 */
+/** WA-6：WAHA 失敗分類（真正原因唔再壓成「連唔到 WAHA」）。 */
+export function classifyWahaFailure(kind: WahaSyncError, status?: number): WahaSyncFailure {
+  const base = status !== undefined ? { status } : {};
+  switch (kind) {
+    case "timeout":
+      return { kind, ...base, code: "waha_timeout", message: "WAHA 回應超時（群組太多或 WAHA 忙），請稍後再試" };
+    case "http_error":
+      return { kind, ...base, code: "waha_http_error", message: `WAHA 回應 HTTP ${status ?? "?"}` };
+    case "bad_response":
+      return { kind, ...base, code: "waha_bad_response", message: "WAHA 回應格式唔識讀" };
+    case "not_configured":
+      return { kind, ...base, code: "waha_not_configured", message: "WAHA 未設定（WAHA_BASE_URL）" };
+    default:
+      return { kind, ...base, code: "waha_unavailable", message: "連唔到 WAHA" };
+  }
+}
+
+export const UNNAMED_GROUP_PREFIX = "未命名群組";
+/** 由訊息補群嘅預設群名：「未命名群組（尾 6 位 jid）」。 */
+export function unnamedGroupLabel(jid: string): string {
+  const bare = jid.replace(/@g\.us$/, "");
+  return `${UNNAMED_GROUP_PREFIX}（${bare.slice(-6)}）`;
+}
+
+/**
+ * 由 WAHA 同步群組：新群 kind=ignored（自動寫入全關）；已存在嘅群只更新群名（label，labelLocked=false 先改），唔改綁定。
+ * WA-6：WAHA 列表之後，再由 whatsapp_messages 補群（NOWEB 冇 store 時 /groups 回空）：distinct chatJid 以 @g.us 結尾而 whatsapp_groups 冇 →
+ * createMany（kind ignored、label「未命名群組（尾 6 位）」、labelLocked=false），下次 WAHA 列表有名就會自動改名。WAHA 錯誤唔令 sync 失敗。
+ */
 export async function syncGroupsFromWaha(actorUserId: string, ip: string | null, fetchImpl: typeof fetch = fetch): Promise<SyncResult> {
   const r = await listGroups(fetchImpl);
-  if (!r.ok) return { ok: false, error: r.error, ...(r.status !== undefined ? { status: r.status } : {}) };
-  const found = r.data;
-  const summary: SyncSummary = { total: found.length, created: 0, relabelled: 0 };
+  const found = r.ok ? r.data : [];
+  const summary: SyncSummary = { total: found.length, created: 0, relabelled: 0, from_messages: 0 };
   await prisma.$transaction(async (tx) => {
     const existing = await tx.whatsappGroup.findMany({ where: { groupJid: { in: found.map((g) => g.jid) } }, select: { id: true, groupJid: true, label: true, labelLocked: true } });
     const byJid = new Map(existing.map((e) => [e.groupJid, e]));
@@ -83,7 +122,20 @@ export async function syncGroupsFromWaha(actorUserId: string, ip: string | null,
         summary.relabelled++;
       }
     }
+    const msgJids = await tx.whatsappMessage.findMany({ where: { chatJid: { endsWith: "@g.us" } }, distinct: ["chatJid"], select: { chatJid: true } });
+    if (msgJids.length) {
+      const have = new Set((await tx.whatsappGroup.findMany({ where: { groupJid: { in: msgJids.map((m) => m.chatJid) } }, select: { groupJid: true } })).map((g) => g.groupJid));
+      const missing = msgJids.map((m) => m.chatJid).filter((j) => !have.has(j));
+      if (missing.length) {
+        const res = await tx.whatsappGroup.createMany({ data: missing.map((jid) => ({ groupJid: jid, label: unnamedGroupLabel(jid), labelLocked: false, kind: "ignored" as const, createdBy: actorUserId })), skipDuplicates: true });
+        summary.from_messages = res.count;
+      }
+    }
     await writeAuditTx(tx as Prisma.TransactionClient, { actorUserId, tableName: "whatsapp_groups", rowId: "sync", action: "whatsapp_group_sync", after: summary, ip });
   });
-  return { ok: true, summary };
+  if (r.ok) return { ok: true, summary };
+  // 失敗：一行 log（唔 log URL／key／內容）＋audit（after 只有 kind／status）；已經由訊息補群，仍回 ok
+  console.warn(`[whatsapp] group sync failed kind=${r.error} status=${r.status ?? "-"}`);
+  await writeAudit({ actorUserId, tableName: "whatsapp_groups", rowId: "sync", action: "whatsapp_group_sync_failed", after: { kind: r.error, ...(r.status !== undefined ? { status: r.status } : {}) }, ip });
+  return { ok: true, summary, waha_error: classifyWahaFailure(r.error, r.status) };
 }

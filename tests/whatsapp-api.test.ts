@@ -97,30 +97,30 @@ describe("W0 WhatsApp API", () => {
       ]);
       const res = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ total: 2, created: 2, relabelled: 0 });
+      expect(await res.json()).toMatchObject({ total: 2, created: 2, relabelled: 0, from_messages: 0 });
       const rows = await prisma.whatsappGroup.findMany({ orderBy: { groupJid: "asc" } });
       expect(rows.map((r) => [r.groupJid, r.label, r.kind, r.autoWrite, r.autoConfirm, r.active])).toEqual([
         ["test-g1@g.us", "測試群一", "ignored", false, false, true],
         ["test-g2@g.us", "測試群二", "ignored", false, false, true],
       ]);
       const [url, opts] = f.mock.calls[0]!;
-      expect(String(url)).toBe("http://waha.test:3000/api/default/groups");
+      expect(String(url)).toBe("http://waha.test:3000/api/default/groups?exclude=participants");
       expect((opts as RequestInit).method).toBe("GET");
       expect(((opts as RequestInit).headers as Record<string, string>)["X-Api-Key"]).toBe("fake-waha-key");
       const a = await prisma.auditLog.findFirstOrThrow({ where: { action: "whatsapp_group_sync" } });
       expect(a.tableName).toBe("whatsapp_groups");
-      expect(a.after).toEqual({ total: 2, created: 2, relabelled: 0 });
+      expect(a.after).toEqual({ total: 2, created: 2, relabelled: 0, from_messages: 0 });
     });
 
     it("重覆同步冪等：唔重建、唔覆蓋已綁定嘅 kind；群名變咗就更新 label", async () => {
       const g = await seedGroup({ kind: "office" });
       fakeFetch([{ id: "test-g1@g.us", name: "測試群一（改名）" }]);
       const res = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
-      expect(await res.json()).toEqual({ total: 1, created: 0, relabelled: 1 });
+      expect(await res.json()).toMatchObject({ total: 1, created: 0, relabelled: 1 });
       const after = await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } });
       expect(after).toMatchObject({ kind: "office", label: "測試群一（改名）" });
       const again = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
-      expect(await again.json()).toEqual({ total: 1, created: 0, relabelled: 0 });
+      expect(await again.json()).toMatchObject({ total: 1, created: 0, relabelled: 0 });
       expect(await prisma.whatsappGroup.count()).toBe(1);
     });
 
@@ -131,28 +131,73 @@ describe("W0 WhatsApp API", () => {
       expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } })).labelLocked).toBe(true);
       fakeFetch([{ id: "test-g1@g.us", name: "WAHA 新群名" }]);
       const res = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
-      expect(await res.json()).toEqual({ total: 1, created: 0, relabelled: 0 });
+      expect(await res.json()).toMatchObject({ total: 1, created: 0, relabelled: 0 });
       expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } })).label).toBe("老闆自訂名");
     });
 
-    it("WAHA 未設定 → 503 waha_not_configured；WAHA 500／連唔到／格式錯 → 502，唔洩漏 URL／key", async () => {
+    const syncJson = async () => {
+      const res = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
+      return { status: res.status, body: (await res.json()) as { from_messages: number; total: number; waha_error?: { kind: string; status?: number; code: string; message: string } } };
+    };
+    const msgIn = (jid: string, id: string) => prisma.whatsappMessage.create({ data: { session: "default", chatJid: jid, messageId: id, senderJid: "85290000001@c.us", ts: new Date(), text: "x", status: "received" } });
+
+    it("WA-6：WAHA 失敗四種分類（timeout／http_error／bad_response／unreachable）＋未設定：回 200＋waha_error{kind,status?,code,message}；寫 whatsapp_group_sync_failed audit（淨 kind／status）；唔洩漏 URL／key", async () => {
       delete process.env.WAHA_BASE_URL;
-      const r0 = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
-      expect(r0.status).toBe(503);
-      expect(((await r0.json()) as { error: string }).error).toBe("waha_not_configured");
+      const r0 = await syncJson();
+      expect(r0.status).toBe(200);
+      expect(r0.body.waha_error).toMatchObject({ kind: "not_configured", code: "waha_not_configured" });
       process.env.WAHA_BASE_URL = "http://waha.test:3000";
       fakeFetch({ error: "boom" }, { status: 500 });
-      const r1 = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
-      expect(r1.status).toBe(502);
+      expect((await syncJson()).body.waha_error).toMatchObject({ kind: "http_error", status: 500, code: "waha_http_error", message: "WAHA 回應 HTTP 500" });
+      vi.stubGlobal("fetch", vi.fn(async () => { throw Object.assign(new Error("slow http://waha.test:3000 fake-waha-key"), { name: "TimeoutError" }); }));
+      expect((await syncJson()).body.waha_error).toMatchObject({ kind: "timeout", code: "waha_timeout", message: expect.stringContaining("超時") });
+      fakeFetch({ not: "array" });
+      expect((await syncJson()).body.waha_error).toMatchObject({ kind: "bad_response", code: "waha_bad_response" });
       vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED http://waha.test:3000 fake-waha-key"); }));
-      const r2 = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
-      expect(r2.status).toBe(502);
-      const txt = JSON.stringify(await r2.json());
+      const r5 = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
+      const txt = JSON.stringify(await r5.json());
+      expect(txt).toContain("waha_unavailable");
       expect(txt).not.toContain("fake-waha-key");
       expect(txt).not.toContain("waha.test");
-      fakeFetch({ not: "array" });
-      expect((await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"))).status).toBe(502);
+      const audits = await prisma.auditLog.findMany({ where: { action: "whatsapp_group_sync_failed" }, orderBy: { createdAt: "asc" } });
+      expect(audits.map((a) => a.after)).toEqual([{ kind: "not_configured" }, { kind: "http_error", status: 500 }, { kind: "timeout" }, { kind: "bad_response" }, { kind: "unreachable" }]);
       expect(await prisma.whatsappGroup.count()).toBe(0);
+    });
+
+    it("WA-6：WAHA 列表回空（NOWEB 冇 store）→ 由 whatsapp_messages 補群（kind ignored、label 未命名群組（尾 6 位）、labelLocked=false）；私訊 jid 唔補；冪等", async () => {
+      fakeFetch([]);
+      await msgIn("120363111111abcdef@g.us", "m-1");
+      await msgIn("120363111111abcdef@g.us", "m-2");
+      await msgIn("120363222222uvwxyz@g.us", "m-3");
+      await msgIn("private:85290000001@c.us", "m-4");
+      const r = await syncJson();
+      expect(r.body).toMatchObject({ total: 0, created: 0, from_messages: 2 });
+      expect(r.body.waha_error).toBeUndefined();
+      const rows = await prisma.whatsappGroup.findMany({ orderBy: { groupJid: "asc" } });
+      expect(rows.map((g) => [g.groupJid, g.label, g.kind, g.labelLocked, g.autoWrite])).toEqual([
+        ["120363111111abcdef@g.us", "未命名群組（abcdef）", "ignored", false, false],
+        ["120363222222uvwxyz@g.us", "未命名群組（uvwxyz）", "ignored", false, false],
+      ]);
+      expect((await syncJson()).body.from_messages).toBe(0);
+      expect(await prisma.whatsappGroup.count()).toBe(2);
+    });
+
+    it("WA-6：WAHA 失敗（超時）都照樣由訊息補群；之後 WAHA 有名 → 自動改名，但 label_locked 嘅唔覆蓋", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => { throw Object.assign(new Error("t"), { name: "TimeoutError" }); }));
+      await msgIn("g-a-000001@g.us", "m-1");
+      await msgIn("g-b-000002@g.us", "m-2");
+      const r = await syncJson();
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ from_messages: 2 });
+      expect(r.body.waha_error?.kind).toBe("timeout");
+      const b = await prisma.whatsappGroup.findUniqueOrThrow({ where: { groupJid: "g-b-000002@g.us" } });
+      expect((await groupsPatch(req("/api/whatsapp/groups", cookies["老闆"], "PATCH", { id: b.id, label: "老闆改名" }))).status).toBe(200);
+      expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: b.id } })).labelLocked).toBe(true);
+      fakeFetch({ "g-a-000001@g.us": { subject: "WAHA 群名甲" }, "g-b-000002@g.us": { subject: "WAHA 群名乙" } }); // jid-keyed map 形狀
+      const r2 = await syncJson();
+      expect(r2.body).toMatchObject({ total: 2, from_messages: 0 });
+      const labels = Object.fromEntries((await prisma.whatsappGroup.findMany()).map((g) => [g.groupJid, g.label]));
+      expect(labels).toEqual({ "g-a-000001@g.us": "WAHA 群名甲", "g-b-000002@g.us": "老闆改名" });
     });
   });
 
