@@ -59,7 +59,7 @@ describe("WP-STAFFNO §1：partial unique + number 全表 unique", () => {
     );
     expect(res1.status).toBe(201);
     const res2 = await staffNumberCreate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U90002" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U90002", replaces_current: true }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );
     expect(res2.status).toBe(201);
@@ -114,7 +114,7 @@ describe("WP-STAFFNO §1：partial unique + number 全表 unique", () => {
     );
     const row1 = (await res1.json()) as { id: string };
     const res2 = await staffNumberCreate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP90002" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP90002", replaces_current: true }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );
     const row2 = (await res2.json()) as { id: string };
@@ -157,7 +157,7 @@ describe("WP-STAFFNO §2：legacy 欄同步 + PATCH /api/guards/:id 舊寫法", 
     );
     const row = (await created.json()) as { id: string };
     await staffNumberUpdate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former", valid_to: "2026-10-01", end_reason: "resigned" }),
       { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
     );
     const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
@@ -229,7 +229,7 @@ describe("WP-STAFFNO §3：GET/PATCH .../staff-numbers/:numberId", () => {
     const firstBody = (await first.json()) as { id: string };
     numberIdFormer = firstBody.id;
     const second = await staffNumberCreate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP90101" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP90101", replaces_current: true }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );
     const secondBody = (await second.json()) as { id: string };
@@ -256,7 +256,7 @@ describe("WP-STAFFNO §3：GET/PATCH .../staff-numbers/:numberId", () => {
 
   it("將 current 轉 former 之後，former 先可以改返 current", async () => {
     await staffNumberUpdate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${numberIdCurrent}`, ownerCookie, "PATCH", { status: "former" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${numberIdCurrent}`, ownerCookie, "PATCH", { status: "former", valid_to: "2026-10-01", end_reason: "resigned" }),
       { params: Promise.resolve({ id: fx.guardA.id, numberId: numberIdCurrent }) },
     );
     const res = await staffNumberUpdate(
@@ -461,7 +461,7 @@ describe("WP-STAFFNO §8（M1）：validTo 用 HK 曆日，唔會早一日", () 
   it("邊界：now=UTC 16:30（即 HK 已經踏入翌日 00:30）→ 轉 former 嘅 validTo 要係 HK 嗰個新曆日", async () => {
     await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91001", source: "test" }));
     const now = new Date("2026-09-19T16:30:00.000Z"); // HK = 2026-09-20 00:30
-    const result = await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91002", source: "test", now }));
+    const result = await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91002", source: "test", now, replacesCurrent: true }));
     const validToStr = result.convertedFormer!.after.validTo!.toISOString().slice(0, 10);
     // 舊版 bug：hkDayStartUtc("2026-09-20") = 2026-09-19T16:00:00Z，存落
     // @db.Date 會變 2026-09-19（早咗一日）。啱嘅答案要係 HK 今日本身。
@@ -471,7 +471,7 @@ describe("WP-STAFFNO §8（M1）：validTo 用 HK 曆日，唔會早一日", () 
   it("一般情況（now 喺 HK 曆日中段）→ validTo 都係 HK 今日", async () => {
     await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91003", source: "test" }));
     const now = new Date("2026-09-19T04:00:00.000Z"); // HK = 2026-09-19 12:00
-    const result = await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91004", source: "test", now }));
+    const result = await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91004", source: "test", now, replacesCurrent: true }));
     expect(result.convertedFormer!.after.validTo!.toISOString().slice(0, 10)).toBe("2026-09-19");
   });
 });
@@ -660,7 +660,7 @@ describe("WP-STAFFNO §12（S3/S4）：syncLegacyStaffNoColumns 唔抹走「新�
     await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U91401" }), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
-    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U91402" }), {
+    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U91402", replaces_current: true }), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
@@ -775,7 +775,7 @@ describe("WP-STAFFNO §15（S7）：GET /api/guards?q= 搵到 former 號", () =>
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );
     const row = (await created.json()) as { id: string };
-    await staffNumberUpdate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former" }), {
+    await staffNumberUpdate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former", valid_to: "2026-10-01", end_reason: "resigned" }), {
       params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }),
     });
     const res = await guardList(req("http://test.local/api/guards?q=MP91600", ownerCookie));
@@ -876,25 +876,35 @@ describe("WP-STAFFNO §16（附帶）：牌照/平安卡/入離職日期 nullabl
     // 嗰個場景——呢個 route 冇「轉 former 自動帶 valid_to」嘅邏輯，人手
     // PATCH 填先有值）。
     await staffNumberUpdate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former", valid_to: "2026-02-01" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former", valid_to: "2026-02-01", end_reason: "cancelled" }),
       { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
     );
     const afterFormer = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { id: row.id } });
     expect(afterFormer.validTo).not.toBeNull();
 
     const res = await staffNumberUpdate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", {
-        valid_from: null,
-        valid_to: null,
-        note: null,
-      }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { valid_from: null, note: null }),
       { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
     );
     expect(res.status).toBe(200);
     const after = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { id: row.id } });
     expect(after.validFrom).toBeNull();
-    expect(after.validTo).toBeNull(); // former 行清 valid_to 一樣容許
     expect(after.note).toBeNull();
+    expect(after.validTo).not.toBeNull();
+    // EMP-P1：已取消（former）嘅卡唔可以清走離職日（valid_to）——要先改返現用
+    const bad = await staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { valid_to: null }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
+    );
+    expect(bad.status).toBe(400);
+    const back = await staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "current" }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
+    );
+    expect(back.status).toBe(200);
+    const cur = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { id: row.id } });
+    expect(cur.validTo).toBeNull();
+    expect(cur.endReason).toBeNull();
   });
 });
 
@@ -1228,7 +1238,7 @@ describe("WP-STAFFNO §23（B）：syncLegacyStaffNoColumns legacy 欄 fallback�
 
   async function cancelStaffNumber(numberId: string) {
     return staffNumberUpdate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${numberId}`, ownerCookie, "PATCH", { status: "former" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${numberId}`, ownerCookie, "PATCH", { status: "former", valid_to: "2026-10-01", end_reason: "resigned" }),
       { params: Promise.resolve({ id: fx.guardA.id, numberId }) },
     );
   }
@@ -1251,7 +1261,7 @@ describe("WP-STAFFNO §23（B）：syncLegacyStaffNoColumns legacy 欄 fallback�
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     const created2 = await staffNumberCreate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92012" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92012", replaces_current: true }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );
     const row2 = (await created2.json()) as { id: string };
@@ -1296,7 +1306,7 @@ describe("WP-STAFFNO §23（B）：syncLegacyStaffNoColumns legacy 欄 fallback�
     await cancelStaffNumber(row1.id);
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92002"); // 取消咗，暫時仍然顯示嗰個
 
-    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92003" }), {
+    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92003", replaces_current: true }), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92003"); // 新現用號蓋過已取消
@@ -1311,7 +1321,7 @@ describe("WP-STAFFNO §23（B）：syncLegacyStaffNoColumns legacy 欄 fallback�
     await cancelStaffNumber(row1.id);
 
     const created2 = await staffNumberCreate(
-      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92005" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92005", replaces_current: true }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );
     const row2 = (await created2.json()) as { id: string };

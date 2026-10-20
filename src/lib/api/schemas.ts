@@ -155,6 +155,8 @@ export const SiteCreateSchema = z
     // WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類「客戶直接出糧」嘅盤——
     // 見 prisma/schema.prisma Site.guardsPaidByClient 大註解。
     guards_paid_by_client: z.boolean().optional(),
+    // EMP-P1：呢個盤用邊種工號（U／MP；null＝未設定）。
+    staff_scheme: z.enum(["U", "MP"]).nullable().optional(),
     monthly_fee: money,
     monthly_posts: z.number().int().optional(),
     prorata_basis: enumOf(ProrataBasis).optional(),
@@ -172,6 +174,8 @@ export const SiteUpdateSchema = z
     billing_model: enumOf(BillingModel).optional(),
     outside_monthly_close: z.boolean().optional(),
     guards_paid_by_client: z.boolean().optional(),
+    // EMP-P1：呢個盤用邊種工號（U／MP；null＝清走＝未設定）。跟「盤」module update 權限。
+    staff_scheme: z.enum(["U", "MP"]).nullable().optional(),
     monthly_fee: money,
     monthly_posts: z.number().int().optional(),
     prorata_basis: enumOf(ProrataBasis).optional(),
@@ -384,6 +388,7 @@ const staffNumberValue = z
   .refine((v) => STAFF_NUMBER_NUMBER_RE.test(v), {
     message: `number 格式唔啱（正規化後要係 1-4 位大寫英文字母 + 1-16 位英文字母／數字／連字符，總長 ≤20）`,
   });
+const staffNumberEndReason = z.enum(["resigned", "replaced", "cancelled"]);
 export const GuardStaffNumberCreateSchema = z
   .object({
     scheme: staffNumberScheme,
@@ -391,24 +396,47 @@ export const GuardStaffNumberCreateSchema = z
     // 應修 2（Opus 驗收第二輪）：`valid_from`（DB 欄 nullable）跟
     // GuardUpdateSchema 嗰批日期欄一致改用 `nullableDateOnly`。
     valid_from: nullableDateOnly,
+    // EMP-P1：補歷史卡——status=former 必須有 valid_to＋end_reason；current 唔准帶。
+    valid_to: nullableDateOnly,
+    status: staffNumberStatus.optional(),
+    end_reason: z.union([z.null(), staffNumberEndReason]).optional(),
+    // EMP-P1：同 scheme 已有 current 時 true＝換號（舊卡 replaced），冇傳＝409 current_exists。
+    replaces_current: z.boolean().optional(),
     note: nullableString,
   })
-  .strict();
+  .strict()
+  .superRefine((v, ctx) => {
+    const status = v.status ?? "current";
+    if (status === "former") {
+      if (!v.valid_to) ctx.addIssue({ code: "custom", path: ["valid_to"], message: "補歷史卡（status=former）必須填離職／停用日 valid_to" });
+      if (!v.end_reason) ctx.addIssue({ code: "custom", path: ["end_reason"], message: "補歷史卡（status=former）必須填結束原因 end_reason" });
+      if (v.replaces_current) ctx.addIssue({ code: "custom", path: ["replaces_current"], message: "補歷史卡唔可以帶 replaces_current" });
+    } else if (v.valid_to || v.end_reason) {
+      ctx.addIssue({ code: "custom", path: ["valid_to"], message: "現用卡（status=current）唔可以帶 valid_to／end_reason" });
+    }
+    if (v.valid_from && v.valid_to && v.valid_from.getTime() > v.valid_to.getTime()) {
+      ctx.addIssue({ code: "custom", path: ["valid_to"], message: "valid_from（入職日）唔可以遲過 valid_to（離職／停用日）" });
+    }
+  });
 export const GuardStaffNumberUpdateSchema = z
   .object({
     status: staffNumberStatus.optional(),
     // 應修 2：`valid_from`／`valid_to` 一樣改用 `nullableDateOnly`——
-    // `null`＝清空，former 行清 `valid_to` 一樣容許（呢個 route 本身冇
-    // 額外「former 一定要有 valid_to」嘅限制，見
-    // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
+    // `null`＝清空。EMP-P1：轉 former 必須有 valid_to＋end_reason（route 層合併現值後驗）。
     valid_from: nullableDateOnly,
     valid_to: nullableDateOnly,
+    end_reason: z.union([z.null(), staffNumberEndReason]).optional(),
     note: nullableString,
     // 打錯用呢個改，唔洗刪咗重加——同樣行 unique/prefix 檢查（見
     // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
     number: staffNumberValue.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.valid_from && v.valid_to && v.valid_from.getTime() > v.valid_to.getTime()) {
+      ctx.addIssue({ code: "custom", path: ["valid_to"], message: "valid_from（入職日）唔可以遲過 valid_to（離職／停用日）" });
+    }
+  });
 
 // ---------------------------------------------------------------------------
 // WP-MULTI（老闆 2026-09-19 拍板）：電話／緊急聯絡人／地址三張新子表——
@@ -560,6 +588,8 @@ export const ShiftRecordCreateSchema = z
     guard_wage_snapshot: money,
     broker_fee_snapshot: money,
     source: z.string().optional(),
+    // EMP-P1：明確指定工號卡（必須屬同一個 guard）；冇傳就由 server 推導。
+    staff_number_id: uuid.optional(),
   })
   .strict();
 export const ShiftRecordUpdateSchema = z
@@ -766,6 +796,8 @@ const ShiftRecordBatchCellSchema = z
     // 內部角色冇填就 default 用 guard.default_broker_id。
     settlement_broker_id: uuid.optional(),
     operational_broker_id: uuid.optional(),
+    // EMP-P1：人有多張合資格工號卡時手揀（寫 shift_records.staff_number_id；必須屬同一個 guard）。
+    staff_number_id: uuid.nullable().optional(),
   })
   .strict();
 export const ShiftRecordBatchSchema = z

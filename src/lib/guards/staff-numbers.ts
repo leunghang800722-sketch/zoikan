@@ -5,9 +5,16 @@
 //   (1) 員工編號種類：U＝去 Wilson 盤做散工必須有；MP＝去第二間公司嘅
 //       盤做散工用；MG＝轉咗長工（純內部出糧／行政用，唔係前線）；
 //       MW＝公司寫字樓員工編號（office staff，唔係前線保安）。
-//   (2) 更表／匯出一律顯示 U 號——`guards.staff_no`（現用 U）係更表編輯
-//       器／匯出 Excel／報表淨一嘅工號來源，唔會顯示 `staff_no_mw`
-//       （MG／MW），呢兩個純粹俾內部出糧／行政用。
+//   (2) 【EMP-P1 改寫，推翻舊「一律顯示 U 號」】更表／匯出跟盤嘅
+//       `sites.staff_scheme` 顯示工號：U 盤印該人現用 U 號、MP 盤印現用 MP
+//       號；盤未設定 scheme 就照舊印 `guards.staff_no`（U）。同一盤唔會
+//       同時有 U 同 MP。`staff_no_mw`（MG／MW）仍然純粹俾內部出糧／行政
+//       用，唔會出現喺更表／匯出。
+//   (2b) 【EMP-P1】一份個人資料（guards）＋N 張工號卡（guard_staff_numbers）：
+//       `valid_from`＝入職日、`valid_to`＝離職／停用日；`end_reason`
+//       （resigned／replaced／cancelled）分開「離職」同「同一段聘用內換號」；
+//       換號時新卡 `predecessor_id` 指向舊卡。每更次經
+//       src/lib/shift-records/staff-number.ts 推導用邊張卡。
 //   (3) 轉長工後 U／MP 繼續有效——一個人可以同時有 U／MP／MG 三種現用
 //       號，加 MG 唔會影響 U／MP 嘅 current 狀態（呢個檔案「一種
 //       scheme 一個 current」嘅唯一性淨係限**同一個 scheme 入面**，跨
@@ -31,7 +38,7 @@
 //   2. `deriveSiaPermitExpiry()`——SIA 牌照甲／乙類到期日 →
 //      衍生 `sia_permit_expiry`／`sia_permit_type`。
 import type { Prisma, GuardStaffNumber } from "@prisma/client";
-import { BadRequest, Conflict, Forbidden } from "../api/errors";
+import { ApiError, BadRequest, Conflict, Forbidden } from "../api/errors";
 import { todayLocalStr } from "../ui/format";
 import { writeAudit } from "../audit";
 
@@ -84,7 +91,7 @@ export function schemeFromNumber(raw: string): string | null {
 // YYYY-MM-DD 字串起 `T00:00:00.000Z`（唔經 HKT 換算），等 Postgres 攞到
 // 嘅日曆日就係 HK 今日本身，唔會早/遲一日。全檔（呢個 module）寫
 // `@db.Date` 一律用呢個慣例，唔再用 `hkDayStartUtc()`。
-export function hkToday(now: Date = new Date()): Date {
+function hkToday(now: Date = new Date()): Date {
   const ymd = todayLocalStr(now);
   return new Date(`${ymd}T00:00:00.000Z`);
 }
@@ -98,12 +105,44 @@ export interface UpsertStaffNumberInput {
   source?: string | null;
   createdBy?: string | null;
   now?: Date;
+  /** EMP-P1：補歷史卡用——status=former 必須同時帶 validTo＋endReason；預設 current。 */
+  status?: "current" | "former";
+  validTo?: Date | null;
+  endReason?: StaffNumberEndReason | null;
+  /** EMP-P1：同 scheme 已有 current 時——true＝換號（舊行 former＋replaced＋valid_to=今日，新行 predecessor=舊行）；
+   * 冇傳＝409 `current_exists`（要先 PATCH 結束舊卡填離職日＋原因，先開新卡＝重新入職）。 */
+  replacesCurrent?: boolean;
+  /** EMP-P1.1：換號時舊卡 `end_reason`（預設 replaced）。舊 `PATCH /api/guards/:id` 改號路徑傳 null——舊 API 唔分換號／重新入職，唔好標 replaced。 */
+  replacedEndReason?: StaffNumberEndReason | null;
   // M2b（Opus 驗收）：409（撞號）response 帶 `guard_id` 呢個結構化 detail
   // 淨係俾內部角色（老闆／主管／會計）見到，雞頭（同其他角色）一律唔
   // 畀——call site 要明確傳 `true`（`src/lib/broker-isolation.ts
   // isInternalRole()`），default `false`（default-deny，就算漏傳都唔會
   // 洩漏）。
   revealConflictGuardId?: boolean;
+}
+
+const STAFF_NUMBER_END_REASONS = ["resigned", "replaced", "cancelled"] as const;
+type StaffNumberEndReason = (typeof STAFF_NUMBER_END_REASONS)[number];
+
+/** EMP-P1：同 guard 同 scheme 兩張卡都有齊 valid_from／valid_to 時唔准重疊（含頭尾日）；任何一邊缺日期就唔檢查。
+ * `ignoreIds`＝本次操作中被取代／自己嘅卡（例如換號嘅舊卡）。409 `period_overlap`（唔回任何工號／姓名）。 */
+export async function assertNoStaffNumberPeriodOverlap(
+  tx: Tx,
+  params: { guardId: string; scheme: string; validFrom: Date | null | undefined; validTo: Date | null | undefined; ignoreIds?: readonly string[] },
+): Promise<void> {
+  if (!params.validFrom || !params.validTo) return;
+  const others = await tx.guardStaffNumber.findMany({
+    where: { guardId: params.guardId, scheme: params.scheme, validFrom: { not: null }, validTo: { not: null }, ...(params.ignoreIds?.length ? { id: { notIn: [...params.ignoreIds] } } : {}) },
+    select: { validFrom: true, validTo: true },
+  });
+  const from = params.validFrom.getTime();
+  const to = params.validTo.getTime();
+  for (const o of others) {
+    if (o.validFrom!.getTime() <= to && from <= o.validTo!.getTime()) {
+      throw new ApiError(409, "period_overlap", `同一個保安員同一種工號（${params.scheme}）嘅有效期間唔可以重疊，請檢查入職日／離職日`);
+    }
+  }
 }
 
 export interface UpsertStaffNumberResult {
@@ -114,9 +153,10 @@ export interface UpsertStaffNumberResult {
 }
 
 /** `POST /api/guards/:id/staff-numbers` 同「PATCH /api/guards/:id 舊
- * 寫法」共用嘅核心 upsert 邏輯——起一行新 current；如果同一個 guard 同
- * 一個 scheme 已經有 current，就將舊嗰行自動轉 `former`（`validTo`＝今日
- * HK）；`number` 已經被（任何，包括自己）guard 用緊就 409（唔回姓名，
+ * 寫法」共用嘅核心 upsert 邏輯——起一行新卡；EMP-P1 起同一個 guard 同
+ * 一個 scheme 已經有 current 時**唔再靜靜**將舊行當離職：caller 傳
+ * `replacesCurrent: true` 先換號（舊行 former＋end_reason=replaced＋
+ * `validTo`＝今日 HK，新行 predecessor_id=舊行），冇傳就 409 `current_exists`；`number` 已經被（任何，包括自己）guard 用緊就 409（唔回姓名，
  * `revealConflictGuardId=true`——即係內部角色——先回埋邊個 guard_id，
  * 見 `src/lib/api/errors.ts` `ApiError.details`／M2b）。
  *
@@ -158,25 +198,49 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
     throw Conflict("呢個工號已經有人用緊", input.revealConflictGuardId ? { guard_id: conflictingRow.guardId } : undefined);
   }
 
-  const existingCurrent = await tx.guardStaffNumber.findFirst({
-    where: { guardId: input.guardId, scheme, status: "current" },
-  });
-  let convertedFormer: { before: GuardStaffNumber; after: GuardStaffNumber } | null = null;
-  if (existingCurrent) {
-    const after = await tx.guardStaffNumber.update({
-      where: { id: existingCurrent.id },
-      data: { status: "former", validTo: hkToday(input.now) },
-    });
-    convertedFormer = { before: existingCurrent, after };
+  const status = input.status ?? "current";
+  const validTo = input.validTo ?? null;
+  const endReason = input.endReason ?? null;
+  if (status === "former") {
+    if (!validTo || !endReason) throw BadRequest("補歷史卡（status=former）必須同時填離職／停用日（valid_to）同結束原因（end_reason）");
+  } else if (validTo || endReason) {
+    throw BadRequest("現用卡（status=current）唔可以帶 valid_to／end_reason");
   }
+  if (endReason && !STAFF_NUMBER_END_REASONS.includes(endReason)) throw BadRequest("end_reason 要係 resigned／replaced／cancelled");
+  if (input.validFrom && validTo && input.validFrom.getTime() > validTo.getTime()) throw BadRequest("valid_from（入職日）唔可以遲過 valid_to（離職／停用日）");
+
+  let convertedFormer: { before: GuardStaffNumber; after: GuardStaffNumber } | null = null;
+  let predecessorId: string | null = null;
+  const ignoreIds: string[] = [];
+  if (status === "current") {
+    const existingCurrent = await tx.guardStaffNumber.findFirst({
+      where: { guardId: input.guardId, scheme, status: "current" },
+    });
+    if (existingCurrent) {
+      if (!input.replacesCurrent) {
+        throw new ApiError(409, "current_exists", `呢個保安員已經有現用嘅 ${scheme} 號；換號請帶 replaces_current，重新入職要先喺舊卡填離職日同原因結束舊卡`);
+      }
+      const after = await tx.guardStaffNumber.update({
+        where: { id: existingCurrent.id },
+        data: { status: "former", endReason: input.replacedEndReason === undefined ? "replaced" : input.replacedEndReason, validTo: hkToday(input.now) },
+      });
+      convertedFormer = { before: existingCurrent, after };
+      predecessorId = existingCurrent.id;
+      ignoreIds.push(existingCurrent.id);
+    }
+  }
+  await assertNoStaffNumberPeriodOverlap(tx, { guardId: input.guardId, scheme, validFrom: input.validFrom, validTo, ignoreIds });
 
   const created = await tx.guardStaffNumber.create({
     data: {
       guardId: input.guardId,
       scheme,
       number,
-      status: "current",
+      status,
       validFrom: input.validFrom ?? null,
+      validTo,
+      endReason,
+      predecessorId,
       note: input.note ?? null,
       source: input.source ?? "manual",
       createdBy: input.createdBy ?? null,
@@ -190,7 +254,7 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
  * 嗰一行（`validTo` desc nulls last → `updatedAt` desc）。俾
  * `syncLegacyStaffNoColumns()` 用（B，見下面大註解）——`rows` 要傳呢個
  * guard **全部**行（唔限 status），呢度自己揀返啱個 scheme。 */
-function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: string): GuardStaffNumber | undefined {
+export function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: string): GuardStaffNumber | undefined {
   const schemeRows = rows.filter((r) => r.scheme === scheme);
   const current = schemeRows.find((r) => r.status === "current");
   if (current) return current;
@@ -354,7 +418,7 @@ export async function applyLegacyStaffNoPatch(
       throw BadRequest(`staff_no 只收 U 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNo}`);
     }
     changes.push(
-      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNo, source: "manual:legacy-patch(staff_no)", createdBy, now, revealConflictGuardId }),
+      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNo, source: "manual:legacy-patch(staff_no)", createdBy, now, revealConflictGuardId, replacesCurrent: true, replacedEndReason: null }),
     );
   }
   if (staffNoMw) {
@@ -366,7 +430,7 @@ export async function applyLegacyStaffNoPatch(
       throw BadRequest(`staff_no_mw 只收 MG／MW 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNoMw}`);
     }
     changes.push(
-      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNoMw, source: "manual:legacy-patch(staff_no_mw)", createdBy, now, revealConflictGuardId }),
+      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNoMw, source: "manual:legacy-patch(staff_no_mw)", createdBy, now, revealConflictGuardId, replacesCurrent: true, replacedEndReason: null }),
     );
   }
   if (changes.length) {

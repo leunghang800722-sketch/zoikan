@@ -694,8 +694,21 @@ model GuardStaffNumber {
   number String                 @unique
   status GuardStaffNumberStatus @default(current)
 
+  // EMP-P1 語意（老闆 2026-10 拍板，「一份個人資料＋N 張工號卡」）：
+  //   valid_from＝入職日（呢張工號卡開始生效）；valid_to＝離職／停用日（最後有效日）。
+  //   換號（同一段聘用內轉新號）同離職分開記：end_reason=replaced／resigned／cancelled。
+  //   舊資料 valid_to 原本係「取消操作日」，P1 唔改現有數據（只補語意，唔回填）。
   validFrom DateTime? @map("valid_from") @db.Date
   validTo   DateTime? @map("valid_to") @db.Date
+  // EMP-P1：結束原因（resigned＝離職／replaced＝換號／cancelled＝作廢取消）。只喺 status=former 有意義；舊行 null。
+  endReason String? @map("end_reason")
+  // EMP-P1：換號前身——新卡指向被佢取代嗰張舊卡（同一段聘用）；重新入職（先 resigned 再開新卡）冇 predecessor。
+  predecessorId String?            @map("predecessor_id")
+  predecessor   GuardStaffNumber?  @relation("StaffNumberPredecessor", fields: [predecessorId], references: [id], onDelete: SetNull)
+  successors    GuardStaffNumber[] @relation("StaffNumberPredecessor")
+  // EMP-P1：用呢張工號卡嘅更次（shift_records.staff_number_id）／已鎖月側表歸屬。
+  shiftRecords            ShiftRecord[]
+  shiftRecordAttributions ShiftRecordStaffAttribution[]
   note      String?
   // migration:staff_no／migration:staff_no_mw（搬遷嚟）／manual（API 手動
   // 加）／import:u-team 等——邊度嚟嘅呢一行。
@@ -710,12 +723,28 @@ model GuardStaffNumber {
   // `CREATE UNIQUE INDEX ... WHERE status = 'current'`，呢度淨係留返
   // 一個普通 index 幫查詢，唔係約束本身）。
   @@index([guardId, scheme])
+  @@index([predecessorId])
   @@map("guard_staff_numbers")
 }
 
 enum GuardStaffNumberStatus {
   current
   former
+}
+
+// EMP-P1：已鎖月更次嘅工號卡歸屬側表（回填專用）。shift_records 鎖月後一欄都唔寫，
+// 所以歸屬另存呢度；一個更次最多一行。純歸屬資訊，唔含任何金額。
+model ShiftRecordStaffAttribution {
+  shiftRecordId String           @id @map("shift_record_id")
+  shiftRecord   ShiftRecord      @relation(fields: [shiftRecordId], references: [id], onDelete: Restrict)
+  staffNumberId String           @map("staff_number_id")
+  staffNumber   GuardStaffNumber @relation(fields: [staffNumberId], references: [id], onDelete: Restrict)
+  staffScheme   String           @map("staff_scheme")
+  source        String // backfill:roster_file／backfill:longterm／backfill:range／backfill:sole
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  @@index([staffNumberId])
+  @@map("shift_record_staff_attributions")
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +778,9 @@ model Site {
   // （跟「盤」module update 權限）；(5) 唔改 gross-margin 服務費收入點計
   // （老闆話維持現狀）。見 src/lib/pricing/unpriced.ts、resolve-rate.ts。
   guardsPaidByClient  Boolean       @default(false) @map("guards_paid_by_client")
+  // EMP-P1：呢個盤用邊種工號出現喺更表／匯出（U＝Wilson 盤；MP＝在勤（Maxwell）盤）。null＝未設定（照舊印 U）。
+  // 同一盤唔會同時有 U 同 MP（老闆 P0 答案）。
+  staffScheme         String?       @map("staff_scheme")
   status              SiteStatus    @default(active)
   // P1-WP3：更表版面模板（`RosterLayoutTemplate`，見
   // src/lib/roster-layout-template.ts）——由 seed 時由 data/ 讀出反推
@@ -922,10 +954,22 @@ model ShiftRecord {
   provenance Json?
   status     ShiftRecordStatus @default(confirmed)
 
+  // EMP-P1：呢更用邊張工號卡（人 N 張卡之一）。全部 nullable、純歸屬資訊，唔影響任何金額。
+  //   staff_scheme＝寫入當刻嘅 scheme 快照（U／MP／MG…）；
+  //   staff_number_source＝點樣推出嚟：payload／roster_file／longterm／site_scheme／
+  //   backfill:roster_file／backfill:longterm／backfill:range／backfill:sole／manual。
+  //   已鎖月嘅更次本身一欄都唔寫，回填結果入 shift_record_staff_attributions 側表。
+  staffNumberId     String?           @map("staff_number_id")
+  staffNumber       GuardStaffNumber? @relation(fields: [staffNumberId], references: [id], onDelete: Restrict)
+  staffScheme       String?           @map("staff_scheme")
+  staffNumberSource String?           @map("staff_number_source")
+  staffAttribution  ShiftRecordStaffAttribution?
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
+  @@index([staffNumberId])
   @@unique([guardId, workDate, shiftTypeId])
   @@index([siteId, workDate])
   @@index([workDate])

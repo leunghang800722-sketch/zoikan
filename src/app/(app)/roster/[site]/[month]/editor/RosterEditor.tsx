@@ -199,6 +199,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     saveToastSettlementInferred,
     rowBrokerOverrides,
     setRowBrokerOverrides,
+    rowStaffOverrides,
+    setRowStaffOverrides,
     showAddGuard,
     setShowAddGuard,
     addGuardId,
@@ -508,6 +510,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         selectedBrokerCode={selectedBrokerCode}
         rowBrokerOverrides={rowBrokerOverrides}
         setRowBrokerOverrides={setRowBrokerOverrides}
+        rowStaffOverrides={rowStaffOverrides}
+        setRowStaffOverrides={setRowStaffOverrides}
         brokerSelectOptions={brokerSelectOptions}
         fillRowKey={fillRowKey}
         setFillRowKey={setFillRowKey}

@@ -26,6 +26,7 @@ import { resolveShiftPricing, type BrokerKindLike } from "@/lib/pricing/resolve-
 import { journalAutoCardUses } from "@/lib/pricing/auto-card-journal";
 import { reconcileUpload, type ReconcileCategory, type ReconcileItem } from "./reconcile";
 import { ROSTER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
+import { resolveShiftStaffNumbers, shouldWriteStaffNumber, staffNumberData, type ResolvedStaff } from "@/lib/shift-records/staff-number";
 
 type ReconcileDecisionAction = "apply_roster" | "keep_system" | "exception";
 
@@ -125,6 +126,7 @@ async function upsertRosterShiftRecord(
   pricing: Pricing,
   actorUserId: string,
   audits: PendingAudit[],
+  staff: ResolvedStaff | null,
 ): Promise<string> {
   const workDateObj = new Date(`${roster.workDate}T00:00:00.000Z`);
   const recordType = rosterRecordType(roster);
@@ -163,14 +165,20 @@ async function upsertRosterShiftRecord(
   const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number((v as { toString(): string }).toString()));
   const afterTuple: [number | null, number | null, number | null] = [pricing.clientRate, pricing.guardWage, pricing.brokerFee];
   if (existing) {
-    const updated = await tx.shiftRecord.update({ where: { id: existing.id }, data });
+    // EMP-P1：工號歸屬（更表檔工號對中 → roster_file 會覆寫；其他推算只填空位）
+    // EMP-P1.1：重新啟用 cancelled 記錄 → 先清三欄（同 create-or-reuse 一致），再按今次推導重寫
+    const reactivating = existing.status === "cancelled";
+    const updated = await tx.shiftRecord.update({
+      where: { id: existing.id },
+      data: { ...data, ...(reactivating ? { staffNumberId: null, staffScheme: null, staffNumberSource: null } : {}), ...staffNumberData(shouldWriteStaffNumber(reactivating ? { staffNumberId: null } : existing, staff) ? staff : null) },
+    });
     audits.push({ tableName: "shift_records", rowId: updated.id, action: "update", before: existing, after: updated });
     await journalAutoCardUses([{ recordId: updated.id, before: [num(existing.clientRateSnapshot), num(existing.guardWageSnapshot), num(existing.brokerFeeSnapshot)], after: afterTuple, ...pricing.sources }], tx);
     return updated.id;
   }
 
   const created = await tx.shiftRecord.create({
-    data: { ...data, workDate: workDateObj, shiftTypeId: roster.shiftTypeId, guardId: roster.guardId, createdBy: actorUserId },
+    data: { ...data, ...staffNumberData(staff), workDate: workDateObj, shiftTypeId: roster.shiftTypeId, guardId: roster.guardId, createdBy: actorUserId },
   });
   audits.push({ tableName: "shift_records", rowId: created.id, action: "create", after: created });
   await journalAutoCardUses([{ recordId: created.id, before: [null, null, null], after: afterTuple, ...pricing.sources }], tx);
@@ -227,7 +235,7 @@ export interface ApplyReconcileResult {
   pendingCount: number;
 }
 
-type Plan = { input: ReconcileActionInput; item: ReconcileItem; pricing: Pricing | null };
+type Plan = { input: ReconcileActionInput; item: ReconcileItem; pricing: Pricing | null; staff?: ResolvedStaff | null };
 
 export async function applyReconcileDecisions(params: ApplyReconcileParams): Promise<ApplyReconcileResult> {
   const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId }, select: ROSTER_UPLOAD_META_SELECT });
@@ -336,6 +344,15 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
     async (tx) => {
       // P6.1f（H6）：長 tx（可達 120 秒）開頭 FOR SHARE 再查一次鎖月。
       await assertMonthNotLockedTx(tx, { workDate: month, actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
+      // EMP-P1：批量推導每格用邊張工號卡（更表檔工號 → B07 長工 MG → 盤 scheme），同一 tx、一次 prefetch。
+      const staffByKey = await resolveShiftStaffNumbers(
+        tx,
+        [...shiftPlans, ...otPlans].flatMap((p) => {
+          const r = p.item.roster;
+          return r ? [{ key: p.input.key, guardId: r.guardId, siteId: r.siteId, workDate: new Date(`${r.workDate}T00:00:00.000Z`), rosterRowId: r.rowId, settlementBrokerId: r.settlementBrokerId }] : [];
+        }),
+      );
+      for (const p of [...shiftPlans, ...otPlans]) p.staff = staffByKey.get(p.input.key) ?? null;
       // 正更/leave/system_only(cancel)/settlement_diff 先寫，OT 後寫（等
       // parent_shift_id 搵得到啱先寫低嘅正更）。
       for (const plan of [...shiftPlans, ...otPlans]) {
@@ -432,7 +449,7 @@ async function applyOneRosterAction(tx: Tx, ctx: WriteContext, plan: Plan, actor
   const pricing = plan.pricing ?? { clientRate: null, guardWage: null, brokerFee: null };
   switch (item.category) {
     case "roster_only": {
-      const id = await upsertRosterShiftRecord(tx, ctx, item.roster!, pricing, actorUserId, audits);
+      const id = await upsertRosterShiftRecord(tx, ctx, item.roster!, pricing, actorUserId, audits, plan.staff ?? null);
       return [id];
     }
     case "system_only": {
@@ -442,7 +459,7 @@ async function applyOneRosterAction(tx: Tx, ctx: WriteContext, plan: Plan, actor
     case "guard_diff":
     case "shift_type_diff": {
       const cancelledId = await cancelSystemRecord(tx, item.system!.id, audits);
-      const newId = await upsertRosterShiftRecord(tx, ctx, item.roster!, pricing, actorUserId, audits);
+      const newId = await upsertRosterShiftRecord(tx, ctx, item.roster!, pricing, actorUserId, audits, plan.staff ?? null);
       return [cancelledId, newId];
     }
     case "settlement_diff": {
@@ -456,6 +473,7 @@ async function applyOneRosterAction(tx: Tx, ctx: WriteContext, plan: Plan, actor
           operationalBrokerId: roster.operationalBrokerId ?? roster.settlementBrokerId, // WP-LTSHIFT §2：長工格保留雞頭碼做成本桶
           source: "roster_upload",
           provenance: { upload_id: ctx.uploadId, row_id: roster.rowId, version: ctx.uploadVersion } as unknown as Prisma.InputJsonValue,
+          ...staffNumberData(shouldWriteStaffNumber(before, plan.staff) ? plan.staff : null),
           // plan.pricing=null：LINK 盤／PR 佔位／非正更——保留現有 snapshot。
           ...(plan.pricing ? { clientRateSnapshot: plan.pricing.clientRate, guardWageSnapshot: plan.pricing.guardWage, brokerFeeSnapshot: plan.pricing.brokerFee } : {}),
         },

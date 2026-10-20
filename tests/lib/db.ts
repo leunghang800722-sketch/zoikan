@@ -73,6 +73,7 @@ export async function clearAll() {
   await prisma.guardFixRun.deleteMany({});
   await prisma.staffListUpload.deleteMany({}); // 名單上載（FK 落 users；guard_fix_runs 先刪），唔跨檔累積
   await prisma.postorderUpload.deleteMany({});
+  await prisma.shiftRecordStaffAttribution.deleteMany({}); // EMP-P1：已鎖月更次工號歸屬側表（FK Restrict 落 shift_records／guard_staff_numbers）
   await prisma.shiftRecord.updateMany({ data: { parentShiftId: null } });
   await prisma.shiftRecord.deleteMany({});
   await prisma.brokerSiteAssignment.deleteMany({}); // C1：清埋先可以安全刪 site/broker

@@ -12,7 +12,7 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { GuardStaffNumberUpdateSchema } from "@/lib/api/schemas";
-import { normalizeStaffNumber, syncLegacyStaffNoColumns, hkToday } from "@/lib/guards/staff-numbers";
+import { normalizeStaffNumber, syncLegacyStaffNoColumns, assertNoStaffNumberPeriodOverlap } from "@/lib/guards/staff-numbers";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden, Conflict, BadRequest } from "@/lib/api/errors";
 import type { GuardStaffNumber } from "@prisma/client";
@@ -73,14 +73,29 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           }
         }
         data.status = parsed.status;
-        // Opus 覆核 M1：手動取消都要記低取消日期（同「加新號自動取消舊號」
-        // 一致）；改返現用就清走取消日期。用戶同一個 request 明確俾咗
-        // valid_to 就以用戶為準（下面會覆蓋）。
-        if (parsed.status === "former" && !row.validTo) data.validTo = hkToday();
-        if (parsed.status === "current") data.validTo = null;
+        // EMP-P1：結束一張卡（→former）必須有離職／停用日＋結束原因（呢度合併現值同今次輸入先驗）；
+        // 改返現用就清走 valid_to／end_reason（predecessor 保留）。
+        if (parsed.status === "current") {
+          data.validTo = null;
+          data.endReason = null;
+        }
       }
       if (parsed.valid_from !== undefined) data.validFrom = parsed.valid_from;
-      if (parsed.valid_to !== undefined) data.validTo = parsed.valid_to;
+      if (parsed.valid_to !== undefined && parsed.status !== "current") data.validTo = parsed.valid_to;
+      if (parsed.end_reason !== undefined && parsed.status !== "current") data.endReason = parsed.end_reason;
+      const nextStatus = (data.status as string | undefined) ?? row.status;
+      const nextFrom = (data.validFrom !== undefined ? data.validFrom : row.validFrom) as Date | null;
+      const nextTo = (data.validTo !== undefined ? data.validTo : row.validTo) as Date | null;
+      const nextReason = (data.endReason !== undefined ? data.endReason : row.endReason) as string | null;
+      const touchesEnd = data.status !== undefined || parsed.valid_to !== undefined || parsed.end_reason !== undefined;
+      if (nextStatus === "former" && touchesEnd && (!nextTo || !nextReason)) {
+        throw BadRequest("結束工號卡（改做已取消）必須同時填離職／停用日（valid_to）同結束原因（end_reason）");
+      }
+      if (nextStatus === "current" && nextReason) data.endReason = null;
+      if (nextFrom && nextTo && nextFrom.getTime() > nextTo.getTime()) throw BadRequest("valid_from（入職日）唔可以遲過 valid_to（離職／停用日）");
+      if (data.validFrom !== undefined || data.validTo !== undefined) {
+        await assertNoStaffNumberPeriodOverlap(tx, { guardId: id, scheme: row.scheme, validFrom: nextFrom, validTo: nextTo, ignoreIds: [row.id] });
+      }
       if (parsed.note !== undefined) data.note = parsed.note;
 
       if (Object.keys(data).length === 0) {

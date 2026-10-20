@@ -34,6 +34,7 @@ import {
   matchBroker,
   matchShiftType,
   matchGuard,
+  staffNoCardHit,
   resolveRosterUploadSite,
   type SiteCandidate,
   type BrokerCandidate,
@@ -370,9 +371,18 @@ async function matchRowsAndSummarize(
       warnings.push("用已取消舊號配對");
     }
     if (guardResult.staffNoMismatch && guardResult.guardId) {
-      staffNoMismatchCount += 1;
-      const systemStaffNo = guardIndex.staffNoByGuardId.get(guardResult.guardId) ?? "（未有工號）";
-      warnings.push(`檔案工號 ${r.staffNoRaw} 同系統工號 ${systemStaffNo} 唔一致`);
+      // EMP-P1：同該 guard 所有工號卡比較——任何一張（U／MP／MG…，含已取消）對中就唔警告；對中已取消卡保留「用已取消舊號」警告。
+      const cardHit = staffNoCardHit(guardIndex, guardResult.guardId, r.staffNoRaw);
+      if (cardHit.hit) {
+        if (cardHit.former && !guardResult.matchedViaFormerStaffNo) {
+          staleStaffNoCount += 1;
+          warnings.push("用已取消舊號配對");
+        }
+      } else {
+        staffNoMismatchCount += 1;
+        const systemStaffNo = guardIndex.staffNoByGuardId.get(guardResult.guardId) ?? "（未有工號）";
+        warnings.push(`檔案工號 ${r.staffNoRaw} 同系統工號 ${systemStaffNo} 唔一致`);
+      }
     }
     // B1-8 第 3 項（B-0 驗收留低）：檔案工號命中咗一個人、但呢行姓名同
     // 嗰個人唔夾——「唔准配」（match.ts 已經回 guardId=null、ambiguous），

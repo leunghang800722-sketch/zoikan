@@ -474,6 +474,15 @@ export interface GuardMatchIndex {
   /** WP-STAFF-IMPORT B2：正規化電話（`guards.tel`＋`guard_phones`）→ guardId 全部。電話全表唯一，
    * 所以通常只有一個；多於一個（歷史重複）就唔當鍵用。optional：舊測試自己砌 index 唔使改。 */
   byTel?: ReadonlyMap<string, readonly string[]>;
+  /** EMP-P1：guardId → 該 guard 全部工號卡（正規化 number → status）。「檔案工號同系統工號唔一致」要同所有卡比較，唔係淨係 U。optional：舊測試自己砌 index 唔使改。 */
+  cardsByGuardId?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+}
+
+/** EMP-P1：檔案工號（原文）有冇對中呢個 guard 嘅任何一張卡（含已取消）。former＝對中已取消舊卡。 */
+export function staffNoCardHit(index: GuardMatchIndex, guardId: string, staffNoRaw: string | null): { hit: boolean; former: boolean } {
+  if (!staffNoRaw) return { hit: false, former: false };
+  const status = index.cardsByGuardId?.get(guardId)?.get(normalizeStaffNumber(staffNoRaw));
+  return status === undefined ? { hit: false, former: false } : { hit: true, former: status === "former" };
 }
 
 function telKey(raw: string): string {
@@ -495,7 +504,11 @@ export function buildGuardMatchIndex(rows: {
   matchOverrides?: readonly { staffNo: string; nameRaw: string; guardId: string }[];
 }): GuardMatchIndex {
   const byStaffNumber = new Map<string, { guardId: string; status: string }>();
-  for (const sn of rows.staffNumbers) byStaffNumber.set(normalizeStaffNumber(sn.number), { guardId: sn.guardId, status: sn.status });
+  const cardsByGuardId = new Map<string, Map<string, string>>();
+  for (const sn of rows.staffNumbers) {
+    byStaffNumber.set(normalizeStaffNumber(sn.number), { guardId: sn.guardId, status: sn.status });
+    (cardsByGuardId.get(sn.guardId) ?? cardsByGuardId.set(sn.guardId, new Map()).get(sn.guardId)!).set(normalizeStaffNumber(sn.number), sn.status);
+  }
 
   const byLegacyStaffNo = new Map<string, string>();
   const staffNoByGuardId = new Map<string, string | null>();
@@ -561,7 +574,7 @@ export function buildGuardMatchIndex(rows: {
   const staffNoConflictOverrides = new Map<string, string>();
   for (const o of rows.matchOverrides ?? []) staffNoConflictOverrides.set(overrideKey(normalizeStaffNumber(o.staffNo), o.nameRaw.trim()), o.guardId);
 
-  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId, staffNoConflictOverrides, byTel };
+  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId, staffNoConflictOverrides, byTel, cardsByGuardId };
 }
 
 function overrideKey(staffNoNorm: string, name: string): string {

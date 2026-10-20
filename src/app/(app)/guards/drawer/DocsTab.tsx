@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { Pill } from "@/components/ui/Pill";
 import { fmtDate } from "@/lib/ui/format";
-import { BLACKLIST_LABEL, BLACKLIST_RESULTS, KNOWN_STAFF_NUMBER_SCHEMES, type StaffNumberRow } from "../guards-types";
+import { BLACKLIST_LABEL, BLACKLIST_RESULTS, END_REASON_LABEL, KNOWN_STAFF_NUMBER_SCHEMES, type StaffNumberRow } from "../guards-types";
 import { isAge70OrOlder } from "../guards-utils";
 import type { GuardForm } from "../useGuardForm";
 
@@ -139,6 +139,11 @@ export function StaffNumbersSection({ g, tabCls, isBroker }: { g: GuardForm; tab
     numberActionError,
     numberEditingId,
     numberEditForm,
+    numberEndingId,
+    numberEndForm,
+    setNumberEndForm,
+    setNumberEndingId,
+    onConfirmEndStaffNumber,
     setStaffNumberForm,
     setNumberEditForm,
     onAddStaffNumber,
@@ -168,7 +173,9 @@ export function StaffNumbersSection({ g, tabCls, isBroker }: { g: GuardForm; tab
               「取消」，等用戶睇得明「呢個係呢個號嘅入職/離職日期，唔係
               呢個人整體嘅」。 */}
           {isCurrent && n.valid_from && <span className="text-xs text-zk-muted">入職（呢個號）：{fmtDate(n.valid_from)}</span>}
-          {!isCurrent && n.valid_to && <span className="text-xs">離職／取消：{fmtDate(n.valid_to)}</span>}
+          {!isCurrent && n.valid_to && <span className="text-xs">離職／停用：{fmtDate(n.valid_to)}</span>}
+          {!isCurrent && n.end_reason && <span className="text-xs">原因：{END_REASON_LABEL[n.end_reason] ?? n.end_reason}</span>}
+          {n.predecessor_id && <span className="text-xs text-zk-muted">接替：{staffNumbers.find((x) => x.id === n.predecessor_id)?.number ?? "（舊號）"}</span>}
           {n.note && <span className="text-xs text-zk-muted">備註：{n.note}</span>}
           {!isBroker && (
             <div className="ml-auto flex gap-1.5">
@@ -190,6 +197,30 @@ export function StaffNumbersSection({ g, tabCls, isBroker }: { g: GuardForm; tab
             </div>
           )}
         </div>
+        {numberEndingId === n.id && (
+          <div className="mt-2 space-y-2 border-t border-zk-border pt-2" data-testid="staff-number-end-form">
+            <Banner kind="error" message={numberActionError} />
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="離職／停用日（必填）">
+                <input type="date" className={inputCls} value={numberEndForm.valid_to} onChange={(e) => setNumberEndForm((f) => ({ ...f, valid_to: e.target.value }))} />
+              </Field>
+              <Field label="原因（必填）">
+                <select className={selectCls} value={numberEndForm.end_reason} onChange={(e) => setNumberEndForm((f) => ({ ...f, end_reason: e.target.value }))}>
+                  <option value="resigned">離職</option>
+                  <option value="cancelled">作廢／取消</option>
+                </select>
+              </Field>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" type="button" disabled={numberActionBusy} onClick={onConfirmEndStaffNumber}>
+                {numberActionBusy ? "處理中…" : "確認結束"}
+              </Button>
+              <Button variant="secondary" size="sm" type="button" onClick={() => setNumberEndingId(null)}>
+                取消
+              </Button>
+            </div>
+          </div>
+        )}
         {isEditing && (
           <div className="mt-2 space-y-2 border-t border-zk-border pt-2">
             <Banner kind="error" message={numberActionError} />
@@ -221,6 +252,16 @@ export function StaffNumbersSection({ g, tabCls, isBroker }: { g: GuardForm; tab
                 />
               </Field>
             </div>
+            {!isCurrent && (
+              <Field label="結束原因">
+                <select className={selectCls} value={numberEditForm.end_reason} onChange={(e) => setNumberEditForm((f) => ({ ...f, end_reason: e.target.value }))}>
+                  <option value="">（未填）</option>
+                  <option value="resigned">離職</option>
+                  <option value="replaced">換號（被新號取代）</option>
+                  <option value="cancelled">作廢／取消</option>
+                </select>
+              </Field>
+            )}
             <Field label="備註">
               <input className={inputCls} value={numberEditForm.note} onChange={(e) => setNumberEditForm((f) => ({ ...f, note: e.target.value }))} />
             </Field>
@@ -341,6 +382,31 @@ export function StaffNumbersSection({ g, tabCls, isBroker }: { g: GuardForm; tab
                       <input className={inputCls} value={staffNumberForm.note} onChange={(e) => setStaffNumberForm((f) => ({ ...f, note: e.target.value }))} />
                     </Field>
                   </div>
+                  {/* EMP-P1：同 scheme 已有現用卡 → 要揀「換號」（舊卡標示被取代）；重新入職要先喺舊卡填離職日＋原因結束舊卡。補歷史卡＝已離職／停用嘅舊號。 */}
+                  <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-zk-muted">
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={staffNumberForm.replaces_current} disabled={staffNumberForm.historical} onChange={(e) => setStaffNumberForm((f) => ({ ...f, replaces_current: e.target.checked }))} />
+                      換號（取代現用嘅同類編號，同一段聘用）
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={staffNumberForm.historical} onChange={(e) => setStaffNumberForm((f) => ({ ...f, historical: e.target.checked, replaces_current: false }))} />
+                      補歷史卡（已離職／停用）
+                    </label>
+                  </div>
+                  {staffNumberForm.historical && (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <Field label="離職／停用日（必填）">
+                        <input type="date" className={inputCls} value={staffNumberForm.valid_to} onChange={(e) => setStaffNumberForm((f) => ({ ...f, valid_to: e.target.value }))} />
+                      </Field>
+                      <Field label="原因（必填）">
+                        <select className={selectCls} value={staffNumberForm.end_reason} onChange={(e) => setStaffNumberForm((f) => ({ ...f, end_reason: e.target.value }))}>
+                          <option value="resigned">離職</option>
+                          <option value="replaced">換號（被新號取代）</option>
+                          <option value="cancelled">作廢／取消</option>
+                        </select>
+                      </Field>
+                    </div>
+                  )}
                   <Button variant="secondary" size="sm"
                     type="button"
                     disabled={staffNumberSaving || !staffNumberForm.number}

@@ -75,6 +75,8 @@ export async function POST(req: Request) {
 
     // ---- 逐格 validate（未寫入任何嘢）----------------------------------
     const cells = parsed.cells as Cell[];
+    // EMP-P1：雞頭 session 唔准指定工號卡（歸屬由 server 推導）；內部角色可揀（會驗證屬同一個 guard）。
+    if (isBrokerRole(session)) for (const c of cells) c.staff_number_id = undefined;
     for (const c of cells) {
       if (c.work_date < month || c.work_date > monthEnd) {
         throw BadRequest(`work_date ${c.work_date.toISOString().slice(0, 10)} 唔屬於 ${parsed.month}`);
@@ -292,6 +294,7 @@ export async function POST(req: Request) {
     const ip = getClientIp(req);
     let results: Array<{ key: string; id: string; action: string; settlement_inferred?: boolean }> = [];
     let autoCardUses: AutoCardUse[] = [];
+    let noStaffNumberCount = 0;
     try {
       await prisma.$transaction(
         async (tx) => {
@@ -302,6 +305,7 @@ export async function POST(req: Request) {
           const applied = await applyShiftPlansTx(tx, { plans, siteId: parsed.site_id, actorUserId: session.userId, ip });
           results = applied.results;
           autoCardUses = applied.autoCardUses;
+          noStaffNumberCount = applied.noStaffNumberCount;
         },
         // P3-1.7（B-3）：Prisma interactive tx 預設 5 s——放寬到 60 s。
         { timeout: 60_000, maxWait: 10_000 },
@@ -333,7 +337,7 @@ export async function POST(req: Request) {
     // 現存記錄直接畀）——RosterEditor 儲存完可以喺度 toast「N 格結算單位
     // 推算，建議覆核」。
     const settlementInferredCount = results.filter((r) => r.settlement_inferred).length;
-    return ok(brandSafeResponse({ results, warnings, pricing, no_settlement_count: noSettlementCount, settlement_inferred_count: settlementInferredCount }), 200);
+    return ok(brandSafeResponse({ results, warnings, pricing, no_settlement_count: noSettlementCount, no_staff_number_count: noStaffNumberCount, settlement_inferred_count: settlementInferredCount }), 200);
   });
 }
 
