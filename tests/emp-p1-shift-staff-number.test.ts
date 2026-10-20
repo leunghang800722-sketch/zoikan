@@ -156,16 +156,16 @@ describe("EMP-P1 寫入點", () => {
     });
     const mkRow = (rowIndex: number, date: Date, staffNoRaw: string | null, guardId: string = fx.guardA.id) =>
       prisma.rosterUploadRow.create({ data: { uploadId: up.id, rowIndex, workDate: date, rawCode: "N", codeKind: "shift", shiftTypeId: fx.shiftType.id, resolvedSiteId: fx.site.id, guardId, guardMatch: "by_staff_no", settlementBrokerId: fx.brokerA.id, brokerCodeRaw: "TEST-BA", staffNoRaw } });
-    await mkRow(1, aug(20), "u90101"); // 對中 U 卡（盤 scheme=MP，但檔案寫 U）
-    await mkRow(2, aug(21), null); // 冇檔案工號 → 盤 scheme MP
+    await mkRow(1, aug(27), "u90101"); // 對中 U 卡（盤 scheme=MP，但檔案寫 U）
+    await mkRow(2, aug(28), null); // 冇檔案工號 → 盤 scheme MP
     const { items } = await reconcileUpload(up.id);
     const actions = items.filter((i) => i.category === "roster_only").map((i) => ({ key: i.key, action: "apply_roster" as const }));
     expect(actions).toHaveLength(2);
     const res = await applyReconcileDecisions({ uploadId: up.id, actions, actorUserId: fx.userIds["老闆"], ip: null });
     expect(res.results.every((r) => r.ok)).toBe(true);
-    const r20 = await prisma.shiftRecord.findUniqueOrThrow({ where: { guardId_workDate_shiftTypeId: { guardId: fx.guardA.id, workDate: aug(20), shiftTypeId: fx.shiftType.id } } });
+    const r20 = await prisma.shiftRecord.findUniqueOrThrow({ where: { guardId_workDate_shiftTypeId: { guardId: fx.guardA.id, workDate: aug(27), shiftTypeId: fx.shiftType.id } } });
     expect(r20).toMatchObject({ staffNumberId: cardU.id, staffScheme: "U", staffNumberSource: "roster_file" });
-    const r21 = await prisma.shiftRecord.findUniqueOrThrow({ where: { guardId_workDate_shiftTypeId: { guardId: fx.guardA.id, workDate: aug(21), shiftTypeId: fx.shiftType.id } } });
+    const r21 = await prisma.shiftRecord.findUniqueOrThrow({ where: { guardId_workDate_shiftTypeId: { guardId: fx.guardA.id, workDate: aug(28), shiftTypeId: fx.shiftType.id } } });
     expect(r21).toMatchObject({ staffNumberId: cardMP.id, staffNumberSource: "site_scheme" });
   });
 

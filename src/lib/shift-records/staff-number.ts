@@ -29,7 +29,7 @@ interface StaffCardLike {
 }
 
 /** 純函數推導結果：method 供回填腳本逐類計數（live 寫入時 range／sole 都記 site_scheme）。 */
-type StaffResolveMethod = "roster_file" | "longterm" | "range" | "sole" | "ambiguous" | "unresolved";
+type StaffResolveMethod = "payload" | "roster_file" | "longterm" | "range" | "sole" | "ambiguous" | "unresolved";
 interface StaffResolveOutcome {
   card: StaffCardLike | null;
   method: StaffResolveMethod;
@@ -95,9 +95,12 @@ export interface ResolvedStaff {
   source: StaffNumberSource;
 }
 
-/** 批量推導。`explicitStaffNumberId` 唔屬同一個 guard → 400。唔中 → Map 值 null。 */
-export async function resolveShiftStaffNumbers(client: PrismaLike, items: readonly ShiftStaffItem[]): Promise<Map<string, ResolvedStaff | null>> {
-  const out = new Map<string, ResolvedStaff | null>();
+/**
+ * 批量推導（帶完整 method，回填腳本逐類計數用）。`explicitStaffNumberId` 唔屬同一個 guard → 400。
+ * method=payload 只喺有明確指定時出現；其餘同 resolveFromCards 一致。
+ */
+export async function resolveShiftStaffOutcomes(client: PrismaLike, items: readonly ShiftStaffItem[]): Promise<Map<string, StaffResolveOutcome>> {
+  const out = new Map<string, StaffResolveOutcome>();
   if (items.length === 0) return out;
   const guardIds = [...new Set(items.map((i) => i.guardId))];
   const siteIds = [...new Set(items.map((i) => i.siteId))];
@@ -131,16 +134,31 @@ export async function resolveShiftStaffNumbers(client: PrismaLike, items: readon
     if (it.explicitStaffNumberId) {
       const c = cardById.get(it.explicitStaffNumberId);
       if (!c || c.guardId !== it.guardId) throw BadRequest("staff_number_id 唔屬於呢個保安員，或者唔存在");
-      out.set(it.key, { staffNumberId: c.id, scheme: c.scheme, source: "payload" });
+      out.set(it.key, { card: c, method: "payload" });
       continue;
     }
-    const r = resolveFromCards(cardsByGuard.get(it.guardId) ?? [], {
-      workDate: it.workDate,
-      rosterStaffNoRaw: it.rosterRowId ? (rawByRow.get(it.rosterRowId) ?? null) : null,
-      isLongterm: !!it.settlementBrokerId && longtermBroker.has(it.settlementBrokerId),
-      siteScheme: schemeBySite.get(it.siteId) ?? null,
-    });
-    out.set(it.key, r.card ? { staffNumberId: r.card.id, scheme: r.card.scheme, source: r.method === "roster_file" ? "roster_file" : r.method === "longterm" ? "longterm" : "site_scheme" } : null);
+    out.set(
+      it.key,
+      resolveFromCards(cardsByGuard.get(it.guardId) ?? [], {
+        workDate: it.workDate,
+        rosterStaffNoRaw: it.rosterRowId ? (rawByRow.get(it.rosterRowId) ?? null) : null,
+        isLongterm: !!it.settlementBrokerId && longtermBroker.has(it.settlementBrokerId),
+        siteScheme: schemeBySite.get(it.siteId) ?? null,
+      }),
+    );
+  }
+  return out;
+}
+
+/** 批量推導（寫入點用）：唔中 → Map 值 null。range／sole 都記 site_scheme。 */
+export async function resolveShiftStaffNumbers(client: PrismaLike, items: readonly ShiftStaffItem[]): Promise<Map<string, ResolvedStaff | null>> {
+  const outcomes = await resolveShiftStaffOutcomes(client, items);
+  const out = new Map<string, ResolvedStaff | null>();
+  for (const [key, o] of outcomes) {
+    out.set(
+      key,
+      o.card ? { staffNumberId: o.card.id, scheme: o.card.scheme, source: o.method === "payload" ? "payload" : o.method === "roster_file" ? "roster_file" : o.method === "longterm" ? "longterm" : "site_scheme" } : null,
+    );
   }
   return out;
 }

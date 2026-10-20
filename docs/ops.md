@@ -484,3 +484,17 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 - `24-open-gap-audit.ts --open-questions <json> --package … --proposals … --out data/…`：未答題清單（person_key、staff_numbers、kind、review_fields，無值）逐題分類 auto_answerable／proposal_not_auto／wrong_field／no_proposal（帶逐欄原因）／no_docs／person_unmatched／kind_unsupported。
 - TE-12.1：`typed_list_differs` 要升 high 只認獨立於文件包嘅證據（按工號／電話對到嘅打字名單姓名＝今次卡讀數）；入職表手寫 hkid／印刷佐證同卡同源，整包配錯人時會互相一致，唔計 → medium 留人。`typed_list_differs` 本身改用今次卡讀數同 package 該欄（打字名單）值重新比較：一致＝OCR 讀錯已修正，high 唔加旗。
 - TE-12.2：刪走「卡讀數＝package 值就當已修正」捷徑（package 值本身由文件讀出，可能係配錯人嘅卡）；有 mismatch_* 一律 typed_list_differs，high 只靠 listOk（--crosscheck 名單按工號／電話 match 且導入抽取姓名＝今次卡讀數；中文 normZh、英文 looseEnglishNameMatch）。冇 --crosscheck＝全部 medium。
+
+## EMP-P1 回填更次工號歸屬（2026-10）
+
+```
+npm run db:backfill-shift-staff-numbers                    # dry-run（預設）：逐月逐類計數，唔寫
+npm run db:backfill-shift-staff-numbers -- --apply         # 真係寫
+npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可重複 --month）
+```
+- 規則同 API 寫入點一致（上載證據 `roster_file`（經 `provenance.row_id` 對 `roster_upload_rows.staff_no_raw`）→ 長工 B07 嘅 MG 卡 `longterm` → 盤 `staff_scheme`＋期間 `range`／`sole`）；`ambiguous`／`unresolved` 唔寫。逐月一行：掃描、roster_file、longterm、range、sole、unresolved、ambiguous、會寫／已寫。
+- 未鎖月：直接寫 `shift_records` 三個新欄（`staff_number_source` 加 `backfill:` 前綴；raw SQL 只更新三欄，**唔觸發 `updated_at`、唔掂任何金額欄**）。已鎖月（`month_closes.locked_at`）：`shift_records` 一欄都唔寫，歸屬寫 `shift_record_staff_attributions` 側表。
+- 冪等（只處理未有歸屬嘅非作廢更次）；每次 `--apply` 寫一條 audit summary（`action=backfill_shift_staff_numbers`，只有逐月計數，唔逐條）。
+- 先去「盤」設定頁設好各盤 `staff_scheme`（U／MP）、並補齊人嘅 MP／MG 卡及入職／離職日期，再回填，`range`／`sole` 先會有結果；盤未設定 scheme 嘅更次只有 `roster_file`／`longterm` 兩條路。
+- Gate 跑法備註（worktree）：`gate:locked-months` 要 `data/`、`tools/importer/out`、`tools/importer/venv` 三個 gitignored 資源（symlink 返主 repo）；缺 venv 會令 `gate:reports (b3)` SKIP 同長工分攤總額由 897652.35 變 899945（環境差異，唔係代碼）。
+

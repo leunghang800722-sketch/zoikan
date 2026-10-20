@@ -68,6 +68,8 @@ export type AuditAction =
   // `{sia_permit_expiry, sia_permit_type}` 呢兩粒衍生值，唔係完整 row，
   // 避免 PII 經呢條 action 漏出去）。
   | "recompute_permit_derived"
+  // EMP-P1：回填更次工號歸屬（scripts/db/backfill-shift-staff-numbers.ts）——每次執行一條 summary（只有計數，唔逐條）
+  | "backfill_shift_staff_numbers"
   // WP-MULTI（老闆 2026-09-19 拍板）：guard_phones／
   // guard_emergency_contacts／guard_addresses 呢三張新表冇「former／已
   // 取消」呢個狀態（唔似 guard_staff_numbers），DELETE 係真刪一行（俾
