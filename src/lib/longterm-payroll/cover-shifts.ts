@@ -1,6 +1,7 @@
 // P10.2：長工「頂位更」認定（唯讀），同 aggregate 口徑一致（共用 `classifyLongtermShift`）：
 // 非簽證長工、recordType=shift、settlement_broker_id 有值且 ≠ B07（internal_longterm）＝頂位更（幫雞頭頂散更）；
 // B07 或 null＝自己崗位。崗位盤判斷（母盤／構造盤 activityProxy 摺疊、Postorder 權威月只認 manual）已在對數時寫入 settlement，呢度唔再自己查崗位。
+// EMP-P2（老闆 2026-10-20 拍板）：2026-10-01 起，更次 `staff_scheme` 係 U／MP（前線散更體系）嘅更唔當頂位更，唔計頂位津貼（見 shift-classify.ts）；7／8／9 月行舊邏輯。
 // 注意：呢啲更喺 aggregate 已經由雞頭現金結算（唔當長工返工日）——是否再出頂位津貼會唔會雙重支付，要老闆決定（見 P3 §14.2）。
 // 職級 grade：更表行 `rank_raw` 經 `classifyRank`（含 IC／SIC＝IC，其他＝兵）；搵唔到行就跟更別（billing_group=monthly_ic 或 code 含 IC）。
 import { prisma } from "@/lib/db";
@@ -8,6 +9,7 @@ import { classifyRank } from "@/lib/roster-upload/match";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
 import { pickBySourcePriority } from "./attendance-priority";
 import { classifyLongtermShift } from "./shift-classify";
+import { loadStaffSchemes } from "@/lib/guards/staff-schemes";
 import { monthRange } from "@/lib/reports/money";
 import type { CoverGrade } from "./cover-rates";
 
@@ -38,6 +40,7 @@ export function gradeFromRank(rankRaw: string | null | undefined, billingGroup: 
 export async function loadCoverShifts(months: Date[]): Promise<CoverShiftLoad> {
   const out: CoverShiftLoad = { shifts: [], sites: new Map() };
   const internalId = await findInternalLongtermBrokerId();
+  const staffSchemes = await loadStaffSchemes();
   for (const month of months) {
     const { start, end } = monthRange(month);
     const mLabel = ymd(start).slice(0, 7);
@@ -53,7 +56,7 @@ export async function loadCoverShifts(months: Date[]): Promise<CoverShiftLoad> {
     // P18 驗收 (ii)a：先跟來源優先次序（連 leave 一齊比較）再認頂位更，同 aggregate 一致。
     const allRecs = await prisma.shiftRecord.findMany({
       where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
-      select: { guardId: true, workDate: true, siteId: true, settlementBrokerId: true, provenance: true, recordType: true, source: true, shiftType: { select: { code: true, billingGroup: true } }, site: { select: { canonicalName: true, parentSiteId: true } } },
+      select: { guardId: true, workDate: true, siteId: true, settlementBrokerId: true, staffScheme: true, provenance: true, recordType: true, source: true, shiftType: { select: { code: true, billingGroup: true } }, site: { select: { canonicalName: true, parentSiteId: true } } },
       orderBy: [{ workDate: "asc" }],
     });
     const byGuard = new Map<string, typeof allRecs>();
@@ -71,7 +74,8 @@ export async function loadCoverShifts(months: Date[]): Promise<CoverShiftLoad> {
       for (const r of rows) rankByRow.set(r.id, r.rankRaw);
     }
     for (const r of recs) {
-      if (classifyLongtermShift(r.settlementBrokerId, internalId) !== "cover") continue;
+      // EMP-P2：2026-10-01 起，U／MP 卡散更（kind=scatter）唔計頂位津貼；只有 kind=cover 先係頂位更
+      if (classifyLongtermShift(r.settlementBrokerId, internalId, { staffScheme: r.staffScheme, workDate: r.workDate, schemes: staffSchemes }) !== "cover") continue;
       const date = ymd(r.workDate);
       const rid = r.provenance && typeof r.provenance === "object" && !Array.isArray(r.provenance) ? (r.provenance as Record<string, unknown>).row_id : null;
       const grade = gradeFromRank(typeof rid === "string" ? rankByRow.get(rid) : null, r.shiftType.billingGroup, r.shiftType.code);

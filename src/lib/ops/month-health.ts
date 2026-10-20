@@ -8,6 +8,7 @@
 // `redactMonthHealth()` 按讀者權限剝走（要「更表」view；缺身份證要「保安員個人資料」
 // view；缺銀行編號要「保安員銀行資料」view；冇權限只回數量）。hkid／電話號碼本身
 // 一律唔會出現喺任何明細入面——缺資料類只講「缺邊樣」，唔回值。
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { n, round2, monthRange, monthStart as toMonthStart } from "@/lib/reports/money";
 import { buildMonthlyClose, type MonthlyCloseSiteRow } from "@/lib/reports/monthly-close";
@@ -108,7 +109,7 @@ export async function buildMonthHealth(month: Date, session: AuthedSession): Pro
     buildPayrollTotals(m0),
     buildPayrollTotals(m1),
     prisma.specialItem.groupBy({ by: ["month"], where: { month: { in: [m0, m1] }, kind: "referral_fee", voidedAt: null }, _sum: { cost: true } }),
-    prisma.site.findMany({ select: { id: true, canonicalName: true, billingModel: true, status: true, activityProxySiteId: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, billingModel: true, status: true, activityProxySiteId: true, staffScheme: true } }),
     prisma.longtermPayrollLine.findMany({ where: { run: { month: m0, voidedAt: null } }, select: { guardId: true } }),
   ]);
   const uploadIds = uploads.map((u) => u.id);
@@ -181,6 +182,43 @@ export async function buildMonthHealth(month: Date, session: AuthedSession): Pro
   }
   push(finding({ code: "overlap_same_day", severity: "critical", count: overlapDetail.length, message: `${overlapDetail.length} 個「人＋日」有時間重疊嘅多更（同一人同日兩更時間疊埋）`, fixLink: `/roster?${monthQ}`, requires: [ROSTER_VIEW], detail: overlapDetail }));
   push(finding({ code: "cross_site_same_day", severity: "warn", count: crossDetail.length, message: `${crossDetail.length} 個「人＋日」同日喺不同盤出更（時間冇重疊，請確認）`, fixLink: `/roster?${monthQ}`, requires: [ROSTER_VIEW], detail: crossDetail }));
+
+  // --- 1b. EMP-P2：未標工號更次／盤未設 staff_scheme（直達卡：帶去設定位）-------------------
+  // 「未標工號」＝shift_records.staff_number_id 冇值、而且鎖月側表都冇歸屬（P1 回填）。逐人糧單會將呢啲更歸「未標工號」一行，唔會靜靜併入 U。
+  const unmarked = await prisma.$queryRaw<Array<{ site_id: string; shifts: bigint }>>(Prisma.sql`
+    SELECT sr.site_id AS site_id, COUNT(*) AS shifts
+      FROM shift_records sr
+      LEFT JOIN shift_record_staff_attributions a ON a.shift_record_id = sr.id
+     WHERE sr.record_type IN ('shift', 'ot') AND sr.status <> 'cancelled'
+       AND sr.work_date >= ${iso(start)}::date AND sr.work_date <= ${iso(end)}::date
+       AND sr.staff_number_id IS NULL AND a.shift_record_id IS NULL
+     GROUP BY 1 ORDER BY 2 DESC`);
+  const unmarkedTotal = unmarked.reduce((a, r) => a + Number(r.shifts), 0);
+  push(
+    finding({
+      code: "shifts_no_staff_number",
+      severity: "warn",
+      count: unmarkedTotal,
+      message: `${unmarkedTotal} 更未標工號（逐人糧單會歸入「未標工號」一行）——去設定盤嘅工號體系、補齊人嘅工號卡，再用回填標返`,
+      fixLink: "/sites",
+      requires: [ROSTER_VIEW],
+      detail: unmarked.map((r) => ({ site_name: siteName.get(r.site_id) ?? "", shifts: Number(r.shifts) })),
+    }),
+  );
+  const shiftsBySiteAll = new Map<string, number>();
+  for (const r of records) if (r.recordType === "shift" || r.recordType === "ot") shiftsBySiteAll.set(r.siteId, (shiftsBySiteAll.get(r.siteId) ?? 0) + 1);
+  const noScheme = sites.filter((s) => s.staffScheme === null && (shiftsBySiteAll.get(s.id) ?? 0) > 0);
+  push(
+    finding({
+      code: "site_no_staff_scheme",
+      severity: "info",
+      count: noScheme.length,
+      message: `${noScheme.length} 個本月有出更嘅盤未設工號體系（staff_scheme）——更表／匯出照舊印 U，更次亦推唔到工號卡`,
+      fixLink: "/sites",
+      requires: [ROSTER_VIEW],
+      detail: noScheme.map((s) => ({ site_name: s.canonicalName, shifts: shiftsBySiteAll.get(s.id) ?? 0 })).sort((a, b) => b.shifts - a.shifts),
+    }),
+  );
 
   // --- 2. 單月 > 26 更 -----------------------------------------------------
   const shiftCountByGuard = new Map<string, number>();

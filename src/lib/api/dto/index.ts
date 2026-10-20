@@ -209,6 +209,9 @@ export const toGuardLiteDTO = <T extends Record<string, unknown>>(row: T) => map
 // WP-STAFFNO：`GET/POST/PATCH /api/guards/:id/staff-numbers*` 白名單——
 // 工號本身（唔係身份證／銀行）跟「保安員」module，冇獨立 field-group。
 const GUARD_STAFF_NUMBER_FIELDS = ["id", "guardId", "scheme", "number", "status", "validFrom", "validTo", "endReason", "predecessorId", "note", "source", "createdAt", "updatedAt", "createdBy"] as const;
+// EMP-P2：工號體系設定表（非 PII）
+const STAFF_SCHEME_FIELDS = ["code", "labelZh", "payerCode", "payerLabelZh", "payMethod", "isFrontline", "isLongterm", "sort"] as const;
+export const toStaffSchemeDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, STAFF_SCHEME_FIELDS);
 export const toGuardStaffNumberDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_STAFF_NUMBER_FIELDS);
 // WP-PHASE3（§20.4 Phase 3 item 1）：`guard_longterm_posts` CRUD 白名單
 // ——「盤名」（site）唔係 PII（見 schema.prisma 呢個 model 頂註解），

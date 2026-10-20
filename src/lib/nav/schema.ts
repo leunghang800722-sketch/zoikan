@@ -87,6 +87,7 @@ const EXTRA_KICKERS: Record<string, string> = {
   "/roster-uploads/reconcile": "對數",
   "/feedback/detail": "設定",
   "/settings/cover-rates": "設定",
+  "/settings/staff-schemes": "設定",
   "/settings/cover-rates/infer": "設定",
   "/whatsapp/intents": "排更",
   "/whatsapp/pending": "排更",

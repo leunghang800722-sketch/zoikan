@@ -8,6 +8,9 @@ import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel } from "@/lib/reports/money";
 import { buildPayrollTotals, buildPayrollSourceSummary, writePayrollBuffer, DEFAULT_REPORT_MONTH } from "@/lib/reports/payroll";
+import { buildPayslips } from "@/lib/reports/payslips";
+import { isBrokerRole } from "@/lib/broker-isolation";
+import { Forbidden } from "@/lib/api/errors";
 // WP-PRICE §3：頁頂「N 更未定價，金額未計入」Notice 要用嘅 additive 欄。
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
@@ -17,6 +20,14 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const month = parseMonthParam(url.searchParams.get("month")) ?? DEFAULT_REPORT_MONTH;
     const isExport = url.searchParams.get("export") === "1";
+
+    // EMP-P2：`?view=person`——逐人糧單（一人一份，橫跨雞頭／出糧方，每張工號卡獨立一行）。
+    // 跨雞頭資料，雞頭角色硬性唔俾睇（唔靠矩陣個 cell）。
+    if (url.searchParams.get("view") === "person") {
+      if (isBrokerRole(session)) throw Forbidden("逐人糧單橫跨所有雞頭，雞頭唔可以睇");
+      const payslips = await buildPayslips(month);
+      return ok(brandSafeResponse({ month: monthLabel(month), payslips }));
+    }
 
     if (isExport) {
       await requirePermission(req, "糧明細", "export");

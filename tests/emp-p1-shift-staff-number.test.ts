@@ -238,7 +238,7 @@ describe("EMP-P1 寫入點", () => {
     expect((await r3.json()).no_staff_number_count).toBe(1);
   });
 
-  it("EMP-P1.1 S4：舊 PATCH /api/guards/:id 改號路徑——舊卡 end_reason 為 null（唔標 replaced），新卡仍有 predecessor", async () => {
+  it("EMP-P1.1 S4：舊 PATCH /api/guards/:id 改號路徑——舊卡 end_reason 為 null（唔標 replaced），新卡 predecessor 都係 null（唔串聘用鏈）", async () => {
     const { applyLegacyStaffNoPatch } = await import("@/lib/guards/staff-numbers");
     await prisma.guardStaffNumber.deleteMany({ where: { guardId: fx.guardB.id } });
     await prisma.$transaction((tx) => applyLegacyStaffNoPatch(tx, { guardId: fx.guardB.id, staffNo: "U90601" }));
@@ -246,7 +246,7 @@ describe("EMP-P1 寫入點", () => {
     const old = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { number: "U90601" } });
     expect(old).toMatchObject({ status: "former", endReason: null });
     expect(old.validTo).not.toBeNull();
-    expect(out.changes[0]!.created.predecessorId).toBe(old.id);
+    expect(out.changes[0]!.created.predecessorId).toBeNull();
   });
 
   it("EMP-P1.1 S6：更表對數重新啟用 cancelled 記錄 → 先清三欄再按今次推導重寫（推唔到就係 null，唔殘留舊歸屬）", async () => {

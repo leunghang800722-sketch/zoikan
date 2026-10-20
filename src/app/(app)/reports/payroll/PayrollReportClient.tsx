@@ -36,6 +36,31 @@ interface Total {
   amount: number;
 }
 
+// EMP-P2：逐人糧單（GET /api/reports/payroll?view=person）。
+interface SlipLine {
+  staff_number_id: string | null;
+  scheme: string | null;
+  scheme_label: string;
+  number: string | null;
+  payer_label: string | null;
+  settlement_broker_code: string;
+  shifts: number;
+  wage: number;
+  fee: number;
+  amount: number;
+  is_longterm: boolean;
+  note?: string;
+}
+interface Slip {
+  guard_id: string;
+  guard_name: string;
+  staff_no: string | null;
+  lines: SlipLine[];
+  total: number;
+  fee_total: number;
+  longterm_total: number | null;
+}
+
 interface UnpricedGroup {
   site_id: string;
   site_name: string;
@@ -76,9 +101,24 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [repricing, setRepricing] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+  // EMP-P2：「按雞頭」（原有）／「按人」（逐人糧單）
+  const [view, setView] = useState<"broker" | "person">("broker");
+  const [slips, setSlips] = useState<Slip[]>([]);
 
   useEffect(() => {
-    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
+    if (!monthReady || view !== "person") return;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      const res = await apiGet<{ month: string; payslips: Slip[] }>(`/api/reports/payroll?month=${month}&view=person`);
+      if (!res.ok) setError(res.message);
+      else setSlips(res.data.payslips);
+      setLoading(false);
+    })();
+  }, [month, view, reloadTick, monthReady]);
+
+  useEffect(() => {
+    if (!monthReady || view !== "broker") return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     (async () => {
       setLoading(true);
       setError(null);
@@ -96,7 +136,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       setNoSettlementCount(res.data.no_settlement_count ?? 0);
       setLoading(false);
     })();
-  }, [month, reloadTick, monthReady]);
+  }, [month, reloadTick, monthReady, view]);
 
   // WP-PRICE §M3：「重新計價」——見 src/app/(app)/roster/[site]/[month]/
   // RosterEditor.tsx 同一段設計註解——dry-run 預覽（diff 摘要）→ confirm
@@ -163,14 +203,23 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         }
       />
 
+      <div className="flex gap-2" data-testid="payroll-view-tabs">
+        <Button variant={view === "broker" ? "primary" : "secondary"} onClick={() => setView("broker")} data-testid="payroll-view-broker">
+          按雞頭
+        </Button>
+        <Button variant={view === "person" ? "primary" : "secondary"} onClick={() => setView("person")} data-testid="payroll-view-person">
+          按人（逐人糧單）
+        </Button>
+      </div>
       <Banner kind="error" message={error} />
       <Banner kind="info" message={notice} data-testid="payroll-notice" />
+      {view === "person" && <PayslipView slips={slips} loading={loading} />}
       {/* WP-PRICE §3：頁頂「N 更未定價」——P3-4.2 共用 <UnpricedNotice>（報表頁一行＋「去處理 ›」）。 */}
       <UnpricedNotice variant="compact" month={month} unpricedCount={unpricedCount} noSettlementCount={noSettlementCount} groups={unpricedGroups} scope="糧明細" />
       <EmptyMonthNotice month={month} isEmpty={!loading && totals.length === 0} onJump={setMonth} />
 
       {/* 桌面表。 */}
-      <div className={`hidden lg:block ${tableCls.wrap}`}>
+      <div className={`hidden ${view === "broker" ? "lg:block" : ""} ${tableCls.wrap}`}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
           <thead>
             <tr>
@@ -227,7 +276,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       </div>
 
       {/* 手機：每行變卡。 */}
-      <div className="flex flex-col gap-2 lg:hidden">
+      <div className={`flex flex-col gap-2 lg:hidden ${view === "broker" ? "" : "!hidden"}`}>
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
         ) : totals.length === 0 ? (
@@ -261,6 +310,58 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// EMP-P2：逐人糧單——一人一份，入面每張工號卡一行（分開列明，唔撈埋一個總數），最後先加總額。
+function PayslipView({ slips, loading }: { slips: Slip[]; loading: boolean }) {
+  if (loading) return <div className="text-sm text-zk-faint">載入緊…</div>;
+  if (slips.length === 0) return <div className="rounded-[10px] border border-zk-border bg-white"><EmptyState title="呢個月暫時冇資料" /></div>;
+  return (
+    <div className="flex flex-col gap-3" data-testid="payslip-view">
+      {slips.map((p) => (
+        <section key={p.guard_id} className="rounded-[10px] border border-zk-border bg-white" data-testid={`payslip-${p.guard_id}`}>
+          <div className="flex items-center justify-between border-b border-zk-border-soft px-3.5 py-2">
+            <span className="text-zk-base font-semibold text-zk-text">{p.guard_name}</span>
+            <span className="text-zk-base font-bold text-zk-text">
+              散更個人金額 {fmtMoney(p.total)}
+              {p.longterm_total !== null && <span className="ml-3 font-normal text-zk-muted">長工毛額（另計，見長工糧表）{fmtMoney(p.longterm_total)}</span>}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>工號</th>
+                  <th className={tableCls.th}>體系</th>
+                  <th className={tableCls.th}>出糧方</th>
+                  <th className={tableCls.th}>結算單位</th>
+                  <th className={tableCls.thNum}>更數</th>
+                  <th className={tableCls.thNum}>個人金額（唔含雞頭費）</th>
+                  <th className={tableCls.thNum}>雞頭費（唔入個人金額）</th>
+                </tr>
+              </thead>
+              <tbody>
+                {p.lines.map((l) => (
+                  <tr key={l.staff_number_id ?? `none-${l.scheme}`} className={tableCls.rowHover} data-testid={`payslip-line-${l.scheme ?? "none"}`}>
+                    <td className={tableCls.td}>{l.staff_number_id ? l.number : (p.staff_no ?? "")}</td>
+                    <td className={tableCls.td}>
+                      {l.scheme_label}
+                      {l.note && <span className="ml-1 text-zk-xs text-zk-muted">（{l.note}）</span>}
+                    </td>
+                    <td className={tableCls.td}>{l.payer_label ?? ""}</td>
+                    <td className={tableCls.td}>{l.settlement_broker_code}</td>
+                    <td className={tableCls.tdNum}>{l.shifts}</td>
+                    <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(l.is_longterm ? l.amount : l.wage)}</td>
+                    <td className={tableCls.tdNum}>{l.is_longterm ? "" : fmtMoney(l.fee)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

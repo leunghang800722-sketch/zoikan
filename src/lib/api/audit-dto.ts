@@ -33,6 +33,7 @@ import {
   toReferralFeeRateDTO,
   toFeedbackReportDTO,
   toGuardStaffNumberDTO,
+  toStaffSchemeDTO,
   toGuardPhoneDTO,
   toGuardEmergencyContactDTO,
   toGuardAddressDTO,
@@ -73,6 +74,8 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   // action（POST/PATCH staff-numbers）一樣經呢個 mapping 存完整白名單
   // DTO，唔會跌落「未知 table_name → 淨係存 {id}」嗰個 catch-all。
   guard_staff_numbers: (r) => toGuardStaffNumberDTO(r),
+  // EMP-P2：工號體系設定表（非 PII）
+  staff_schemes: (r) => toStaffSchemeDTO(r),
   // WP-MULTI（老闆 2026-09-19 拍板）：guard_phones／
   // guard_emergency_contacts／guard_addresses——同上一致做法，寫入
   // audit_log 一樣經完整白名單 DTO。呢三個 table_name 嘅 audit_log
