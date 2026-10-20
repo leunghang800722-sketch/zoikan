@@ -23,7 +23,13 @@ export type SiteDto = {
   // 呢個更表唔計工資／客價。內部＋雞頭 DTO 都有（見 src/lib/api/dto/
   // index.ts、src/lib/broker-dto.ts SITE_BROKER_FIELDS）。
   guards_paid_by_client?: boolean;
+  /** EMP-P1：呢個盤用邊種工號（U／MP；null＝未設定，照舊顯示 U）。 */
+  staff_scheme?: string | null;
 };
+
+/** EMP-P1：盤 staff_scheme 對應嘅工號卡（GET /api/sites/:id/roster-staff-numbers）。 */
+export type StaffCardDto = { id: string; number: string; status: "current" | "former"; valid_from: string | null; valid_to: string | null };
+export type RosterStaffNumbersDto = { site_scheme: string | null; guards: { guard_id: string; cards: StaffCardDto[] }[] };
 
 export type ShiftTypeDto = {
   id: string;
@@ -56,6 +62,8 @@ export type ShiftRecordDto = {
   status: RecordStatus;
   /** W2：來源（"whatsapp"＝WhatsApp 分診答題寫入）；舊 API 回應冇呢欄 */
   source?: string | null;
+  /** EMP-P1：呢更用邊張工號卡 */
+  staff_number_id?: string | null;
 };
 
 export type DailyRequirementDto = {
@@ -136,6 +144,9 @@ export type RowMeta = {
   staffNo: string;
   tel: string;
   brokerId: string | null;
+  /** EMP-P1：盤 scheme 下面嘅合資格工號卡（多過一張先出手揀）＋目前揀中嘅卡 */
+  staffCards?: StaffCardDto[];
+  staffCardId?: string | null;
 };
 
 export type SelRange = { a: { r: number; d: number }; b: { r: number; d: number } };

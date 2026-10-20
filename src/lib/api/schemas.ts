@@ -155,6 +155,8 @@ export const SiteCreateSchema = z
     // WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類「客戶直接出糧」嘅盤——
     // 見 prisma/schema.prisma Site.guardsPaidByClient 大註解。
     guards_paid_by_client: z.boolean().optional(),
+    // EMP-P1：呢個盤用邊種工號（U／MP；null＝未設定）。
+    staff_scheme: z.enum(["U", "MP"]).nullable().optional(),
     monthly_fee: money,
     monthly_posts: z.number().int().optional(),
     prorata_basis: enumOf(ProrataBasis).optional(),
@@ -172,6 +174,8 @@ export const SiteUpdateSchema = z
     billing_model: enumOf(BillingModel).optional(),
     outside_monthly_close: z.boolean().optional(),
     guards_paid_by_client: z.boolean().optional(),
+    // EMP-P1：呢個盤用邊種工號（U／MP；null＝清走＝未設定）。跟「盤」module update 權限。
+    staff_scheme: z.enum(["U", "MP"]).nullable().optional(),
     monthly_fee: money,
     monthly_posts: z.number().int().optional(),
     prorata_basis: enumOf(ProrataBasis).optional(),
@@ -584,6 +588,8 @@ export const ShiftRecordCreateSchema = z
     guard_wage_snapshot: money,
     broker_fee_snapshot: money,
     source: z.string().optional(),
+    // EMP-P1：明確指定工號卡（必須屬同一個 guard）；冇傳就由 server 推導。
+    staff_number_id: uuid.optional(),
   })
   .strict();
 export const ShiftRecordUpdateSchema = z
@@ -790,6 +796,8 @@ const ShiftRecordBatchCellSchema = z
     // 內部角色冇填就 default 用 guard.default_broker_id。
     settlement_broker_id: uuid.optional(),
     operational_broker_id: uuid.optional(),
+    // EMP-P1：人有多張合資格工號卡時手揀（寫 shift_records.staff_number_id；必須屬同一個 guard）。
+    staff_number_id: uuid.nullable().optional(),
   })
   .strict();
 export const ShiftRecordBatchSchema = z

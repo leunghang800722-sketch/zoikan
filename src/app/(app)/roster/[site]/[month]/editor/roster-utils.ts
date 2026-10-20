@@ -1,5 +1,5 @@
 // 更表編輯器純函數 helper（P3-5.1：由 RosterEditor.tsx 原樣搬出，行為零改變）。
-import type {
+import type { StaffCardDto,
   BrokerDto,
   CellState,
   GuardDto,
@@ -117,10 +117,23 @@ export function clamp(n: number, lo: number, hi: number): number {
   return Math.min(Math.max(n, lo), hi);
 }
 
+/** EMP-P1：盤 staff_scheme 下面各 guard 嘅工號卡（scheme 未設定／U＝空，照舊顯示 guards.staff_no）。 */
+export type StaffDisplayCtx = { scheme: string | null; cardsByGuard: Map<string, StaffCardDto[]> };
+
+/** 該 guard 喺呢個盤顯示嘅工號卡：記錄指明嘅卡優先，否則現用卡，否則最後一張已取消卡。 */
+function pickStaffCard(cards: StaffCardDto[], preferredId?: string | null): StaffCardDto | null {
+  if (preferredId) {
+    const hit = cards.find((c) => c.id === preferredId);
+    if (hit) return hit;
+  }
+  return cards.find((c) => c.status === "current") ?? [...cards].reverse().find((c) => c.status === "former") ?? null;
+}
+
 export function buildRowsAndCells(
   records: ShiftRecordDto[],
   shiftTypesById: Map<string, ShiftTypeDto>,
   guardsById: Map<string, GuardDto>,
+  staff?: StaffDisplayCtx,
 ): { rows: RowMeta[]; cells: Map<string, CellState> } {
   const rowsMap = new Map<string, RowMeta>();
   const cellsMap = new Map<string, CellState>();
@@ -134,13 +147,17 @@ export function buildRowsAndCells(
 
     if (!rowsMap.has(rowKey)) {
       const guard = guardsById.get(r.guard_id);
+      // EMP-P1：盤有設定 scheme（非 U）→ 顯示該 scheme 嘅卡號（唔會借 U 號充數）；否則照舊 guards.staff_no
+      const schemeCards = staff && staff.scheme && staff.scheme !== "U" ? (staff.cardsByGuard.get(r.guard_id) ?? []) : null;
+      const chosen = schemeCards ? pickStaffCard(schemeCards, r.staff_number_id) : null;
       rowsMap.set(rowKey, {
         key: rowKey,
         shiftTypeId: r.shift_type_id,
         guardId: r.guard_id,
         shiftTypeCode: st?.code ?? "?",
         guardName: guard?.name_zh ?? "",
-        staffNo: guard?.staff_no ?? "",
+        staffNo: schemeCards ? (chosen?.number ?? "") : (guard?.staff_no ?? ""),
+        ...(schemeCards && schemeCards.length > 1 ? { staffCards: schemeCards, staffCardId: chosen?.id ?? null } : {}),
         tel: "", // P3-2.4：輕量 guards 唔帶電話；RowMeta.tel 本來就唔顯示
         brokerId: r.settlement_broker_id ?? guard?.default_broker_id ?? null,
       });

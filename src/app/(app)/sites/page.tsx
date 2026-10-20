@@ -37,6 +37,8 @@ interface SiteRow {
   // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類盤嘅
   // 保安員由客戶直接出糧，我哋淨係收每月服務費——唔逐更計客價／工資。
   guards_paid_by_client: boolean;
+  // EMP-P1：呢個盤用邊種工號（U＝Wilson 盤；MP＝在勤盤；null＝未設定，照舊顯示 U）
+  staff_scheme?: string | null;
   // WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求）：更表檔名鍵——上載時檔名
   // stem 含任一鍵（唔分大小寫）就直接用呢個盤，優先過檔內盤名對照。
   roster_file_keys?: string[];
@@ -84,6 +86,7 @@ const emptySiteForm = {
   in_scope: true,
   outside_monthly_close: false,
   guards_paid_by_client: false,
+  staff_scheme: "",
   roster_file_keys: "",
   default_settlement_broker_id: "",
 };
@@ -166,6 +169,7 @@ export default function SitesPage() {
       in_scope: row.in_scope,
       outside_monthly_close: row.outside_monthly_close ?? false,
       guards_paid_by_client: row.guards_paid_by_client ?? false,
+      staff_scheme: row.staff_scheme ?? "",
       roster_file_keys: (row.roster_file_keys ?? []).join(", "),
       default_settlement_broker_id: row.default_settlement_broker_id ?? "",
     });
@@ -218,6 +222,7 @@ export default function SitesPage() {
       in_scope: form.in_scope,
       outside_monthly_close: form.outside_monthly_close,
       guards_paid_by_client: form.guards_paid_by_client,
+      ...(editingId ? { staff_scheme: form.staff_scheme || null } : form.staff_scheme ? { staff_scheme: form.staff_scheme } : {}),
       aliases,
       roster_file_keys: rosterFileKeys,
     };
@@ -494,6 +499,20 @@ export default function SitesPage() {
               onChange={(e) => setForm((f) => ({ ...f, guards_paid_by_client: e.target.checked }))}
             />
             客戶直接出糧（保安員由客戶直接出糧，我哋淨係收每月服務費，呢個盤嘅更唔計工資／客價）
+          </label>
+          {/* EMP-P1：呢個盤用邊種工號出現喺更表／匯出（同一盤唔會同時有 U 同 MP）；未設定＝照舊印 U。 */}
+          <label className="flex items-center gap-2 text-sm text-zk-text-secondary">
+            <span>工號體系</span>
+            <select
+              data-testid="site-staff-scheme"
+              value={form.staff_scheme}
+              onChange={(e) => setForm((f) => ({ ...f, staff_scheme: e.target.value }))}
+              className="rounded border border-zk-border px-2 py-1 text-sm"
+            >
+              <option value="">未設定（照舊顯示 U）</option>
+              <option value="U">U（Wilson 盤）</option>
+              <option value="MP">MP（在勤盤）</option>
+            </select>
           </label>
           <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>

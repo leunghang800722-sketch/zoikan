@@ -252,7 +252,7 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
  * 嗰一行（`validTo` desc nulls last → `updatedAt` desc）。俾
  * `syncLegacyStaffNoColumns()` 用（B，見下面大註解）——`rows` 要傳呢個
  * guard **全部**行（唔限 status），呢度自己揀返啱個 scheme。 */
-function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: string): GuardStaffNumber | undefined {
+export function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: string): GuardStaffNumber | undefined {
   const schemeRows = rows.filter((r) => r.scheme === scheme);
   const current = schemeRows.find((r) => r.status === "current");
   if (current) return current;

@@ -54,6 +54,7 @@
 // operational broker；身份合併後 `staff_no` 為空。
 import ExcelJS from "exceljs";
 import { prisma } from "./db";
+import { createSiteStaffNoResolver } from "./guards/site-staff-no";
 import { isRosterLayoutTemplate, type RosterLayoutTemplate, type BannerCell, type RawRow, type RawCellValue } from "./roster-layout-template";
 
 function rawCellToExcelValue(v: RawCellValue): ExcelJS.CellValue {
@@ -300,7 +301,7 @@ function emitHeaderLabelsRow(ws: ExcelJS.Worksheet, labelCol: number, labels: st
  * seed）跌返 `buildGenericRosterWorkbook()`。
  */
 async function buildTemplatedRosterWorkbook(
-  site: { id: string; canonicalName: string },
+  site: { id: string; canonicalName: string; staffScheme?: string | null },
   template: RosterLayoutTemplate,
   month: Date,
   opts: BuildRosterOptions,
@@ -340,6 +341,9 @@ async function buildTemplatedRosterWorkbook(
     include: { guard: { include: { defaultBroker: true } }, settlementBroker: true, operationalBroker: true, shiftType: true },
     orderBy: [{ workDate: "asc" }],
   });
+  // EMP-P1：工號跟盤 staff_scheme 顯示（未設定／U 照舊印 guards.staff_no）
+  const staffNoResolver = createSiteStaffNoResolver(prisma, site.staffScheme);
+  await staffNoResolver.prefetch(allRecords.map((r) => r.guardId));
 
   // Opus 對抗式驗收 A1（應修）：淨係俾 rawRows fallback 分類用——冇
   // isExternal/source 呢兩個「更表視圖」濾走條件嘅版本，等下面判斷一個
@@ -472,7 +476,7 @@ async function buildTemplatedRosterWorkbook(
           : (str("roster_broker_code") ?? str("master_broker_code") ?? r.settlementBroker?.code ?? r.operationalBroker?.code ?? r.guard.defaultBroker?.code ?? "");
         const subSite = str("sub_site");
         map.set(r.guardId, {
-          staffNo: r.guard.staffNo ?? "",
+          staffNo: staffNoResolver.of(r.guard),
           tel: formatTel(r.guard.tel),
           nameZh: r.guard.nameZh,
           nameEn: r.guard.nameEn ?? "",
@@ -557,7 +561,7 @@ async function buildTemplatedRosterWorkbook(
           const brokerCode = str("roster_broker_code") ?? "";
           const subSite = str("sub_site");
           byRow.set(rowNum, {
-            staffNo: r.guard.staffNo ?? "",
+            staffNo: staffNoResolver.of(r.guard),
             tel: formatTel(r.guard.tel),
             nameZh: r.guard.nameZh,
             nameEn: r.guard.nameEn ?? "",
@@ -580,7 +584,7 @@ async function buildTemplatedRosterWorkbook(
         const brokerCode = str("roster_broker_code") ?? "";
         const subSite = str("sub_site");
         byRow.set(rowNum, {
-          staffNo: r.guard.staffNo ?? "",
+          staffNo: staffNoResolver.of(r.guard),
           tel: formatTel(r.guard.tel),
           nameZh: r.guard.nameZh,
           nameEn: r.guard.nameEn ?? "",
@@ -923,7 +927,7 @@ async function buildTemplatedRosterWorkbook(
 }
 
 async function buildGenericRosterWorkbook(
-  site: { id: string; canonicalName: string },
+  site: { id: string; canonicalName: string; staffScheme?: string | null },
   layout: RosterLayout,
   month: Date,
   opts: BuildRosterOptions,
@@ -943,6 +947,7 @@ async function buildGenericRosterWorkbook(
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet(SHEET_NAME);
+  const staffNoResolver = createSiteStaffNoResolver(prisma, site.staffScheme);
   let blockCount = 0;
 
   // 冇 roster_layout 模板（新 site，未跑過 seed 反推）：冇原檔可以對齊，
@@ -972,6 +977,7 @@ async function buildGenericRosterWorkbook(
       include: { guard: { include: { defaultBroker: true } }, settlementBroker: true, operationalBroker: true },
       orderBy: [{ workDate: "asc" }],
     });
+    await staffNoResolver.prefetch(records.map((r) => r.guardId));
     // Opus 對抗式驗收 B3：cancelled 嘅記錄唔算「呢個更別有資料」——避免
     // 淨係得 cancelled 記錄嘅更別都當「有嘢」出成個 block（下面逐格
     // render 仲要再跳過 cancelled，見 for 迴圈入面嘅 skip）。
@@ -1004,7 +1010,7 @@ async function buildGenericRosterWorkbook(
         const provenance = (r.provenance ?? {}) as Record<string, unknown>;
         const subSite = typeof provenance.sub_site === "string" && provenance.sub_site ? provenance.sub_site : null;
         rows.set(r.guardId, {
-          staffNo: r.guard.staffNo ?? "",
+          staffNo: staffNoResolver.of(r.guard),
           tel: formatTel(r.guard.tel),
           nameZh: r.guard.nameZh,
           nameEn: r.guard.nameEn ?? "",

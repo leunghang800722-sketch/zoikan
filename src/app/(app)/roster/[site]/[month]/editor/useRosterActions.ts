@@ -102,6 +102,8 @@ export function useRosterActions({
   // 用嘅 fallback，見 handleSave 嘅 diffCells 建構）同「複製上月」review
   // 都會讀呢個 map。冇喺呢度出現嘅行照用 row.brokerId（原本嘅預設值）。
   const [rowBrokerOverrides, setRowBrokerOverrides] = useState<Map<string, string>>(new Map());
+  // EMP-P1：用戶喺工號格手揀咗邊張工號卡（rowKey → staff_number_id）；儲存時寫入該行有送出嘅格
+  const [rowStaffOverrides, setRowStaffOverrides] = useState<Map<string, string>>(new Map());
   const [showAddGuard, setShowAddGuard] = useState(false);
   const [addGuardId, setAddGuardId] = useState("");
   const [addShiftTypeId, setAddShiftTypeId] = useState("");
@@ -280,7 +282,7 @@ export function useRosterActions({
     // 落嘅格）都要照送出去，唔可以因為篩選漏咗（篩選只影響顯示）。
     const rowByKey = new Map(allRows.map((r) => [r.key, r]));
     const keys = new Set<string>([...baseline.keys(), ...cells.keys()]);
-    const diffCells: { guard_id: string; shift_type_id: string; work_date: string; code: string | null; settlement_broker_id?: string }[] = [];
+    const diffCells: { guard_id: string; shift_type_id: string; work_date: string; code: string | null; settlement_broker_id?: string; staff_number_id?: string }[] = [];
     const invalidMsgs: string[] = [];
 
     for (const key of keys) {
@@ -328,6 +330,7 @@ export function useRosterActions({
         work_date: workDateStr(year, monthNum, day),
         code,
         ...(isExistingRecord ? {} : { settlement_broker_id: effectiveBrokerId }),
+        ...(rowStaffOverrides.has(rowKey) ? { staff_number_id: rowStaffOverrides.get(rowKey)! } : {}),
       });
     }
 
@@ -367,7 +370,7 @@ export function useRosterActions({
     } finally {
       setSaving(false);
     }
-  }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum, rowBrokerOverrides, setErrorBanner, setErrorCellKey, setReloadTick, setWarnings, skipExtraRowsResetRef]);
+  }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum, rowBrokerOverrides, rowStaffOverrides, setErrorBanner, setErrorCellKey, setReloadTick, setWarnings, skipExtraRowsResetRef]);
 
   // WP-PRICE §M3：「重新計價」——價目卡補咗／改咗之後，一鍵將呢個盤呢個
   // 月全部 shift 記錄嘅 snapshot 追返卡（見 POST /api/shift-records/
@@ -436,6 +439,8 @@ export function useRosterActions({
     saveToastSettlementInferred,
     rowBrokerOverrides,
     setRowBrokerOverrides,
+    rowStaffOverrides,
+    setRowStaffOverrides,
     showAddGuard,
     setShowAddGuard,
     addGuardId,

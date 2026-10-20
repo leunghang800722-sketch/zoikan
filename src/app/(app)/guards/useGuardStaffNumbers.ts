@@ -34,7 +34,10 @@ export function useGuardStaffNumbers({
   const [numberActionBusy, setNumberActionBusy] = useState(false);
   const [numberActionError, setNumberActionError] = useState<string | null>(null);
   const [numberEditingId, setNumberEditingId] = useState<string | null>(null);
-  const [numberEditForm, setNumberEditForm] = useState({ number: "", valid_from: "", valid_to: "", note: "" });
+  const [numberEditForm, setNumberEditForm] = useState({ number: "", valid_from: "", valid_to: "", note: "", end_reason: "" });
+  // EMP-P1：結束一張卡（→已取消）必須填離職／停用日＋原因
+  const [numberEndingId, setNumberEndingId] = useState<string | null>(null);
+  const [numberEndForm, setNumberEndForm] = useState({ valid_to: "", end_reason: "resigned" });
 
   // WP-STAFFNO：抽屜開緊嗰個人嘅員工編號（current+former），俾「員工
   // 編號」分區用。
@@ -53,11 +56,15 @@ export function useGuardStaffNumbers({
     setStaffNumberSaving(true);
     setStaffNumberError(null);
     const scheme = staffNumberForm.scheme === "其他" ? staffNumberForm.schemeOther.trim().toUpperCase() : staffNumberForm.scheme;
+    const hist = staffNumberForm.historical;
     const res = await apiPost<{ converted_former?: { number: string } | null }>(`/api/guards/${editingId}/staff-numbers`, {
       scheme,
       number: staffNumberForm.number,
       valid_from: staffNumberForm.valid_from || undefined,
       note: staffNumberForm.note || undefined,
+      // EMP-P1：補歷史卡＝status former＋離職日＋原因；換號＝replaces_current
+      ...(hist ? { status: "former", valid_to: staffNumberForm.valid_to || undefined, end_reason: staffNumberForm.end_reason } : {}),
+      ...(!hist && staffNumberForm.replaces_current ? { replaces_current: true } : {}),
     });
     setStaffNumberSaving(false);
     if (!res.ok) {
@@ -67,8 +74,10 @@ export function useGuardStaffNumbers({
     setStaffNumberForm({ ...emptyStaffNumberForm, scheme: staffNumberForm.scheme });
     setNotice(
       res.data.converted_former
-        ? `已新增 ${scheme} 號，原本嘅 ${res.data.converted_former.number} 已取消`
-        : `已新增 ${scheme} 號`,
+        ? `已新增 ${scheme} 號，原本嘅 ${res.data.converted_former.number} 已標示為被取代（換號）`
+        : hist
+          ? `已補 ${scheme} 歷史號`
+          : `已新增 ${scheme} 號`,
     );
     await loadStaffNumbers(editingId);
     await reloadList(); // 令列表 chips 即時反映新現用號
@@ -91,6 +100,13 @@ export function useGuardStaffNumbers({
   async function onToggleStaffNumberStatus(row: StaffNumberRow) {
     if (!editingId) return;
     const nextStatus: "current" | "former" = row.status === "current" ? "former" : "current";
+    if (nextStatus === "former") {
+      // EMP-P1：結束一張卡要填離職／停用日＋原因——開 inline 表單，確認後先送 PATCH
+      setNumberEndingId(row.id);
+      setNumberEndForm({ valid_to: new Date().toISOString().slice(0, 10), end_reason: "resigned" });
+      setNumberActionError(null);
+      return;
+    }
     if (nextStatus === "current") {
       const confirmed = await askConfirm({
         message: `已取消嘅編號正常唔會再用（再入職會攞新號）。確定要將 ${row.number} 改返現用？（只應該用嚟更正撳錯）`,
@@ -105,12 +121,34 @@ export function useGuardStaffNumbers({
       setNumberActionError(res.message);
       return;
     }
-    setNotice(nextStatus === "former" ? `已將 ${row.number} 取消` : `已將 ${row.number} 改返現用`);
+    setNotice(`已將 ${row.number} 改返現用`);
     await loadStaffNumbers(editingId);
     await reloadList();
     // 同 onAddStaffNumber() 一致理由——staff_no／staff_no_mw 可能經
     // syncLegacyStaffNoColumns() 同步咗，主表單要重新 GET 先唔會帶住
     // 舊值撳「儲存」撞號。
+    const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
+    if (detailRes.ok) fillFormFromRow(detailRes.data);
+  }
+
+  async function onConfirmEndStaffNumber() {
+    if (!editingId || !numberEndingId) return;
+    if (!numberEndForm.valid_to) {
+      setNumberActionError("要填離職／停用日");
+      return;
+    }
+    setNumberActionBusy(true);
+    setNumberActionError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${numberEndingId}`, { status: "former", valid_to: numberEndForm.valid_to, end_reason: numberEndForm.end_reason });
+    setNumberActionBusy(false);
+    if (!res.ok) {
+      setNumberActionError(res.message);
+      return;
+    }
+    setNumberEndingId(null);
+    setNotice("已結束呢張工號卡");
+    await loadStaffNumbers(editingId);
+    await reloadList();
     const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
     if (detailRes.ok) fillFormFromRow(detailRes.data);
   }
@@ -125,6 +163,7 @@ export function useGuardStaffNumbers({
       valid_from: row.valid_from ? row.valid_from.slice(0, 10) : "",
       valid_to: row.valid_to ? row.valid_to.slice(0, 10) : "",
       note: row.note ?? "",
+      end_reason: row.end_reason ?? "",
     });
   }
 
@@ -144,6 +183,7 @@ export function useGuardStaffNumbers({
       number: numberEditForm.number,
       valid_from: numberEditForm.valid_from || null,
       valid_to: numberEditForm.valid_to || null,
+      ...(numberEditForm.end_reason ? { end_reason: numberEditForm.end_reason } : {}),
       note: numberEditForm.note || null,
     });
     setNumberActionBusy(false);
@@ -169,6 +209,7 @@ export function useGuardStaffNumbers({
     setStaffNumberError(null);
     setShowFormerStaffNumbers(false);
     setNumberEditingId(null);
+    setNumberEndingId(null);
     setNumberActionError(null);
   }
 
@@ -182,6 +223,11 @@ export function useGuardStaffNumbers({
     numberActionError,
     numberEditingId,
     numberEditForm,
+    numberEndingId,
+    numberEndForm,
+    setNumberEndForm,
+    setNumberEndingId,
+    onConfirmEndStaffNumber,
     setStaffNumberForm,
     setShowFormerStaffNumbers,
     setNumberEditForm,

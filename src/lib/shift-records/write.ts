@@ -15,6 +15,7 @@ import { fetchEffectiveRateCards, resolveShiftPricingFromCards, isUnpricedShift,
 import { n } from "@/lib/reports/money";
 import { MANUAL_SOURCE } from "@/lib/longterm-payroll/attendance-priority";
 import { createSettlementBrokerFallbackResolver } from "@/lib/pricing/settlement-broker-fallback";
+import { resolveShiftStaffNumbers, shouldWriteStaffNumber, staffNumberData, type ResolvedStaff } from "@/lib/shift-records/staff-number";
 
 export const LEAVE_CODES = new Set<string>(Object.values(LeaveCode));
 
@@ -25,6 +26,10 @@ export type Cell = {
   code?: string | null;
   settlement_broker_id?: string;
   operational_broker_id?: string;
+  /** EMP-P1：明確指定用邊張工號卡（必須屬同一個 guard）。 */
+  staff_number_id?: string | null;
+  /** EMP-P1：更表上載行 id（roster_upload_rows.id）——用其 staff_no_raw 對卡。 */
+  roster_row_id?: string | null;
 };
 
 export type PlannedOp =
@@ -62,8 +67,9 @@ export interface WriteExtra {
   provenance?: Prisma.InputJsonValue;
 }
 
-function upsertUpdateData(plan: UpsertPlan, extra?: WriteExtra) {
+function upsertUpdateData(plan: UpsertPlan, extra?: WriteExtra, staff?: ResolvedStaff | null) {
   return {
+    ...staffNumberData(staff),
     ...(extra ? { source: extra.source, ...(extra.provenance !== undefined ? { provenance: extra.provenance } : {}) } : plan.manualSource ? { source: MANUAL_SOURCE } : {}),
     recordType: plan.recordType,
     leaveCode: plan.leaveCode as never,
@@ -75,8 +81,9 @@ function upsertUpdateData(plan: UpsertPlan, extra?: WriteExtra) {
     brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
   };
 }
-function upsertCreateData(plan: UpsertPlan, siteId: string, createdBy: string, extra?: WriteExtra) {
+function upsertCreateData(plan: UpsertPlan, siteId: string, createdBy: string, extra?: WriteExtra, staff?: ResolvedStaff | null) {
   return {
+    ...staffNumberData(staff),
     source: extra ? extra.source : MANUAL_SOURCE,
     ...(extra?.provenance !== undefined ? { provenance: extra.provenance } : {}),
     workDate: plan.cell.work_date,
@@ -225,13 +232,16 @@ export async function computePlanPricing(args: {
   return { upsertPlans, pricedCount, unpricedCount, unpricedByKey };
 }
 
-export type AppliedResult = { key: string; id: string; action: string; settlement_inferred?: boolean };
+type AppliedResult = { key: string; id: string; action: string; settlement_inferred?: boolean };
+
+/** EMP-P1：applyShiftPlansTx 額外回報——冇推到工號卡嘅 upsert 格數（唔擋儲存）。 */
+export type ShiftPlansApplied = { results: AppliedResult[]; autoCardUses: AutoCardUse[]; noStaffNumberCount: number };
 
 /** tx 內寫入（抽自 batch route，邏輯不變）：clear／update／create／audit（一條 createMany）。呼叫者負責先 assertMonthNotLockedTx。 */
 export async function applyShiftPlansTx(
   tx: Prisma.TransactionClient,
   args: { plans: PlannedOp[]; siteId: string; actorUserId: string; ip: string | null; extra?: WriteExtra },
-): Promise<{ results: AppliedResult[]; autoCardUses: AutoCardUse[] }> {
+): Promise<ShiftPlansApplied> {
   const { plans, siteId, actorUserId, ip, extra } = args;
   const results: AppliedResult[] = [];
   type PendingAudit = { rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
@@ -240,6 +250,13 @@ export async function applyShiftPlansTx(
   const keyOfPlan = (p: Exclude<PlannedOp, { kind: "noop" }>) => `${p.cell.guard_id}|${p.cell.work_date.toISOString().slice(0, 10)}|${p.cell.shift_type_id}`;
   const activePlans = plans.filter((p): p is Exclude<PlannedOp, { kind: "noop" }> => p.kind !== "noop");
   const hasDuplicateCells = new Set(activePlans.map(keyOfPlan)).size !== activePlans.length;
+  // EMP-P1：每個 upsert 格推導用邊張工號卡（同一 tx、批量 prefetch；只係歸屬，唔掂金額）。
+  const upsertActive = activePlans.filter((p): p is UpsertPlan => p.kind === "upsert");
+  const staffByKey = await resolveShiftStaffNumbers(
+    tx,
+    upsertActive.map((p) => ({ key: keyOfPlan(p), guardId: p.cell.guard_id, siteId, workDate: p.cell.work_date, explicitStaffNumberId: p.cell.staff_number_id ?? null, rosterRowId: p.cell.roster_row_id ?? null, settlementBrokerId: p.settlementBrokerId })),
+  );
+  const noStaffNumberCount = upsertActive.filter((p) => !staffByKey.get(keyOfPlan(p))).length;
   const writeBatchAudits = (t: Prisma.TransactionClient) =>
     writeAuditMany(pendingAudits.map((a) => ({ actorUserId, tableName: "shift_records", rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip })), t);
   if (hasDuplicateCells) {
@@ -256,12 +273,13 @@ export async function applyShiftPlansTx(
       // upsert
       if (plan.existingId) {
         const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: plan.existingId } });
-        const after = await tx.shiftRecord.update({ where: { id: plan.existingId }, data: upsertUpdateData(plan, extra) });
+        const staff = staffByKey.get(key) ?? null;
+        const after = await tx.shiftRecord.update({ where: { id: plan.existingId }, data: upsertUpdateData(plan, extra, shouldWriteStaffNumber(before, staff) ? staff : null) });
         pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
         autoCardUses.push({ recordId: plan.existingId, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
         results.push({ key, id: plan.existingId, action: "updated", settlement_inferred: plan.settlementInferred });
       } else {
-        const data: Prisma.ShiftRecordUncheckedCreateInput = upsertCreateData(plan, siteId, actorUserId, extra);
+        const data: Prisma.ShiftRecordUncheckedCreateInput = upsertCreateData(plan, siteId, actorUserId, extra, staffByKey.get(key) ?? null);
         const created = await tx.shiftRecord.create({ data });
         pendingAudits.push({ rowId: created.id, action: "create", after: created });
         autoCardUses.push({ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
@@ -269,7 +287,7 @@ export async function applyShiftPlansTx(
       }
     }
     await writeBatchAudits(tx);
-    return { results, autoCardUses };
+    return { results, autoCardUses, noStaffNumberCount };
   }
 
   // ---- 批量路徑 ----
@@ -290,7 +308,8 @@ export async function applyShiftPlansTx(
   // 更新：相同 data 嘅格併成一條 updateMany
   const updateGroups = new Map<string, { data: Prisma.ShiftRecordUncheckedUpdateManyInput; ids: string[] }>();
   for (const plan of updatePlans) {
-    const data: Prisma.ShiftRecordUncheckedUpdateManyInput = upsertUpdateData(plan, extra);
+    const staff = staffByKey.get(keyOfPlan(plan)) ?? null;
+    const data: Prisma.ShiftRecordUncheckedUpdateManyInput = upsertUpdateData(plan, extra, shouldWriteStaffNumber(beforeById.get(plan.existingId)!, staff) ? staff : null);
     const gk = JSON.stringify(data);
     const g = updateGroups.get(gk) ?? { data, ids: [] };
     g.ids.push(plan.existingId);
@@ -306,7 +325,7 @@ export async function applyShiftPlansTx(
   const createdByKey = new Map<string, Awaited<ReturnType<typeof tx.shiftRecord.createManyAndReturn>>[number]>();
   if (createPlans.length > 0) {
     const created = await tx.shiftRecord.createManyAndReturn({
-      data: createPlans.map((plan): Prisma.ShiftRecordCreateManyInput => upsertCreateData(plan, siteId, actorUserId, extra)),
+      data: createPlans.map((plan): Prisma.ShiftRecordCreateManyInput => upsertCreateData(plan, siteId, actorUserId, extra, staffByKey.get(keyOfPlan(plan)) ?? null)),
     });
     for (const r of created) createdByKey.set(`${r.guardId}|${r.workDate.toISOString().slice(0, 10)}|${r.shiftTypeId}`, r);
   }
@@ -333,7 +352,7 @@ export async function applyShiftPlansTx(
     }
   }
   await writeBatchAudits(tx);
-  return { results, autoCardUses };
+  return { results, autoCardUses, noStaffNumberCount };
 }
 
 // Opus 對抗式驗收「警示 UUID」：`computeWarnings()` 回應之前直接內嵌
@@ -454,6 +473,8 @@ export interface WriteShiftCellsResult {
   autoCardUses: AutoCardUse[];
   pricing: { priced: number; unpriced: number };
   noSettlementCount: number;
+  /** EMP-P1：冇推到工號卡嘅格數（唔擋儲存）。 */
+  noStaffNumberCount: number;
 }
 
 /**
@@ -543,6 +564,7 @@ export async function writeShiftCells(tx: Prisma.TransactionClient, input: Write
     autoCardUses: applied.autoCardUses,
     pricing: { priced: pricedCount, unpriced: unpricedCount },
     noSettlementCount: upsertPlans.filter((p) => p.recordType === "shift" && p.settlementBrokerId === null).length,
+    noStaffNumberCount: applied.noStaffNumberCount,
   };
 }
 

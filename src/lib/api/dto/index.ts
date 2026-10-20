@@ -22,7 +22,7 @@ const BROKER_FIELDS = ["id", "code", "name", "kind", "settlementType", "bankInfo
 // Site model 大註解。
 // WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求）：`rosterFileKeys`——更表檔名鍵，
 // 見 prisma/schema.prisma Site model 註解／src/lib/roster-upload/match.ts。
-const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "guardsPaidByClient", "rosterFileKeys", "defaultSettlementBrokerId", "status", "createdAt", "updatedAt", "createdBy"] as const;
+const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "guardsPaidByClient", "staffScheme", "rosterFileKeys", "defaultSettlementBrokerId", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTime", "hours", "headcountRequired", "billingGroup", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 // S4（Opus 驗收修復）：`monthShiftCount` 係 P2-A 加嘅衍生欄（唔係
 // Prisma model 本身有嘅欄，`GET /api/guards?with_month_shifts=YYYY-MM`
@@ -115,7 +115,7 @@ const GUARD_FIELDS = [
   "visaSponsoredByBrokerId",
 ] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
-const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "createdAt", "updatedAt", "createdBy"] as const;
+const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "staffNumberId", "staffScheme", "staffNumberSource", "createdAt", "updatedAt", "createdBy"] as const;
 const DAILY_REQUIREMENT_FIELDS = ["id", "siteId", "shiftTypeId", "workDate", "headcountRequired", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const SPECIAL_ITEM_FIELDS = ["id", "month", "siteId", "brokerId", "kind", "shifts", "revenue", "cost", "description", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const MONTH_CLOSE_FIELDS = ["id", "month", "lockedAt", "lockedBy", "rosterVersionNote", "createdAt", "updatedAt", "createdBy"] as const;
@@ -236,7 +236,7 @@ export const toShiftRecordFullDTO = <T extends Record<string, unknown>>(row: T) 
 const SHIFT_RECORD_LIST_FIELDS = SHIFT_RECORD_FIELDS.filter((f) => f !== "provenance") as unknown as readonly (typeof SHIFT_RECORD_FIELDS)[number][];
 export const toShiftRecordListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_LIST_FIELDS);
 // `?view=grid`：更表編輯器只需要呢 10 欄（每條 ~240 bytes，對比全欄 ~965）。W2 加 `source`（additive：標「來自 WhatsApp」）。
-const SHIFT_RECORD_GRID_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "recordType", "leaveCode", "status", "source"] as const;
+const SHIFT_RECORD_GRID_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "recordType", "leaveCode", "status", "source", "staffNumberId"] as const;
 export const toShiftRecordGridDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_GRID_FIELDS);
 export const toDailyRequirementFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, DAILY_REQUIREMENT_FIELDS);
 export const toSpecialItemDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SPECIAL_ITEM_FIELDS);

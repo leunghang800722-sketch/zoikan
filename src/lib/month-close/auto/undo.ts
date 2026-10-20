@@ -103,13 +103,15 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
         break;
       }
       case "settlement_set": {
-        const rows = (d.rows as Array<{ id: string; beforeSettlement: string | null; beforeOperational: string | null; afterOperational: string | null }>) ?? [];
+        const rows = (d.rows as Array<{ id: string; beforeSettlement: string | null; beforeOperational: string | null; afterOperational: string | null; staffAfter?: string }>) ?? [];
         const brokerId = d.brokerId as string;
         let restored = 0;
         for (const r of rows) {
-          const cur = await prisma.shiftRecord.findUnique({ where: { id: r.id }, select: { settlementBrokerId: true, operationalBrokerId: true } });
+          const cur = await prisma.shiftRecord.findUnique({ where: { id: r.id }, select: { settlementBrokerId: true, operationalBrokerId: true, staffNumberId: true } });
           if (!cur || cur.settlementBrokerId !== brokerId) continue;
-          await prisma.shiftRecord.update({ where: { id: r.id }, data: { settlementBrokerId: r.beforeSettlement, operationalBrokerId: cur.operationalBrokerId === r.afterOperational ? r.beforeOperational : cur.operationalBrokerId } });
+          // EMP-P1：一齊還原當時順便填入嘅工號歸屬（現值仍然係當時填入嗰張先還原；之後被人手改過就保留）
+          const staffUndo = r.staffAfter && cur.staffNumberId === r.staffAfter ? { staffNumberId: null, staffScheme: null, staffNumberSource: null } : {};
+          await prisma.shiftRecord.update({ where: { id: r.id }, data: { settlementBrokerId: r.beforeSettlement, operationalBrokerId: cur.operationalBrokerId === r.afterOperational ? r.beforeOperational : cur.operationalBrokerId, ...staffUndo } });
           restored++;
         }
         if (restored > 0) await audit("shift_records", `undo_settlement:${c.id}`, "update", { rows: rows.length }, { restored });
@@ -121,6 +123,12 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
         const sn = await prisma.guardStaffNumber.findUnique({ where: { id: (d.staffNumberId as string) ?? "" } });
         if (!sn) {
           await mark(c.id, "undone", "工號登記已唔存在");
+          break;
+        }
+        // EMP-P1：工號卡已被更次引用（shift_records／鎖月側表，FK Restrict）→ 唔刪，留低；要先處理嗰啲更次
+        const referenced = (await prisma.shiftRecord.count({ where: { staffNumberId: sn.id } })) + (await prisma.shiftRecordStaffAttribution.count({ where: { staffNumberId: sn.id } }));
+        if (referenced > 0) {
+          await skip(c, `工號卡已經有 ${referenced} 更引用，唔刪（要先處理嗰啲更次嘅工號歸屬）`);
           break;
         }
         await prisma.$transaction(async (tx) => {

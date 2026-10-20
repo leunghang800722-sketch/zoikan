@@ -35,6 +35,7 @@ import { seedRolesPermissionsMatrix } from "../../src/lib/rbac/seed";
 import { seedRosterLayouts } from "./lib/roster-layout";
 import { enrichLeaveCodeRawText } from "./lib/leave-code-raw";
 import { enrichShiftRecordsWithRawRow } from "./lib/roster-raw";
+import { seedShiftStaffNumbers } from "./lib/shift-staff-numbers";
 import { schemeFromNumber, normalizeStaffNumber } from "../../src/lib/guards/staff-numbers";
 import { normalizeTel, isValidTel } from "../../src/lib/guards/contacts";
 
@@ -1531,6 +1532,11 @@ async function main() {
   if (rawRowResult.skippedReason) {
     console.log(`[seed] roster_raw_row 跳過: ${rawRowResult.skippedReason}`);
   }
+
+  // EMP-P1：更次工號歸屬（長工 B07 → MG 卡；盤 staff_scheme 已設定就跟盤）。7 月盤全部未設 scheme，所以主要係長工更次有值。
+  const staffAttr = await seedShiftStaffNumbers(prisma);
+  stats.shiftRecordsStaffNumberAssigned = staffAttr.assigned;
+  for (const [src, n] of Object.entries(staffAttr.bySource)) stats[`shiftRecordsStaffNumberBySource_${src}`] = n;
 
   const path = await import("node:path");
   const outDir = path.resolve(process.cwd(), "out/p1");

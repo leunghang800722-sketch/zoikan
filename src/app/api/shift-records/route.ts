@@ -290,10 +290,10 @@ export async function POST(req: Request) {
     try {
       // P18：單條新建寫 source=manual（同 batch 一致；caller 明確帶 source 先保留）——helper 內處理。
       // G2：撞 unique 而現存行係 cancelled → 重用（update）；非 cancelled → P2002 → 409。audit 同 tx。
-      const { record: created, reused } = await createOrReuseShiftRecord({ data, actorUserId: session.userId, ip: getClientIp(req) });
+      const { record: created, reused, noStaffNumber } = await createOrReuseShiftRecord({ data, actorUserId: session.userId, ip: getClientIp(req) });
       await journalAutoCardUsesSafe([{ recordId: created.id, before: manualBefore, after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...internalSource }]);
       const dto = await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(created));
-      return ok(reused ? Object.assign(dto, { reused: true }) : dto, 201); // additive：reused 標記
+      return ok(Object.assign(dto, reused ? { reused: true } : {}, noStaffNumber ? { no_staff_number_count: 1 } : {}), 201); // additive：reused／no_staff_number_count（EMP-P1）標記
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
         throw Conflict("同一保安員、同一日、同一更別已經有記錄（硬性規則2）");

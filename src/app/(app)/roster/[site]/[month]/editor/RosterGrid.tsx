@@ -55,6 +55,8 @@ export function RosterGrid({
   selectedBrokerCode,
   rowBrokerOverrides,
   setRowBrokerOverrides,
+  rowStaffOverrides,
+  setRowStaffOverrides,
   brokerSelectOptions,
   fillRowKey,
   setFillRowKey,
@@ -99,6 +101,8 @@ export function RosterGrid({
   selectedBrokerCode: string | null;
   rowBrokerOverrides: Map<string, string>;
   setRowBrokerOverrides: Dispatch<SetStateAction<Map<string, string>>>;
+  rowStaffOverrides: Map<string, string>;
+  setRowStaffOverrides: Dispatch<SetStateAction<Map<string, string>>>;
   brokerSelectOptions: BrokerDto[];
   fillRowKey: string | null;
   setFillRowKey: (key: string | null) => void;
@@ -118,6 +122,35 @@ export function RosterGrid({
   waInfo?: Map<string, WaCellInfo>;
 }) {
   // ---- WP-R2：桌面／手機固定欄闊度（README §04/§23）--------------------
+  // EMP-P1：人喺呢個盤有多過一張合資格工號卡 → 工號格可手揀（儲存時寫 payload staff_number_id）；否則淨係顯示號碼。
+  const staffNoCell = (row: RowMeta) =>
+    row.staffCards && !monthLocked && !isBrokerSession ? (
+      <select
+        aria-label={`${row.guardName || row.guardId} 工號卡`}
+        data-testid="roster-row-staffcard-select"
+        value={rowStaffOverrides.get(row.key) ?? row.staffCardId ?? ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          setRowStaffOverrides((prev) => {
+            const next = new Map(prev);
+            if (v && v !== row.staffCardId) next.set(row.key, v);
+            else next.delete(row.key);
+            return next;
+          });
+        }}
+        style={{ fontSize: 10.5, padding: "0 2px", borderRadius: 4, maxWidth: 110 }}
+      >
+        {row.staffCards.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.number}
+            {c.status === "former" ? "（已取消）" : ""}
+          </option>
+        ))}
+      </select>
+    ) : (
+      row.staffNo
+    );
+
   const showBrokerCol = !isBrokerSession && !compact;
   const deskNameWidth = DESK_FIXED_TOTAL - DESK_COL_SHIFT_TYPE - (showBrokerCol ? DESK_COL_BROKER : 0);
   const nameColWidth = compact ? MOBILE_COL_NAME : deskNameWidth;
@@ -339,7 +372,7 @@ export function RosterGrid({
                               </span>
                             )}
                             {broker && row.staffNo ? "·" : ""}
-                            {row.staffNo}
+                            {staffNoCell(row)}
                           </div>
                         </div>
                       ) : (
@@ -347,7 +380,7 @@ export function RosterGrid({
                           <span className="truncate text-zk-base font-medium" title={row.guardName || "(未命名)"}>
                             {row.guardName || "(未命名)"}
                           </span>
-                          <span className="shrink-0 text-zk-xs text-zk-faint">{row.staffNo}</span>
+                          <span className="shrink-0 text-zk-xs text-zk-faint">{staffNoCell(row)}</span>
                           {permitExpired && <span className="shrink-0 text-zk-2xs text-zk-danger">證件到期</span>}
                         </div>
                       )}

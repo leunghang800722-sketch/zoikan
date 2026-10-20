@@ -120,8 +120,15 @@ export interface StaffNumberRow {
   status: "current" | "former";
   valid_from?: string | null;
   valid_to?: string | null;
+  /** EMP-P1：結束原因（resigned／replaced／cancelled）；舊資料 null */
+  end_reason?: string | null;
+  /** EMP-P1：換號前身（呢張卡接替咗邊張卡） */
+  predecessor_id?: string | null;
   note?: string | null;
 }
+
+/** EMP-P1：工號卡結束原因顯示字（DB 值 resigned／replaced／cancelled）。 */
+export const END_REASON_LABEL: Record<string, string> = { resigned: "離職", replaced: "換號（被新號取代）", cancelled: "作廢／取消" };
 
 // WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀一個」）：
 // `GET/POST /api/guards/:id/phones`／`emergency-contacts`／`addresses`
@@ -203,6 +210,11 @@ export const emptyStaffNumberForm = {
   number: "",
   valid_from: "",
   note: "",
+  // EMP-P1：換號（取代現有同 scheme 現用卡）／補歷史卡（已離職／停用，必須有離職日＋原因）
+  replaces_current: false,
+  historical: false,
+  valid_to: "",
+  end_reason: "resigned",
 };
 
 // WP-MULTI：三個新分區各自嘅「新增」表單初始值。

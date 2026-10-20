@@ -9,6 +9,8 @@ import { apiGet, apiGetAll, ApiClientError } from "@/lib/api-client";
 import { cachedLookup } from "@/lib/ui/lookup-cache";
 import { cachedRows } from "@/lib/ui/lookups";
 import type {
+  RosterStaffNumbersDto,
+  StaffCardDto,
   BrokerDto,
   CellState,
   DailyRequirementDto,
@@ -44,6 +46,8 @@ export function useRosterData({ siteId, month, onLoadedRef }: { siteId: string; 
   // WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類「客戶直接出糧」嘅盤——頁
   // 頂 Notice 用（見下面「鎖定／提示橫幅」段）。
   const [guardsPaidByClient, setGuardsPaidByClient] = useState(false);
+  // EMP-P1：盤 staff_scheme（顯示該盤體系工號）＋各 guard 嘅合資格工號卡
+  const [staffScheme, setStaffScheme] = useState<string | null>(null);
 
   const [shiftTypesById, setShiftTypesById] = useState<Map<string, ShiftTypeDto>>(new Map());
   const [guardsById, setGuardsById] = useState<Map<string, GuardDto>>(new Map());
@@ -142,6 +146,17 @@ export function useRosterData({ siteId, month, onLoadedRef }: { siteId: string; 
         setSiteName(site.canonical_name);
         setHasRosterLayout(site.has_roster_layout ?? false);
         setGuardsPaidByClient(site.guards_paid_by_client ?? false);
+        setStaffScheme(site.staff_scheme ?? null);
+        // EMP-P1：盤有設定 scheme 先去拎工號卡（雞頭 session／未設定盤唔使）
+        const cardsByGuard = new Map<string, StaffCardDto[]>();
+        if (!brokerSession && site.staff_scheme && site.staff_scheme !== "U") {
+          try {
+            const sn = await apiGet<RosterStaffNumbersDto>(`/api/sites/${siteId}/roster-staff-numbers`, { month });
+            for (const g of sn.guards) cardsByGuard.set(g.guard_id, g.cards);
+          } catch {
+            // 純顯示用，攞唔到就跌返 guards.staff_no，唔阻住編輯器
+          }
+        }
 
         const stMap = new Map(shiftTypes.map((s) => [s.id, s]));
         const gMap = new Map(guards.map((g) => [g.id, g]));
@@ -151,7 +166,7 @@ export function useRosterData({ siteId, month, onLoadedRef }: { siteId: string; 
         setBrokersById(bMap);
 
         setRecords(records);
-        const built = buildRowsAndCells(records, stMap, gMap);
+        const built = buildRowsAndCells(records, stMap, gMap, { scheme: site.staff_scheme ?? null, cardsByGuard });
         setRows(built.rows);
         setBaseline(new Map(built.cells));
         setCells(new Map(built.cells));
@@ -195,6 +210,7 @@ export function useRosterData({ siteId, month, onLoadedRef }: { siteId: string; 
     siteName,
     hasRosterLayout,
     guardsPaidByClient,
+    staffScheme,
     shiftTypesById,
     guardsById,
     brokersById,

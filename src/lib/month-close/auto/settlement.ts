@@ -13,6 +13,7 @@ import { prisma } from "@/lib/db";
 import { monthRange } from "@/lib/reports/money";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
 import { shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
+import { resolveShiftStaffNumbers, staffNumberData } from "@/lib/shift-records/staff-number";
 import type { AutoCollector, ChangeWriter } from "./context";
 import { matchBrokerLabel, rowsForSite, type BrokerLite } from "./postorder-evidence";
 import { normalizeSiteKey } from "./site-match";
@@ -49,16 +50,18 @@ function pickUniqueMajority(counts: Map<string, number>): string | null {
 /** 寫一批結算歸屬（journal＋audit，一個 transaction 內逐項），回傳寫咗幾多更。 */
 export async function setSettlementBatch(writer: ChangeWriter, ids: string[], brokerId: string, reason: string): Promise<number> {
   if (ids.length === 0) return 0;
-  const recs = await prisma.shiftRecord.findMany({ where: { id: { in: ids }, settlementBrokerId: null, status: { not: "cancelled" } }, select: { id: true, settlementBrokerId: true, operationalBrokerId: true } });
+  const recs = await prisma.shiftRecord.findMany({ where: { id: { in: ids }, settlementBrokerId: null, status: { not: "cancelled" } }, select: { id: true, guardId: true, siteId: true, workDate: true, staffNumberId: true, settlementBrokerId: true, operationalBrokerId: true } });
   if (recs.length === 0) return 0;
   for (let i = 0; i < recs.length; i += 300) {
     const batch = recs.slice(i, i + 300);
-    await prisma.$transaction(batch.map((r) => prisma.shiftRecord.update({ where: { id: r.id }, data: { settlementBrokerId: brokerId, operationalBrokerId: r.operationalBrokerId ?? brokerId } })));
+    // EMP-P1：補咗結算單位（例如 B07 長工）之後，順便為仲冇工號歸屬嘅更次推導工號卡（只填空位；journal 記低，undo 連同還原）。
+    const staffBy = await resolveShiftStaffNumbers(prisma, batch.filter((r) => !r.staffNumberId).map((r) => ({ key: r.id, guardId: r.guardId, siteId: r.siteId, workDate: r.workDate, settlementBrokerId: brokerId })));
+    await prisma.$transaction(batch.map((r) => prisma.shiftRecord.update({ where: { id: r.id }, data: { settlementBrokerId: brokerId, operationalBrokerId: r.operationalBrokerId ?? brokerId, ...staffNumberData(staffBy.get(r.id)) } })));
     await writer.journal({
       kind: "settlement_set",
       refTable: "shift_records",
       summary: `補結算雞頭 ${batch.length} 更（${reason}）`,
-      detail: { brokerId, reason, rows: batch.map((r) => ({ id: r.id, beforeSettlement: r.settlementBrokerId, beforeOperational: r.operationalBrokerId, afterOperational: r.operationalBrokerId ?? brokerId })) },
+      detail: { brokerId, reason, rows: batch.map((r) => ({ id: r.id, beforeSettlement: r.settlementBrokerId, beforeOperational: r.operationalBrokerId, afterOperational: r.operationalBrokerId ?? brokerId, ...(staffBy.get(r.id) ? { staffAfter: staffBy.get(r.id)!.staffNumberId } : {}) })) },
     });
   }
   await writer.audit({ tableName: "shift_records", rowId: `auto_settlement:${recs[0]!.id}`, action: "update", after: { count: recs.length, broker_id: brokerId, reason } });
