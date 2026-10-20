@@ -74,6 +74,7 @@ async function clearAll() {
   // shift_type/broker 全部係 ON DELETE SET NULL——唔清嘅話，下面刪晒主表之後
   // 舊上載會變成 site_id=null 嘅孤兒「未配對盤」殘留落嚟（rows 跟 CASCADE）。
   await prisma.rosterUpload.deleteMany({});
+  await prisma.shiftRecordStaffAttribution.deleteMany({}); // EMP-P1：側表先清（FK Restrict）
   await prisma.shiftRecord.updateMany({ data: { parentShiftId: null } });
   await prisma.shiftRecord.deleteMany({});
   await prisma.brokerSiteAssignment.deleteMany({}); // C1：清埋先可以安全刪 site/broker
