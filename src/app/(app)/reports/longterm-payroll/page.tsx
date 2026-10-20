@@ -26,6 +26,7 @@ import { BankReconcilePanel } from "./BankReconcilePanel";
 import { AttendanceFixPanel } from "./AttendanceFixPanel";
 import { ContractCreateForm } from "./ContractCreateForm";
 import { contractErrorMessage, contractPatchBody, dateInputValue } from "@/lib/longterm-payroll/contract-form";
+import { filterCounts, filterLines, isLeaverLine, isZeroDayLine, type LineFilter } from "@/lib/longterm-payroll/line-filter";
 import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
 import { VoidMonthPanel } from "./VoidMonthPanel";
 import { LeaverAdwCard } from "./LeaverAdwCard";
@@ -57,6 +58,9 @@ interface LineDTO {
   mpf_er: number;
   autopay: number;
   notes_json: string[];
+  /** 離職者（DTO 有就用；冇就由 al_daily_rate_basis／notes 推斷，見 line-filter.ts） */
+  is_leaver?: boolean | null;
+  al_daily_rate_basis?: string | null;
   prev_gross: number | null;
   prev_autopay: number | null;
   gross_delta: number | null;
@@ -167,6 +171,9 @@ export default function LongtermPayrollPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expandedGuard, setExpandedGuard] = useState<string | null>(null);
+  const [lineFilter, setLineFilter] = useState<LineFilter>("all");
+  const lineCounts = filterCounts(payroll?.lines ?? []);
+  const shownLines = filterLines(payroll?.lines ?? [], lineFilter);
   const [autopayPreview, setAutopayPreview] = useState<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string; locked_month_warning?: string | null } | null>(null);
   const [confirmLocked, setConfirmLocked] = useState(false);
 
@@ -299,7 +306,28 @@ export default function LongtermPayrollPage() {
       {/* ② 逐人結算表 */}
       {payroll && payroll.lines.length > 0 && (
         <section className="flex flex-col gap-2">
-          <div className="text-sm font-semibold text-zk-text">逐人結算（{payroll.lines.length} 人）</div>
+          <div className="text-sm font-semibold text-zk-text" data-testid="ltpay-lines-title">逐人結算（{shownLines.length} 人）</div>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="逐人結算篩選" data-testid="ltpay-line-filter">
+            {(
+              [
+                ["all", "全部"],
+                ["leaver", "離職者"],
+                ["zero", "零返工日"],
+                ["warn", "有警告"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                aria-pressed={lineFilter === k}
+                data-testid={`ltpay-filter-${k}`}
+                onClick={() => setLineFilter(k)}
+                className={`rounded-full border px-3 py-1 text-zk-sm ${lineFilter === k ? "border-zk-primary bg-zk-primary text-white" : "border-zk-border bg-white text-zk-text"}`}
+              >
+                {label} {lineCounts[k]}
+              </button>
+            ))}
+          </div>
           <div className={tableCls.wrap}>
             <table className={tableCls.table} style={{ minWidth: tableMinWidth(11) }}>
               <thead>
@@ -318,12 +346,14 @@ export default function LongtermPayrollPage() {
                 </tr>
               </thead>
               <tbody>
-                {payroll.lines.map((l) => (
+                {shownLines.map((l) => (
                   <Fragment key={l.id}>
                     <tr className={tableCls.rowHover}>
                       <td className={tableCls.td}>
                         {l.guard_name}
                         {l.guard_staff_no && <span className="ml-1 text-zk-faint">（{l.guard_staff_no}）</span>}
+                        {isLeaverLine(l) && <span className="ml-1.5 rounded bg-zk-danger/10 px-1.5 py-0.5 text-zk-xs text-zk-danger" data-testid="badge-leaver">離職</span>}
+                        {isZeroDayLine(l) && <span className="ml-1.5 rounded bg-zk-header px-1.5 py-0.5 text-zk-xs text-zk-muted" data-testid="badge-zero">0 日</span>}
                       </td>
                       <td className={tableCls.tdNum}>{l.work_days}／{l.days_in_month}</td>
                       <td className={tableCls.tdNum}>{l.ot_hours}</td>
