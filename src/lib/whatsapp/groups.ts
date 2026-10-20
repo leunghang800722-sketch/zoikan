@@ -66,7 +66,7 @@ interface SyncSummary {
 
 type WahaSyncError = Extract<WahaResult<never>, { ok: false }>["error"];
 /** WA-6：WAHA 唔可達／回錯時照樣由訊息補群，回 ok＋waha_error（錯誤碼，唔含 URL／key）。 */
-export interface WahaSyncFailure {
+interface WahaSyncFailure {
   kind: WahaSyncError;
   status?: number;
   /** 分類碼：waha_timeout／waha_http_error／waha_bad_response／waha_unavailable／waha_not_configured */

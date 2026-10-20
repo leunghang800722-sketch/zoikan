@@ -43,6 +43,7 @@ interface SlipLine {
   scheme_label: string;
   number: string | null;
   payer_label: string | null;
+  pay_channel: string;
   settlement_broker_code: string;
   shifts: number;
   wage: number;
@@ -330,12 +331,13 @@ function PayslipView({ slips, loading }: { slips: Slip[]; loading: boolean }) {
             </span>
           </div>
           <div className="overflow-x-auto">
-            <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(8) }}>
               <thead>
                 <tr>
                   <th className={tableCls.th}>工號</th>
                   <th className={tableCls.th}>體系</th>
                   <th className={tableCls.th}>出糧方</th>
+                  <th className={tableCls.th}>出糧途徑</th>
                   <th className={tableCls.th}>結算單位</th>
                   <th className={tableCls.thNum}>更數</th>
                   <th className={tableCls.thNum}>個人金額（唔含雞頭費）</th>
@@ -351,6 +353,7 @@ function PayslipView({ slips, loading }: { slips: Slip[]; loading: boolean }) {
                       {l.note && <span className="ml-1 text-zk-xs text-zk-muted">（{l.note}）</span>}
                     </td>
                     <td className={tableCls.td}>{l.payer_label ?? ""}</td>
+                    <td className={tableCls.td} data-testid="pay-channel">{l.pay_channel}</td>
                     <td className={tableCls.td}>{l.settlement_broker_code}</td>
                     <td className={tableCls.tdNum}>{l.shifts}</td>
                     <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(l.is_longterm ? l.amount : l.wage)}</td>
