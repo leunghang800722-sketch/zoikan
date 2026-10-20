@@ -11,6 +11,7 @@ import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { SiteUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
+import { startSiteSchemeJob } from "@/lib/sites/staff-scheme-jobs";
 import { BadRequest, NotFound } from "@/lib/api/errors";
 import type { Prisma } from "@prisma/client";
 
@@ -46,6 +47,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const data = snakeToCamelShallow(parsed) as Prisma.SiteUncheckedUpdateInput;
     const after = await prisma.site.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "sites", rowId: id, action: "update", before, after, ip: getClientIp(req) });
-    return ok(await applyFieldGroupGate(session, "sites", toSiteDTO(after)));
+    // SITE-SCHEME-1.1：改 staff_scheme（設定成非 null 值而且真係變咗）→ 背景重推導：未鎖月「自動推導」歸屬（site_scheme／backfill:range／backfill:sole）清走再按新體系重推；
+    // 已鎖月（含側表）唔郁。回應 additive `reinfer { job_id, note }`（job 結果睇 GET /api/sites/staff-scheme-prefill?job=<id> 嘅 summary.locked_kept）。
+    const dto = await applyFieldGroupGate(session, "sites", toSiteDTO(after));
+    if (after.staffScheme && before.staffScheme !== after.staffScheme) {
+      const job = await startSiteSchemeJob({ mode: "reinfer", siteId: id }, session.userId);
+      return ok({ ...dto, reinfer: { job_id: job.jobId, note: "更次工號歸屬背景重推導中（未鎖月自動推導嘅會重推；已鎖月嘅唔會改，要人手處理）" } } as unknown as typeof dto);
+    }
+    return ok(dto);
   });
 }

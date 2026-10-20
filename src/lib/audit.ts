@@ -74,6 +74,8 @@ export type AuditAction =
   | "backfill_leave_opening"
   // SITE-SCHEME-1：一次過套用盤工號體系預設建議（after 只有計數）。
   | "site_staff_scheme_prefill"
+  // SITE-SCHEME-1.1：改盤體系後重推導（清走未鎖月自動推導歸屬再重推；after 只有計數）。
+  | "site_staff_scheme_reinfer"
   // HIST-1.1：合併模式逐人 audit（rowId＝guardId，after.as_of＋合併值），再跑時查呢度防重複合併。
   | "backfill_leave_opening_merge"
   // WP-MULTI（老闆 2026-09-19 拍板）：guard_phones／

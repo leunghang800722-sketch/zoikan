@@ -1,8 +1,12 @@
-// SITE-SCHEME-1：盤工號體系預設建議＋一次過套用。
-//   GET  /api/sites/staff-scheme-prefill —— 每個未設定 staff_scheme 嘅盤（status 非 ended）嘅建議：site id、盤名、客戶、建議體系、理由（要「盤:update」＝老闆）。
-//   POST /api/sites/staff-scheme-prefill { apply:true, overrides?:[{site_id, scheme}] } —— 只寫未設定嘅盤（updateMany where staff_scheme IS NULL，冪等）；
+// SITE-SCHEME-1／1.1：盤工號體系預設建議＋套用。
+//   GET  /api/sites/staff-scheme-prefill —— 只對「有 shift／ot 更次」嘅未設定盤出建議（proposals）；結算更次全部係 external（客戶自己人）嘅盤列喺 not_applicable（唔出建議）；
+//        冇更次嘅盤唔列（no_shifts 計數）。要「盤:update」（老闆）。
+//   GET  …?job=<id> —— 輪詢背景補推導 job（job_runs：running｜ok｜error＋summary 計數）。
+//   POST /api/sites/staff-scheme-prefill { apply:true, site_ids?:[…], overrides?:[{site_id, scheme}] } —— 只寫未設定而且屬 proposals 嘅盤（updateMany where staff_scheme IS NULL，冪等）；
+//        site_ids＝只套用已剔嘅盤（冇傳＝全部 proposals，舊 client 相容）；overrides 逐盤覆寫建議（U／MP）。audit 一條 summary。
+//        **歸屬補推導喺背景行**（`after()`＋job_runs）：回 202＋`job_id`，頁面輪詢；補推導只填 staff_number_id IS NULL 嘅更次（未鎖月直接寫、已鎖月寫側表），
+//        結果 summary 有 backfilled／unresolved（推唔到＝人冇對應體系嘅工號卡）。冇寫入任何盤＝200、冇 job。
 //        回應 by_scheme 係 [{scheme,count}] 陣列（物件 key U／MP 會被 snake_case 轉換壞）。
-//        overrides 逐盤覆寫建議（U／MP）；寫完即刻對呢批盤嘅更次補推導工號歸屬（只填空位，未鎖月直接寫、已鎖月寫側表），回 backfilled 計數；audit 一條 summary。
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -10,30 +14,29 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { BadRequest } from "@/lib/api/errors";
+import { NotFound } from "@/lib/api/errors";
 import { writeAuditTx } from "@/lib/audit";
-import { proposeStaffScheme } from "@/lib/sites/staff-scheme-prefill";
-import { backfillSiteStaffNumbers } from "@/lib/shift-records/backfill-site-staff-numbers";
-
-async function unsetSites() {
-  return prisma.site.findMany({ where: { staffScheme: null, status: { not: "ended" } }, select: { id: true, canonicalName: true, clientName: true, clientGroup: true, aliases: true, guardsPaidByClient: true, staffScheme: true }, orderBy: [{ canonicalName: "asc" }, { id: "asc" }] });
-}
+import { loadSchemeCandidates } from "@/lib/sites/staff-scheme-candidates";
+import { getSiteSchemeJob, startSiteSchemeJob } from "@/lib/sites/staff-scheme-jobs";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
     await requirePermission(req, "盤", "update");
-    const sites = await unsetSites();
-    const proposals = sites.map((s) => {
-      const p = proposeStaffScheme(s)!;
-      return { site_id: s.id, site_name: s.canonicalName, client_name: s.clientName, guards_paid_by_client: s.guardsPaidByClient, proposed_scheme: p.scheme, reason: p.reason };
-    });
-    return ok(brandSafeResponse({ count: proposals.length, proposals }));
+    const jobId = new URL(req.url).searchParams.get("job");
+    if (jobId) {
+      const job = await getSiteSchemeJob(jobId);
+      if (!job) throw NotFound("搵唔到呢個背景工作");
+      return ok(brandSafeResponse({ job: { id: job.id, status: job.status, summary: job.summary } }));
+    }
+    const c = await loadSchemeCandidates();
+    return ok(brandSafeResponse({ count: c.proposals.length, proposals: c.proposals, not_applicable: c.not_applicable, no_shifts: c.no_shifts }));
   });
 }
 
 const ApplySchema = z
   .object({
     apply: z.literal(true),
+    site_ids: z.array(z.string().min(1).max(64)).max(2000).optional(),
     overrides: z.array(z.object({ site_id: z.string().min(1).max(64), scheme: z.enum(["U", "MP"]) }).strict()).max(2000).optional(),
   })
   .strict();
@@ -43,26 +46,31 @@ export async function POST(req: Request) {
     const session = await requirePermission(req, "盤", "update");
     const body = parseBody(ApplySchema, await readJson(req));
     const overrides = new Map((body.overrides ?? []).map((o) => [o.site_id, o.scheme]));
-    const sites = await unsetSites();
-    if (sites.length === 0 && overrides.size === 0) return ok(brandSafeResponse({ applied: 0, skipped_already_set: 0, backfilled: 0, by_scheme: [{ scheme: "U", count: 0 }, { scheme: "MP", count: 0 }], backfill: null }));
-    const bySiteId = new Set(sites.map((s) => s.id));
-    const unknown = [...overrides.keys()].filter((id) => !bySiteId.has(id));
-    // overrides 指向已設定／已結束／唔存在嘅盤：唔寫（只寫未設定），計入 skipped_already_set
-    const toApply = sites.map((s) => ({ id: s.id, scheme: overrides.get(s.id) ?? proposeStaffScheme(s)!.scheme }));
-    if (toApply.length > 2000) throw BadRequest("一次最多套用 2000 個盤");
+    const chosen = body.site_ids ? new Set(body.site_ids) : null;
+    const cand = await loadSchemeCandidates();
+    const applicable = new Map(cand.proposals.map((p) => [p.site_id, p]));
+    // 只套用：屬 proposals（未設定、有更次、非全 external）而且（有傳 site_ids 時）已剔嘅盤；其餘計 skipped
+    const requested = chosen ? [...chosen] : [...applicable.keys()];
+    const toApply = requested.filter((id) => applicable.has(id)).map((id) => ({ id, scheme: overrides.get(id) ?? applicable.get(id)!.proposed_scheme }));
+    const skipped = requested.length - toApply.length;
     const bySchemeCount = { U: 0, MP: 0 };
     const appliedIds: string[] = [];
-    await prisma.$transaction(async (tx) => {
-      for (const t of toApply) {
-        const r = await tx.site.updateMany({ where: { id: t.id, staffScheme: null }, data: { staffScheme: t.scheme } }); // 只寫未設定（並發／重覆撳都冪等）
-        if (r.count === 1) {
-          bySchemeCount[t.scheme] += 1;
-          appliedIds.push(t.id);
+    if (toApply.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        for (const t of toApply) {
+          const r = await tx.site.updateMany({ where: { id: t.id, staffScheme: null }, data: { staffScheme: t.scheme } }); // 只寫未設定（並發／重覆撳都冪等）
+          if (r.count === 1) {
+            bySchemeCount[t.scheme] += 1;
+            appliedIds.push(t.id);
+          }
         }
-      }
-      await writeAuditTx(tx, { actorUserId: session.userId, tableName: "sites", rowId: "staff_scheme_prefill", action: "site_staff_scheme_prefill", after: { applied: appliedIds.length, by_scheme: bySchemeCount, overrides: overrides.size, skipped_already_set: unknown.length }, ip: getClientIp(req) });
-    });
-    const backfill = await backfillSiteStaffNumbers(appliedIds);
-    return ok(brandSafeResponse({ applied: appliedIds.length, skipped_already_set: unknown.length, backfilled: backfill.backfilled, by_scheme: [{ scheme: "U", count: bySchemeCount.U }, { scheme: "MP", count: bySchemeCount.MP }], backfill }));
+        await writeAuditTx(tx, { actorUserId: session.userId, tableName: "sites", rowId: "staff_scheme_prefill", action: "site_staff_scheme_prefill", after: { applied: appliedIds.length, by_scheme: bySchemeCount, overrides: overrides.size, skipped }, ip: getClientIp(req) });
+      });
+    }
+    const bySchemeOut = [{ scheme: "U", count: bySchemeCount.U }, { scheme: "MP", count: bySchemeCount.MP }];
+    if (appliedIds.length === 0) return ok(brandSafeResponse({ applied: 0, skipped_not_applicable: skipped, by_scheme: bySchemeOut, job_id: null }));
+    const job = await startSiteSchemeJob({ mode: "backfill", siteIds: appliedIds }, session.userId);
+    const finished = job.finished ? await getSiteSchemeJob(job.jobId) : null;
+    return ok(brandSafeResponse({ applied: appliedIds.length, skipped_not_applicable: skipped, by_scheme: bySchemeOut, job_id: job.jobId, status: finished?.status ?? "running", ...(finished ? { summary: finished.summary } : {}) }), 202);
   });
 }

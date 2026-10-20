@@ -230,10 +230,17 @@ export default function SitesPage() {
     if (hasMoneyField && form.monthly_fee !== "") body.monthly_fee = Number(form.monthly_fee);
     if (editingId) body.default_settlement_broker_id = form.default_settlement_broker_id || null;
 
-    await saveForm(
-      () => (editingId ? apiPatch(`/api/sites/${editingId}`, body) : apiPost("/api/sites", { ...body, canonical_name: form.canonical_name })),
+    // SITE-SCHEME-1.1：改工號體系 → 後端背景重推導更次歸屬（未鎖月自動推導嘅重推；已鎖月唔郁），回應帶 reinfer.note
+    let reinferNote: string | null = null;
+    const saved = await saveForm(
+      async () => {
+        const r = editingId ? await apiPatch<{ reinfer?: { note: string } }>(`/api/sites/${editingId}`, body) : await apiPost("/api/sites", { ...body, canonical_name: form.canonical_name });
+        if (r.ok) reinferNote = (r.data as { reinfer?: { note: string } } | null)?.reinfer?.note ?? null;
+        return r;
+      },
       load,
     );
+    if (saved && reinferNote) setNotice(`已更新。${reinferNote}`);
   }
 
   async function onVoid(id: string, reason: string) {
