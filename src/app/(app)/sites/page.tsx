@@ -514,6 +514,7 @@ export default function SitesPage() {
               <option value="MP">MP（在勤盤）</option>
             </select>
           </label>
+          <a href="/settings/staff-schemes" className="text-zk-sm text-zk-primary underline" data-testid="site-staff-schemes-link">工號體系設定（出糧方／出糧方式）›</a>
           <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>
       </Drawer>

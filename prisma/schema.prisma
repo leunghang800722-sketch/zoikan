@@ -732,6 +732,23 @@ enum GuardStaffNumberStatus {
   former
 }
 
+// EMP-P2（老闆 2026-10-20 拍板）：工號體系設定表——U／MP／MG／MW 邊個出糧、點出、係咪前線／長工。
+// 出糧方按體系（MP 行＝在勤（Maxwell）出糧、U 行＝Wilson 出糧、MG 行＝在勤長工糧），放設定表唔寫死；
+// code 固定四個（設定頁淨係可改 label／payer／pay_method，唔可以加減 code）。payer_code 用代號唔用真名。
+// pay_method：cash／autopay／salary／null（null＝跟雞頭）。
+model StaffScheme {
+  code          String  @id
+  labelZh       String  @map("label_zh")
+  payerCode     String? @map("payer_code")
+  payerLabelZh  String? @map("payer_label_zh")
+  payMethod     String? @map("pay_method")
+  isFrontline   Boolean @default(true) @map("is_frontline")
+  isLongterm    Boolean @default(false) @map("is_longterm")
+  sort          Int     @default(0)
+
+  @@map("staff_schemes")
+}
+
 // EMP-P1：已鎖月更次嘅工號卡歸屬側表（回填專用）。shift_records 鎖月後一欄都唔寫，
 // 所以歸屬另存呢度；一個更次最多一行。純歸屬資訊，唔含任何金額。
 model ShiftRecordStaffAttribution {
