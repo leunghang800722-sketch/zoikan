@@ -31,6 +31,7 @@ const TOOL_NAMES = [
   "rate_cards",
   "explain_rate_card",
   "guard_lookup",
+  "longterm_leavers",
   "shift_history",
   "gross_margin",
   "monthly_close",

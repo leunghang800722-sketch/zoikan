@@ -7,6 +7,7 @@ import { hkMonthStart } from "@/lib/dates";
 import { isMonthLocked } from "@/lib/month-lock";
 import { isHistoricalMonth } from "@/lib/month-close/historical";
 import { buildMonthHealth } from "@/lib/ops/month-health";
+import { flipLeftGuards } from "@/lib/guards/flip-left";
 import { createNotification } from "@/lib/notify/create";
 import { getJobReaderSession } from "./session";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
@@ -22,6 +23,8 @@ async function previousState(): Promise<Record<string, MonthState>> {
 }
 
 export async function runNightlyMonthHealth(now: Date): Promise<JobResult> {
+  // AI-PII-2.1：到期轉離職（全部工號卡 former、離職日 ≤ 今日 → guards.status inactive，寫 audit）
+  const flip = await flipLeftGuards(now, NIGHTLY_MONTH_HEALTH_KEY);
   const session = await getJobReaderSession();
   const cur = hkMonthStart(now);
   const prev = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() - 1, 1));
@@ -67,7 +70,7 @@ export async function runNightlyMonthHealth(now: Date): Promise<JobResult> {
       if (r.created) readyNotified++;
     }
   }
-  return { summary: { months: out, new_red: newRedTotal, ready_notified: readyNotified } };
+  return { summary: { months: out, new_red: newRedTotal, ready_notified: readyNotified, flip_left_guards: flip.flipped } };
 }
 
 export const nightlyMonthHealthJob: JobDef = {

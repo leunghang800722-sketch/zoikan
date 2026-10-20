@@ -24,6 +24,7 @@ import {
   normalizeCode,
   parseMonthStr,
   prevMonthStr,
+  selectableGuards,
   workDateStr,
 } from "./roster-utils";
 
@@ -225,7 +226,7 @@ export function useRosterActions({
   }, [monthLocked, month, siteId, allRows, cells, days, shiftTypesById, guardsById, setCells, setErrorBanner, setExtraRows, setInfoBanner]);
 
   // ---- 加保安員：純前端加一行空行，未填格儲存之前唔會出現喺下次 reload ----
-  const guardOptions = useMemo(() => [...guardsById.values()].sort((a, b) => a.name_zh.localeCompare(b.name_zh)), [guardsById]);
+  const guardOptions = useMemo(() => selectableGuards(guardsById.values()), [guardsById]);
   // B1-5（WP-ATTRIB）：結算單位選項——任務書寫「該盤 broker_site_
   // assignments 嘅雞頭＋公司兵＋長工單位」，呢度用返本身已經攞晒嘅
   // `brokersById`（`/api/brokers` 全公司範圍，冇再打 broker-site-

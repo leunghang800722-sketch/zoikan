@@ -20,6 +20,7 @@
 import type { Module } from "../rbac/matrix";
 import { parse, type Statement } from "pgsql-ast-parser";
 import { CLIENT_RATE_FIELDS, SETTLEMENT_FIELDS, GUARD_PII_FIELDS, GUARD_BANK_FIELDS } from "../api/field-groups";
+import { AI_GUARD_BLOCKED_FIELDS } from "./guard-blocked-fields";
 
 const BLOCKED_KEYWORDS = [
   "INSERT",
@@ -45,7 +46,7 @@ const BLOCKED_KEYWORDS = [
 
 export const SQL_MAX_LIMIT = 200;
 
-type MaskGroup = "clientRate" | "settlement" | "guardPii" | "guardBank";
+type MaskGroup = "clientRate" | "settlement" | "guardPii" | "guardBank" | "aiBlocked";
 
 export interface MaskedHit {
   group: MaskGroup;
@@ -165,6 +166,11 @@ const TABLE_MODULE_MAP: Record<string, Module> = {
   brokers: "雞頭",
   broker_site_assignments: "雞頭",
   guards: "安員",
+  // AI-PII-2：工號卡／長工合約／長工糧 view（長工糧 view 要「長工糧:view」＝老闆／會計）
+  guard_staff_numbers: "安員",
+  guard_longterm_contracts: "長工糧",
+  longterm_payroll_runs: "長工糧",
+  longterm_payroll_lines: "長工糧",
   shift_records: "更表",
   daily_requirements: "更表",
   quotas: "更表",
@@ -176,7 +182,7 @@ const TABLE_MODULE_MAP: Record<string, Module> = {
   users: "用戶管理",
 };
 
-const ALL_GROUPS: readonly MaskGroup[] = ["clientRate", "settlement", "guardPii", "guardBank"];
+const ALL_GROUPS: readonly MaskGroup[] = ["clientRate", "settlement", "guardPii", "guardBank"]; // audit_log JSON 欄用；aiBlocked 只對 guards 表（見 maskedColumnsOf）
 
 /** audit_log 嘅 before／after 係任意 resource 嘅 DTO JSON（可以含上面四組任何欄）——
  * 冇辦法按欄位名逐個分，所以引用呢兩欄（或 `*`）當掂到全部四組。 */
@@ -192,6 +198,8 @@ function maskedColumnsOf(table: string): Array<{ group: MaskGroup; columns: Read
   };
   add("clientRate", CLIENT_RATE_FIELDS);
   add("settlement", SETTLEMENT_FIELDS);
+  // AI-PII-2／2.1：guards 另加 AI 專用遮罩（永遠拒，唔受權限影響）；原有 guardPii／guardBank 組照舊（冇「保安員個人資料:view」睇唔到緊急聯絡人姓名／別名／黑名單查核日期）
+  if (table === "guards") out.push({ group: "aiBlocked", columns: new Set(AI_GUARD_BLOCKED_FIELDS) });
   add("guardPii", GUARD_PII_FIELDS);
   add("guardBank", GUARD_BANK_FIELDS);
   return out;
@@ -505,6 +513,7 @@ export function deniedMaskedHits(
     settlement: vis.settlementVisible,
     guardPii: vis.guardPiiVisible,
     guardBank: vis.guardBankVisible,
+    aiBlocked: false, // AI-PII-2：AI 專用遮罩欄永遠不可見
   };
   return analysis.maskedHits.filter((h) => !visible[h.group]);
 }

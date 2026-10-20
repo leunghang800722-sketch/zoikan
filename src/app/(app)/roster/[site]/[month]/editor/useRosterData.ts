@@ -128,7 +128,7 @@ export function useRosterData({ siteId, month, onLoadedRef }: { siteId: string; 
             apiGet<SiteDto>(`/api/sites/${siteId}`),
             apiGetAll<ShiftTypeDto>("/api/shift-types", { site_id: siteId }),
             fetchRecords(),
-            cachedRows<GuardDto>("/api/guards?fields=lite"),
+            cachedRows<GuardDto>("/api/guards?fields=lite&include_inactive=1"), // AI-PII-2.2：顯示人名用，離職（inactive）者當月較早更次都要有名；揀人選單另外只出 active（useRosterActions.guardOptions）
             apiGetAll<DailyRequirementDto>("/api/daily-requirements", { site_id: siteId, work_date_from: workDateFrom, work_date_to: workDateTo }),
             apiGetAll<QuotaDto>("/api/quotas", { site_id: siteId, month }),
             cachedLookup(`monthclose:${month}`, () => apiGetAll<MonthCloseDto>("/api/month-closes", { month })),

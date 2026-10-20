@@ -129,6 +129,11 @@ function pickStaffCard(cards: StaffCardDto[], preferredId?: string | null): Staf
   return cards.find((c) => c.status === "current") ?? [...cards].reverse().find((c) => c.status === "former") ?? null;
 }
 
+/** AI-PII-2.2：揀人選單（新增更次）只出在職；顯示人名用嘅 guardsById 包括離職者（inactive），令離職生效前嘅較早更次仍有名。 */
+export function selectableGuards(guards: Iterable<GuardDto>): GuardDto[] {
+  return [...guards].filter((g) => g.status !== "inactive").sort((a, b) => a.name_zh.localeCompare(b.name_zh));
+}
+
 export function buildRowsAndCells(
   records: ShiftRecordDto[],
   shiftTypesById: Map<string, ShiftTypeDto>,

@@ -634,7 +634,7 @@ async function buildGrossMarginUncached(month: Date, opts?: { thresholdPct?: num
       billingModel: site.billingModel,
       isMonthlyFee,
       inP0MonthlyClose: base !== undefined,
-      shiftTypes: shiftTypesOut.sort((a, b) => a.code.localeCompare(b.code)),
+      shiftTypes: shiftTypesOut.sort((a, b) => a.code.localeCompare(b.code) || (a.shiftTypeId ?? "").localeCompare(b.shiftTypeId ?? "") || a.kind.localeCompare(b.kind)), // tie-breaker：code → id → kind，避免同 code 時次序隨 DB／Map 漂移（snapshot 穩定）
       components,
       referralFee,
       longtermSalaryAllocated,

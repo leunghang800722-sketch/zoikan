@@ -672,3 +672,28 @@ session` 就 `429`；續用現有 draft（唔開新嘅）唔受呢個上限影�
 - 寫入點：`handleApiError()`（`src/lib/api/http.ts`，非 `ApiError` 嘅未預期錯誤，status 500）＋ `/api/ai/chat` stream catch。`void writeAppErrorLog(...)` fire-and-forget、內部 try/catch、永遠唔改 response；寫入時順手 prune 30 日前（Prisma `deleteMany`，同一 process 最多每 10 分鐘一次）。
 - `route` 優先取 Next route pattern（`/api/sites/[id]`，連 id 都唔入）；`handleApiError` 冇 session，`actor_user_id` 留 null（`/api/ai/chat` 有 session 就填）。`method` 喺 `handleApiError` 攞唔到（唔改 route 簽名）→ null。
 - 遮罩（`maskErrorMessage()`）：email→`[email]`、`sk-` 開頭 token→`[redacted]`、連續 ≥6 位數字→`[num]`、≤300 字，輸入已經係 `safeErrorSummary()`。
+
+## AI-PII-2：保安員資料 AI 規則定版＋新 view（2026-10-20）
+
+老闆定版：**AI 可講** 姓名／工號／人卡 id／月薪／入職日／離職日／僱傭類型／牌照（及平安卡）到期／緊急聯絡人姓名／別名／黑名單查核日期；**唔可講** 身份證／出生日期／住址／銀行任何欄／所有電話（含緊急聯絡人電話）／黑名單查核結果。
+
+- **migration `20261030000000_ai_pii2_views`**（純 `CREATE OR REPLACE VIEW`，冇改資料）：`ai.guards` 沿用原定義逐字再加 `hire_date, leave_date, probation_months, emergency_contact_name, name_aliases, blacklist_check_date, sia_permit_no, sia_permit_type, sia_permit_a_expiry, sia_permit_b_expiry, safety_card_no, safety_card_expiry, qas_issue_date, qas_expiry_date`（**絕不**加 hkid／date_of_birth／address／tel／emergency_contact_tel／bank_*／blacklist_check_result）。新 view：`ai.guard_staff_numbers`（工號卡）、`ai.guard_longterm_contracts`（合約段，含月薪）、`ai.longterm_payroll_runs`、`ai.longterm_payroll_lines`（只列未作廢 run 嘅行；`is_leaver` 由 `al_daily_rate_basis` 不為 null 推）。`zoikan_ai_ro` 有 SELECT。`ai.audit_log` scrub 清單（已含 `emergency_contact_tel`）不變；長工糧其餘三表（假期結餘／平均工資／人手輸入）仍然冇 ai view。
+- **AI 專用遮罩清單** `AI_GUARD_BLOCKED_FIELDS`（`src/lib/ai/guard-blocked-fields.ts`）：hkid／date_of_birth／address／tel／emergency_contact_tel／bank_name／bank_account_no／bank_payee_name／bank_code／blacklist_check_result。只管 AI 路徑——`guard_lookup` 回傳 row、`sql_select`（引用 `ai.guards` 呢啲欄或 `SELECT *`／整行引用 → 整條拒絕，唔受權限影響）、`scrubUnknownShape`（任何深度永遠剝）。人類 RBAC 嘅 `GUARD_PII_FIELDS`／`GUARD_BANK_FIELDS` **不變**。
+- **工具**：`guard_lookup` 回傳入／離職日、`staff_number_cards`（體系／號碼／狀態／有效期／結束原因／換號鏈）、`longterm_contracts`（有「長工糧:view」先有）；可用工號卡號碼或別名搵人。新工具 `longterm_leavers(month)`：該月人卡離職日喺月內嘅保安員（姓名、工號卡、離職日；要「保安員:view」）＋該月長工糧離職結算行（`payroll_leavers`，年假補償 `al_payment`；冇「長工糧:view」→ `null`＋說明）。`sql_select` 白名單加四個新 view（綁 module：保安員／長工糧）。`describe_system`、system prompt（鐵律 7）已更新。
+- **日期口徑**：`src/lib/ai/db.ts` pg pool 將 DATE（oid 1082）回 `"YYYY-MM-DD"` 字串；預設會變成本機時區午夜嘅 Date，JSON 化後偏差一日（離職日 9/1 變 8/31T16:00Z），助手答「9/1 邊個離職」會錯。
+- **人卡狀態**：全部工號卡 former（冇任何 current）而人卡離職日有值 → `guards.status` 自動轉 `inactive`（離職／停用，列表預設隱藏），寫 audit（`auto_source=staff_number_mirror`）＋ hint `status_inactive_mirrored`；有 current 卡就唔郁，亦**唔會**由離職自動轉返在職（復職要人手恢復）。即係：**人卡離職＝全部工號卡結束**。注意 `longterm-payroll/drafts.ts` 勤工獎資格清單只列 status=active，離職者之後唔入清單。
+- **Maxwell 導入**直接補人卡 nameEn／入職／離職日而家寫 audit（`auto_source=maxwell_import`）。
+- 測試：`tests/ai-pii2.test.ts`、`tests/wp-pii-ai-guards-view-structural.test.ts`（任何 ai.* view 冇被鎖欄）、`tests/longterm-payroll-ai-isolation.test.ts`；e2e `tests/e2e/ai-pii2-leavers.spec.ts`（本機跑要 `AI_DB_PASSWORD`＋`AI_DATABASE_URL`；fake LLM 問「邊個 N 月離職」會真 call `longterm_leavers`）。
+
+### AI-PII-2.1 修正（Opus 驗收後）
+
+- **PII 權限 gate 恢復（M2）**：老闆 2026-10-20 規則＝AI **可講**緊急聯絡人姓名／別名／黑名單查核日期，但**仍跟畫面權限**——冇「保安員個人資料:view」嘅角色（出廠主管）經 `guard_lookup`／`sql_select`／scrub 一樣睇唔到呢三欄（`guard_lookup` 亦唔會用別名搜尋）；有權限嘅角色（老闆）先見到。`AI_GUARD_BLOCKED_FIELDS` 永久遮罩（身份證／出生日期／住址／電話／緊急聯絡人電話／銀行／黑名單查核結果）照舊，唔受權限影響。`GUARD_PII_FIELDS` 人類 RBAC 清單不變。
+- **狀態轉「離職」只喺離職日 ≤ 今日（HK）（M1）**：工號卡鏡像只喺「全部卡 former 且離職日 ≤ 今日」先將 `guards.status` 轉 `inactive`；未來離職日（例如卡 `valid_to` 係下月）等到期——`nightly_month_health` 加咗一步 `flip_left_guards`（`src/lib/guards/flip-left.ts` `flipLeftGuards`，summary 帶 `flip_left_guards` 數量），到期先轉並寫 audit（`auto_source=flip_left_guards`、`by_job`）。單向，有 current 卡唔郁。
+- `guard_lookup` 長工合約 `monthly_salary`／`daily_rate` 疊「出街價」遮罩（冇權就剝，同 `guards.monthly_salary` 一致）。
+- migration 註釋補充：`sia_permit_no`／`safety_card_no` 屬牌照類，亦加入 `ai.guards`。
+
+### AI-PII-2.2
+
+- 離職生效轉 `inactive` 之後，更表編輯器（`/api/guards?fields=lite` 預設只出 active）對佢當月較早更次會顯示空名。修正：編輯器、價目卡頁等「顯示人名」嘅 lookup 改用 `include_inactive=1`；**揀人選單**（新增更次 `selectableGuards`、價目卡保安員下拉）照舊只出在職。勤工獎資格清單、雞頭 dashboard 用 active 篩選維持——離職生效（status inactive）後唔計（離職月份當月較早嘅出勤獎勵要人手處理）。
+- `gross-margin.ts` `sites[].shiftTypes` 排序加 tie-breaker（code→shiftTypeId→kind），snapshot 次序穩定。
+- HIST 合併模式：該 guard 已有較後年份結餘行（aggregate 以最新年份為準）→ 拒絕合併（flag `merge_rejected_different_year`）。

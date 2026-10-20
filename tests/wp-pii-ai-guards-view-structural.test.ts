@@ -26,6 +26,10 @@ const WP_PII_NEW_GUARD_COLUMNS = [
   "blacklist_check_result",
   "blacklist_check_date",
 ];
+// AI-PII-2（老闆 2026-10-20 定版）：以下 16 欄之中，呢批 AI 可講，ai.guards 而家有（migration 20261030000000_ai_pii2_views）；
+// 其餘（身份證／出生日期／住址／電話／緊急聯絡人電話／銀行／黑名單查核結果）永遠唔准出現喺任何 ai.* view。
+const AI_PII2_ALLOWED_GUARD_COLUMNS = ["emergency_contact_name", "sia_permit_no", "sia_permit_type", "safety_card_no", "safety_card_expiry", "hire_date", "leave_date", "blacklist_check_date"];
+const AI_BLOCKED_COLUMNS = ["hkid", "date_of_birth", "address", "tel", "emergency_contact_tel", "bank_name", "bank_account_no", "bank_payee_name", "bank_code", "blacklist_check_result"];
 // WP-BOSS5 §25.4：新增嘅 bank_code（HKICL 銀行編號）同上面呢批一樣屬於
 // 「保安員銀行資料」PII，一樣要驗證 ai.guards 睇唔到——獨立一個 array（唔
 // 塞入上面果個「16 個新欄」常數，避免改埋成班歷史測試名/註解嘅 magic
@@ -38,8 +42,20 @@ describe("WP-PII：ai.guards view 結構性測試——16 個新欄全部唔存�
       `SELECT column_name FROM information_schema.columns WHERE table_schema = 'ai' AND table_name = 'guards'`,
     );
     const columns = new Set(rows.map((r) => r.column_name));
-    const leaked = WP_PII_NEW_GUARD_COLUMNS.filter((c) => columns.has(c));
+    const leaked = WP_PII_NEW_GUARD_COLUMNS.filter((c) => columns.has(c) && !AI_PII2_ALLOWED_GUARD_COLUMNS.includes(c));
     expect(leaked).toEqual([]);
+    // AI-PII-2：老闆規則允許嘅欄 ai.guards 要有
+    expect(AI_PII2_ALLOWED_GUARD_COLUMNS.filter((c) => !columns.has(c))).toEqual([]);
+  });
+
+  it("AI-PII-2：任何 ai.* view 都冇身份證／出生日期／住址／電話／緊急聯絡人電話／銀行（bank_*）／黑名單查核結果欄", async () => {
+    const rows = await prisma.$queryRawUnsafe<Array<{ table_name: string; column_name: string }>>(
+      `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'ai'`,
+    );
+    const bad = rows.filter((r) => AI_BLOCKED_COLUMNS.includes(r.column_name) || /^bank_/.test(r.column_name) || /(^|_)tel$/.test(r.column_name));
+    expect(bad).toEqual([]);
+    const tables = new Set(rows.map((r) => r.table_name));
+    for (const v of ["guards", "guard_staff_numbers", "guard_longterm_contracts", "longterm_payroll_lines", "longterm_payroll_runs"]) expect(tables.has(v), v).toBe(true);
   });
 
   it("WP-BOSS5 §25.4：ai.guards 唔包含 bank_code", async () => {

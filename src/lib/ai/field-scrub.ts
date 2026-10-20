@@ -17,6 +17,8 @@ import type { AuthedSession } from "../rbac/requirePermission";
 import { hasPermission } from "../rbac/requirePermission";
 import { CLIENT_RATE_FIELDS, SETTLEMENT_FIELDS, GUARD_PII_FIELDS, GUARD_BANK_FIELDS, type FieldGroupResource } from "../api/field-groups";
 
+import { AI_GUARD_BLOCKED_FIELDS } from "./guard-blocked-fields";
+
 export type { FieldGroupResource };
 
 /** 攞返「呢個 session 而家睇唔睇得到收客價／出街價／保安員個人資料／保安員
@@ -67,6 +69,9 @@ export function scrubRowForResource<T extends Record<string, unknown>>(
   // 16 個新欄（見 prisma/migrations/…wp_ai1_readonly_schema 頂註解），
   // 呢度純粹保持同 applyFieldGroupGate() 一致嘅四層 gate，日後有第二個
   // 工具查到帶呢啲欄嘅 resource 都唔會漏。
+  // AI-PII-2／2.1：AI 專用遮罩清單永遠剝（唔受權限影響）。老闆 2026-10-20 規則＝AI 可講緊急聯絡人姓名／別名／黑名單查核日期等，
+  // 但**仍跟畫面權限**：冇「保安員個人資料:view」嘅角色經 AI 一樣睇唔到（下面 GUARD_PII 組照舊剝）。
+  if (resource === "guards") out = omit(out, AI_GUARD_BLOCKED_FIELDS);
   if (!vis.guardPiiVisible) out = omit(out, GUARD_PII_FIELDS[resource]);
   if (!vis.guardBankVisible) out = omit(out, GUARD_BANK_FIELDS[resource]);
   return out;
@@ -121,6 +126,8 @@ function namesWithCamelVariant(names: Iterable<string>): Set<string> {
 }
 
 const ALL_GUARD_PII_FIELD_NAMES = namesWithCamelVariant(Object.values(GUARD_PII_FIELDS).flat());
+// AI 專用遮罩欄（永遠剝，唔理權限）
+const AI_ALWAYS_BLOCKED_NAMES = namesWithCamelVariant(AI_GUARD_BLOCKED_FIELDS);
 const ALL_GUARD_BANK_FIELD_NAMES = namesWithCamelVariant(Object.values(GUARD_BANK_FIELDS).flat());
 
 /** 遞歸剝走物件樹（唔理幾深、唔理 array/object）入面嘅指定欄位名。 */
@@ -143,7 +150,7 @@ function dropKeysDeep<T>(value: T, blocked: ReadonlySet<string>): T {
 }
 
 export function scrubUnknownShape<T>(value: T, vis: AiFieldVisibility): T {
-  let out = value;
+  let out = dropKeysDeep(value, AI_ALWAYS_BLOCKED_NAMES); // AI-PII-2：身份證／出生日期／住址／電話／銀行永遠剝
   if (!vis.clientRateVisible) out = dropKeysDeep(out, ALL_CLIENT_RATE_FIELD_NAMES);
   if (!vis.settlementVisible) out = dropKeysDeep(out, ALL_SETTLEMENT_FIELD_NAMES);
   if (!vis.guardPiiVisible) out = dropKeysDeep(out, ALL_GUARD_PII_FIELD_NAMES);

@@ -1,5 +1,5 @@
 // 長工糧逐人結算篩選 chips：全部／離職者／零返工日／有警告（含 run 層警告）；離職 badge、0 日 badge、表頭人數跟篩選。
-// 用冇其他資料嘅遠期月份 2027-03（未鎖，唔會撞 8 月已鎖 409），自己起 4 個合成長工，afterAll 清走（含假期結餘，免影響其他 spec 嘅重算保護）。
+// 用遠期月份 2027-03（未鎖，唔會撞 8 月已鎖 409），自己起 4 個合成長工；斷言只針對自己建嘅人（名稱 filter），唔寫死總人數，afterAll 清走（含假期結餘，免影響其他 spec 嘅重算保護）。
 import { test, expect } from "@playwright/test";
 import { loginAs } from "./helpers";
 import { prisma } from "./db-helpers";
@@ -54,9 +54,9 @@ test("老闆：逐人結算篩選 chips（離職／零日／run 層警告）、�
   await expect(page.getByTestId("ltpay-line-filter")).toBeVisible({ timeout: 20_000 });
   const rows = page.locator('[data-testid="ltpay-lines-title"]').locator("xpath=ancestor::section[1]").locator("tbody tr");
 
-  // 呢個月淨係得我哋 4 個人
-  await expect(page.getByTestId("ltpay-filter-all")).toContainText("全部 4");
-  await expect(page.getByTestId("ltpay-lines-title")).toContainText("逐人結算（4 人）");
+  // 只針對自己建嘅 4 人斷言（DB 內可能仲有其他長工，唔斷言「全部 N」／總人數）
+  for (const k of ["在職", "離職", "零日", "警告"]) await expect(rows.filter({ hasText: N(k) })).toHaveCount(1);
+  await expect(page.getByTestId("ltpay-lines-title")).toContainText(/逐人結算（\d+ 人）/);
 
   await page.getByTestId("ltpay-filter-leaver").click();
   await expect(page.getByTestId("ltpay-lines-title")).toContainText(/逐人結算（\d+ 人）/);
@@ -75,5 +75,5 @@ test("老闆：逐人結算篩選 chips（離職／零日／run 層警告）、�
   await expect(page.getByTestId("ltpay-filter-warn")).toContainText(/有警告 [1-9]/);
 
   await page.getByTestId("ltpay-filter-all").click();
-  await expect(page.getByTestId("ltpay-lines-title")).toContainText("逐人結算（4 人）");
+  for (const k of ["在職", "離職", "零日", "警告"]) await expect(rows.filter({ hasText: N(k) })).toHaveCount(1);
 });

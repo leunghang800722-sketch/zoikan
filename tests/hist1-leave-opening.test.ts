@@ -182,4 +182,15 @@ describe("HIST-1 leave-opening 腳本（DB）", () => {
     // 唔用 merge 旗嘅 as-of 08 照常（dry-run 只出 skip）
     expect((await leaveOpeningFromRosters({ asOf: D(2026, 8, 1), apply: false })).rows[0]!.action).toBe("skip_existing_newer_or_equal");
   });
+
+  it("AI-PII-2.2 S3：該 guard 已有較後年份（2027）結餘行 → 合併模式拒絕（merge_rejected_different_year），唔郁任何行", async () => {
+    const g = await mkLt("測試甲", D(2025, 1, 1), "MG99924");
+    await leave(g.id, D(2026, 5, 10), "AL");
+    await prisma.guardLeaveBalance.create({ data: { guardId: g.id, year: 2026, alTaken: 1, asOfMonth: D(2026, 9, 1) } });
+    await prisma.guardLeaveBalance.create({ data: { guardId: g.id, year: 2027, alTaken: 4, asOfMonth: D(2027, 2, 1) } });
+    const r = await leaveOpeningFromRosters({ asOf: JUN, apply: true, mergeIntoExisting: true });
+    expect(r.rows[0]).toMatchObject({ action: "skip_existing_newer_or_equal", flags: ["merge_rejected_different_year"] });
+    expect(Number((await prisma.guardLeaveBalance.findUniqueOrThrow({ where: { guardId_year: { guardId: g.id, year: 2026 } } })).alTaken)).toBe(1);
+    expect(await prisma.auditLog.count({ where: { action: "backfill_leave_opening_merge", rowId: g.id } })).toBe(0);
+  });
 });

@@ -164,7 +164,7 @@ describe("WP-AI-DIAG 診斷工具", () => {
     for (const n of NEW_TOOLS) expect(names).toContain(n);
     const READ_ONLY = new Set([
       "describe_system", "list_sites", "site_overview", "roster", "broker_stats", "rate_cards", "explain_rate_card", "guard_lookup", "shift_history",
-      "gross_margin", "monthly_close", "shortfall", "recent_audit", "sql_select", "list_feedback", ...NEW_TOOLS,
+      "gross_margin", "monthly_close", "shortfall", "recent_audit", "sql_select", "list_feedback", "longterm_leavers", ...NEW_TOOLS,
     ]);
     for (const n of names) expect(READ_ONLY.has(n), `未知工具 ${n}`).toBe(true);
     expect(names.some((n) => /^(create|update|delete|set|write|insert|apply|void|run_|execute)/.test(n))).toBe(false);
