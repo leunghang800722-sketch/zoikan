@@ -63,8 +63,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         createdBy: session.userId,
         revealConflictGuardId: isInternalRole(session),
       });
-      await syncLegacyStaffNoColumns(tx, id, { revealConflictGuardId: isInternalRole(session) });
-      return upserted;
+      const sync = await syncLegacyStaffNoColumns(tx, id, { revealConflictGuardId: isInternalRole(session), actorUserId: session.userId });
+      return Object.assign(upserted, { employmentWarnings: sync.employmentWarnings });
     });
 
     await writeStaffNumberAudits(session.userId, [result], getClientIp(req));
@@ -76,6 +76,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       brandSafeResponse({
         ...toGuardStaffNumberDTO(result.created),
         convertedFormer: result.convertedFormer ? toGuardStaffNumberDTO(result.convertedFormer.after) : null,
+        // EMP-P3.1：人卡入職／離職日鏡像嘅提示（例如「請用結束卡流程」），無個人資料
+        ...(result.employmentWarnings.length ? { employmentWarnings: result.employmentWarnings } : {}),
       }),
       201,
     );

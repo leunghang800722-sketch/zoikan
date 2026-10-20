@@ -43,7 +43,9 @@
 import type { Prisma, GuardStaffNumber } from "@prisma/client";
 import { ApiError, BadRequest, Conflict, Forbidden } from "../api/errors";
 import { todayLocalStr } from "../ui/format";
-import { writeAudit } from "../audit";
+import { writeAudit, writeAuditTx } from "../audit";
+import { loadStaffSchemes } from "./staff-schemes";
+import { buildLongtermChains, type PeriodCard } from "@/lib/longterm-payroll/employment-period";
 
 type Tx = Prisma.TransactionClient;
 
@@ -325,7 +327,88 @@ export function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], schem
 // 唔相關 500）。呢個函數本身冇開自己個 transaction（call site 已經喺
 // `tx` 入面），拋錯會令外層 `prisma.$transaction()` 自然 rollback，唔使
 // 呢度額外處理。
-export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean }): Promise<void> {
+export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean; actorUserId?: string | null }): Promise<{ employmentWarnings: string[] }> {
+  await syncLegacyStaffNoColumnsInner(tx, guardId, opts);
+  // EMP-P3：工號卡寫入路徑（POST／PATCH／換號／guard-fix／導入／Maxwell／undo 全部都 call 呢個函數）順便鏡像人卡入職／離職日
+  const m = await syncLegacyGuardEmploymentColumns(tx, guardId, { actorUserId: opts?.actorUserId ?? null });
+  return { employmentWarnings: m.warnings };
+}
+
+export interface EmploymentMirrorPlan {
+  /** undefined＝唔郁 */
+  hire?: Date;
+  leave?: Date | null;
+  /** 提示／警告（代碼＋說明，無個人資料）：stale_leave_date_cleared／leave_date_vs_current_card */
+  warnings: string[];
+}
+
+/**
+ * EMP-P3／P3.1：人卡 hire_date／leave_date 鏡像嘅純計算（`syncLegacyGuardEmploymentColumns` 同對拍腳本共用）。只睇長工體系卡 `cards`（caller 先篩）。
+ *   - `hire_date`：只由「鏈頭」（沿 predecessor 最早嗰張）valid_from 決定——取各鏈鏈頭最早；任何鏈頭冇 valid_from → 唔郁（換號新卡永遠唔參與）；
+ *   - `leave_date`：有 current 卡 → 只有人卡 leave_date 早過該 current 卡所屬鏈嘅鏈頭 valid_from（舊段殘留）先清 null＋warning；
+ *     遲過或等於（真係離職）→ 唔郁，出 hint「請用結束卡流程」；鏈頭冇日期 → 唔郁。全部 former → 最遲 valid_to（冇 valid_to 就唔郁）。
+ *   - 長工體系卡全部冇日期 → 完全唔郁。
+ */
+export function planEmploymentMirror(guard: { hireDate: Date | null; leaveDate: Date | null }, cards: readonly PeriodCard[]): EmploymentMirrorPlan {
+  const plan: EmploymentMirrorPlan = { warnings: [] };
+  if (cards.length === 0 || !cards.some((c) => c.validFrom || c.validTo)) return plan;
+  const chains = buildLongtermChains(cards);
+  const heads = chains.map((c) => c[0]!);
+  if (heads.length > 0 && heads.every((h) => h.validFrom)) {
+    const hire = new Date(Math.min(...heads.map((h) => h.validFrom!.getTime())));
+    if (!guard.hireDate || guard.hireDate.getTime() !== hire.getTime()) plan.hire = hire;
+  }
+  const current = cards.find((c) => c.status === "current");
+  if (current) {
+    const chain = chains.find((c) => c.some((x) => x.id === current.id))!;
+    const segStart = chain[0]!.validFrom;
+    if (segStart && guard.leaveDate) {
+      if (guard.leaveDate.getTime() < segStart.getTime()) {
+        plan.leave = null;
+        plan.warnings.push("stale_leave_date_cleared：人卡離職日早過現行 MG 卡鏈起點（舊段殘留），已清走");
+      } else {
+        plan.warnings.push("leave_date_vs_current_card：人卡有離職日而 MG 卡仍然 current——請用結束卡流程（填離職日＋原因），人卡離職日暫時保留");
+      }
+    }
+  } else {
+    const tos = cards.map((c) => c.validTo).filter((d): d is Date => !!d);
+    if (tos.length) {
+      const leave = new Date(Math.max(...tos.map((d) => d.getTime())));
+      if (!guard.leaveDate || guard.leaveDate.getTime() !== leave.getTime()) plan.leave = leave;
+      // EMP-P3.2 S5：全部 former 而人卡離職日遲過最遲 valid_to → 被卡日期蓋走，出 hint（人手填嘅較遲離職日要改返卡嘅 valid_to）
+      if (guard.leaveDate && guard.leaveDate.getTime() > leave.getTime()) plan.warnings.push("leave_date_overwritten_by_card：人卡離職日遲過所有 MG 卡嘅結束日，已被卡嘅最遲結束日蓋走；要保留較遲離職日請改返該卡嘅結束日（valid_to）");
+    }
+  }
+  return plan;
+}
+
+/**
+ * EMP-P3：人卡 `guards.hire_date`／`leave_date` 變成由工號卡算返嚟嘅鏡像（同 `syncLegacyStaffNoColumns` 一樣喺同一 tx 內）；規則見 `planEmploymentMirror`。
+ * `employment_type` 唔郁。範圍收窄（安全閥）：只睇長工體系（staff_schemes.is_longterm，出廠 MG）卡；人冇長工體系卡就完全唔鏡像（避免繞過長工入職日期閘）。
+ * 結果同原值不同就寫 audit（guards update，同一 tx，actor＝觸發者）。warnings 回傳俾 caller 顯示（API additive）。
+ */
+export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, opts?: { actorUserId?: string | null }): Promise<{ changed: boolean; warnings: string[] }> {
+  const rows = await tx.guardStaffNumber.findMany({ where: { guardId }, select: { id: true, scheme: true, status: true, validFrom: true, validTo: true, endReason: true, predecessorId: true } });
+  const schemes = await loadStaffSchemes(tx);
+  const cards = rows.filter((c) => schemes.get(c.scheme)?.isLongterm) as PeriodCard[];
+  if (cards.length === 0) return { changed: false, warnings: [] };
+  const before = await tx.guard.findUnique({ where: { id: guardId } });
+  if (!before) return { changed: false, warnings: [] };
+  const plan = planEmploymentMirror(before, cards);
+  const data: Prisma.GuardUpdateInput = {};
+  if (plan.hire !== undefined) data.hireDate = plan.hire;
+  if (plan.leave !== undefined) data.leaveDate = plan.leave;
+  if (Object.keys(data).length === 0) return { changed: false, warnings: plan.warnings };
+  const after = await tx.guard.update({ where: { id: guardId }, data });
+  await writeAuditTx(tx, { actorUserId: opts?.actorUserId ?? null, tableName: "guards", rowId: guardId, action: "update", before, after: { ...after, auto_source: "staff_number_mirror" }, ip: null });
+  // EMP-P3.2 S1：鏡像真係改咗人卡日期 → 回 hint（未鎖月份重算會跟新人卡值；已鎖月不變）
+  const hints = [...plan.warnings];
+  if (plan.hire !== undefined) hints.push("hire_date_mirrored：人卡入職日已按 MG 卡鏈頭日期更新（未鎖月份重算會跟新值，已鎖月不變）");
+  if (plan.leave !== undefined) hints.push("leave_date_mirrored：人卡離職日已按 MG 卡日期更新（未鎖月份重算會跟新值，已鎖月不變）");
+  return { changed: true, warnings: hints };
+}
+
+async function syncLegacyStaffNoColumnsInner(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean; actorUserId?: string | null }): Promise<void> {
   const allRows = await tx.guardStaffNumber.findMany({ where: { guardId } });
   const hasUHistory = allRows.some((r) => r.scheme === "U");
   const hasMgOrMwHistory = allRows.some((r) => r.scheme === "MG" || r.scheme === "MW");

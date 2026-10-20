@@ -6,7 +6,7 @@ import { ApiError } from "@/lib/api/errors";
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { fieldValue, type PackagePerson } from "./package";
 import { createGuardEmergencyContact, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
-import { canOverrideDerivedSiaPermit, deriveSiaPermitExpiry } from "@/lib/guards/staff-numbers";
+import { canOverrideDerivedSiaPermit, deriveSiaPermitExpiry, syncLegacyGuardEmploymentColumns } from "@/lib/guards/staff-numbers";
 import {
   BANK_OVERWRITE_DENIED_MSG,
   EMPTY_BANK,
@@ -15,6 +15,7 @@ import {
   LONGTERM_HIRE_VIA_TRIAGE_MSG,
   bypassesHold,
   isGoDecision,
+  isLongtermStaffHireKey,
   digits,
   heldAll,
   type ExtGate,
@@ -267,7 +268,10 @@ export async function applyExtRelations(
       outcomes[key] = "not_confirmed";
       continue;
     }
-    if (!gate.scalars) {
+    // EMP-P3：長工體系卡（MG*）入職日期同 hireDate 一樣要經分診逐條確認，批量 deny
+    const longtermHold = gate.longtermHire && isLongtermStaffHireKey(key);
+    if (caps.batch && longtermHold && isGoDecision(d)) deny(LONGTERM_HIRE_VIA_TRIAGE_MSG);
+    if (!gate.scalars || longtermHold) {
       if (!isGoDecision(d)) {
         outcomes[key] = "held";
         continue;
@@ -287,6 +291,7 @@ export async function applyExtRelations(
       await audit({ tableName: "guard_staff_numbers", rowId: row.id, action: "update", before: row, after }, !gate.scalars && isGoDecision(d));
       hiresWritten += 1;
       outcomes[key] = "written";
+      await syncLegacyGuardEmploymentColumns(tx, guardId); // EMP-P3：卡日期寫入 → 人卡入職／離職日鏡像
     } else outcomes[key] = "conflict";
   }
   return { outcomes, contactsAdded, hiresWritten, overrides };

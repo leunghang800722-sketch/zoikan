@@ -19,6 +19,7 @@
     "db:sync-permissions": "tsx scripts/db/sync-permissions.ts",
     "db:recompute-permit-derived": "tsx scripts/db/recompute-permit-derived.ts",
     "db:backfill-shift-staff-numbers": "tsx scripts/db/backfill-shift-staff-numbers.ts",
+    "db:longterm-card-dates-diff": "tsx scripts/db/longterm-card-dates-diff.ts",
     "report:regen": "tsx scripts/report/index.ts && tsx scripts/report/diff.ts",
     "assignments:rollover": "tsx scripts/assignments/rollover.ts",
     "gate:export": "tsx scripts/report/roster-export-diff.ts --month 2026-07 && tsx scripts/report/roster-export-diff.ts --month 2026-07 --derived && tsx scripts/report/roster-export-newmonth-gate.ts",

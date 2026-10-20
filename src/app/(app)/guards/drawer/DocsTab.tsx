@@ -370,7 +370,7 @@ export function StaffNumbersSection({ g, tabCls, isBroker }: { g: GuardForm; tab
                     {/* WP-MULTI：新增表單「生效日期」改「入職日期（呢個
                         號）」——同 renderStaffNumberRow／編輯表單一致講
                         法（見上面兩處同一段理由）。 */}
-                    <Field label="入職日期（呢個號）（選填）">
+                    <Field label={staffNumberForm.replaces_current && !staffNumberForm.historical ? "換號生效日（選填；唔係入職日）" : "入職日期（呢個號）（選填）"}>
                       <input
                         type="date"
                         className={inputCls}

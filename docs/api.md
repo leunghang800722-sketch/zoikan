@@ -2901,3 +2901,24 @@ WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W
 **月結診斷**（`buildMonthHealth`）新增兩項：`shifts_no_staff_number`（warn；本月未標工號更次數，扣除鎖月側表已有歸屬；明細按盤；fixLink `/sites`）、`site_no_staff_scheme`（info；本月有出更而未設 `sites.staff_scheme` 嘅盤數；fixLink `/sites`）。
 
 **staff_schemes 改動嘅影響範圍**：改出糧方／出糧方式／顯示名會**即時反映喺所有月份**嘅逐人糧單（顯示層，逐人糧單每次讀 `staff_schemes` 即時砌，唔存快照）；唔影響任何金額、聚合或已出糧數字。改動寫 `audit_log`（`table_name=staff_schemes`，無 PII），並已加入 `ai.audit_log` 白名單（migration `20261027000000_emp_p2_1_ai_audit_staff_schemes`）。
+
+## EMP-P3：長工糧改讀 MG 工號卡日期（2026-10 起）
+
+**聘用段定義**（`src/lib/longterm-payroll/employment-period.ts` `resolveLongtermPeriod(guard, cards, month)`，純函數）：聘用段＝MG（長工體系，`staff_schemes.is_longterm`）卡鏈——由該月有效（或最近）嘅 MG 卡沿 `predecessor_id` 串返去；段起點＝鏈最早一張卡 `valid_from`，段終點＝鏈尾卡 `valid_to`（只計 `end_reason=resigned`；replaced／cancelled／舊 null 唔係終點）。讀日期次序：卡有日期就用卡，否則 fallback 人卡 `guards.hire_date`／`leave_date`；兩邊都有而唔一致 → 用卡＋warning `card_guard_date_mismatch`（帶 guardId 同兩個日期）。**再入職**（EMP-P3.1：由卡鏈本身判斷）：存在一條比選中鏈更早、鏈尾 `resigned`、終點早過選中鏈起點嘅 MG 鏈 → 第二段聘用——段起點＝選中鏈鏈頭、人卡舊 leave_date（早過起點）忽略、warning `rehire_detected`（basis=chain）；人卡 leave_date 只做 fallback（冇更早卡鏈但 leave_date 早過鏈起點 → basis=guard_leave，同樣忽略＋警告）。舊制係 `employStart > employEnd` 整行跳過唔出糧，已修正。**鏈頭**＝沿 `predecessor_id` 最早嗰張，換號新卡（有 predecessor）永遠唔係鏈頭，佢嘅 `valid_from` 係「換號生效日」唔參與入職日計算（UI 換號表單日期欄叫「換號生效日」）。其他專用警告：`two_segments_in_month`（同月兩段聘用，舊段未計）、`segment_starts_after_month`（選中鏈起點遲過月尾）。
+
+**生效月常數** `LONGTERM_CARD_DATES_EFFECTIVE_FROM = 2026-10-01`（`employment-period.ts`，老闆拍板；要改只改呢個常數＋本節）：早過佢嘅月份完全讀人卡（7／8／9 月 gate 數字一個唔變），10 月起 `aggregate.ts`（在職日裁剪、離職結算、病假 `slAccrued`、年資、AL 離職服務起點）同 `sl-confirm.ts`（病假草稿結餘）用 helper。`compute.ts` 係純計算（只收參數），冇直接讀人卡日期，唔使改。
+
+**結餘**：`guard_leave_balances` 唯一鍵 (guardId, year) 唔改。再入職新聘用段若結餘行最後寫回月份（`as_of_month`，冇就當年底）早過新段起點 → 病假／年假已放日數以 0 開局並寫 note（唔承接上一段）。
+
+**警告先行**（任何月份，唔改數字）：`aggregate.ts` 偵測「人卡 `leave_date` 早過現行合約鏈起點」→ warning `[rehire_suspected]`（人卡離職日未清）；10 月起 helper 另出 `[card_guard_date_mismatch]`／`[rehire_detected]`。
+
+**人卡鏡像** `syncLegacyGuardEmploymentColumns(tx, guardId, {actorUserId})`（`src/lib/guards/staff-numbers.ts`，純計算 `planEmploymentMirror`；經 `syncLegacyStaffNoColumns` 掛喺所有工號卡寫入路徑，audit actor＝觸發者）：`hire_date` 只由**鏈頭** `valid_from` 決定（各鏈鏈頭最早；任何鏈頭冇日期 → 唔郁；換號新卡唔參與）；`leave_date`：有 current 卡時，只有人卡 leave_date **早過**該 current 卡所屬鏈嘅鏈頭 `valid_from`（舊段殘留）先清 null＋提示 `stale_leave_date_cleared`；遲過或等於（真係離職）→ 唔郁並提示 `leave_date_vs_current_card`（請用結束卡流程）；鏈頭冇日期 → 唔郁；全部 former → 最遲 `valid_to`（冇 valid_to 就唔郁）。`employment_type` 唔郁。範圍收窄：只睇長工體系卡；人冇長工體系卡、或者長工體系卡全部冇日期 → 完全唔鏡像（唔做一次性全庫回填）。結果有變先寫 audit；`POST／PATCH /api/guards/:id/staff-numbers` response additive `employment_warnings`。**人卡 PATCH 保護**：`PATCH /api/guards/:id` 改 `hire_date`／`leave_date`（值有變）而該人有帶日期嘅 current MG 卡 → **409 `use_staff_number_card`**（指去結束卡／開新卡流程）；值冇變、冇 MG 卡、卡冇日期照舊接受。
+
+**Maxwell 導入**（`import-service.ts`）：(a) 冇 MG 卡 → 開 MG 卡（`source=import:maxwell`、`valid_from`＝導入入職日）；(b) 舊 MG 卡全部已結束而導入入職日遲過最後一張 `valid_to` → 開新 MG 卡（新聘用段）；(c) 離職名單：新卡／現有 current 卡同時結束（former／resigned／`valid_to`＝最後一日），令鏡像出嚟嘅人卡離職日跟返名單；**但**最後一日（或導入入職日）早過「將結束嗰張卡 valid_from」「人卡 hire_date」「現行合約鏈起點」任何一個＝屬上一段聘用（再入職者）→ 唔結束張卡，summary 警告 `[leaver_date_before_segment]`（guardId＋日期）。人卡 `hire_date`／`leave_date` 唔再直接寫（冇 MG 號可記日期時照舊補空）。
+
+**EMP-P3.2 補充**：(1) Maxwell 離職名單只用「最後一日早過參考日（將結束嗰張卡 valid_from／人卡 hire_date／現行合約鏈起點）」判斷屬上一段（`[leaver_date_before_segment]`，唔結束卡）；導入入職日同卡／人卡／合約鏈日期有差（續約隔幾日、手 key 差幾日）**唔阻擋**結束卡，最多出非阻擋提示 `[import_hire_date_differs]`。(2) 工號卡 POST／PATCH 回應 `employment_warnings`（additive）新增 hint：`hire_date_mirrored`／`leave_date_mirrored`（鏡像真係改咗人卡日期）、`leave_date_overwritten_by_card`（全部 former 而人卡離職日遲過最遲 valid_to，被卡日期蓋走）；前端會喺 notice 後面顯示說明。**鏡像會改人卡日期，生效前尚未鎖嘅月份重算會跟新人卡值（已鎖月不變）——已知並接受，唔限制。**(3) `PATCH /api/guards/:id` 409 `use_staff_number_card` 訊息講明「請改鏈頭（最早一張）卡嘅入職日；換號卡嘅生效日唔影響入職日」。(4) 對拍腳本加獨立清單 `resigned_without_valid_to`（former＋resigned 但冇 valid_to 嘅卡，guardId＋cardId；卡鏈判唔到離職／再入職，要補 valid_to）。
+
+**長工入職閘**：`staffHire.MG*`（同任何長工體系工號）同人層面 `hireDate` 一樣納入 `longtermHire` gate——批量 deny（`LONGTERM_HIRE_VIA_TRIAGE_MSG`），出 held／ext_field_review，經分診逐條確認。
+
+**對拍腳本** `npm run db:longterm-card-dates-diff -- --out data/longterm-card-dates-diff.json`（只讀；`--out` 必須喺 `data/` 或 `out/` 之下，唔入 git）：逐個長工分類 consistent／card_no_dates／mismatch／rehire_suspected／no_mg_card，另有兩個獨立清單 `start_after_effective`（選中鏈起點遲過生效日 10/1）同 `mirror_would_change`（鏡像會改人卡 hire／leave 嘅人，列前後日期＋提示碼）；JSON 只有 guardId 同日期；console 只印計數。
+

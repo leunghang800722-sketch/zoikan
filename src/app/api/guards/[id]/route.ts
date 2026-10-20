@@ -23,7 +23,8 @@ import {
   assertBrokerNoLegacyStaffNoWrite,
 } from "@/lib/guards/staff-numbers";
 import { acctTakenByOther } from "@/lib/guards/import/ext-apply";
-import { Conflict } from "@/lib/api/errors";
+import { Conflict, ApiError } from "@/lib/api/errors";
+import { loadStaffSchemes } from "@/lib/guards/staff-schemes";
 import { identityStatus, canonicalHkid, prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, type IdentityStatus } from "@/lib/guards/identity";
 import { applyLegacyGuardContactPatch, writeLegacyContactAudits, normalizeTel } from "@/lib/guards/contacts";
 import type { Guard, Prisma } from "@prisma/client";
@@ -102,6 +103,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // assertBrokerNoLegacyStaffNoWrite() 頂註解。
     assertBrokerNoLegacyStaffNoWrite(isBrokerRole(session), body);
     const parsed = parseBody(GuardUpdateSchema, body);
+    // EMP-P3.1：人卡入職／離職日係 MG 工號卡嘅鏡像——該人有帶日期嘅 current MG 卡，直接改 hire_date／leave_date（值有變）會被之後任何工號卡寫入鏡像覆蓋
+    // （離職結算會消失），所以 409 `use_staff_number_card`，指去工號卡流程（結束卡填離職日＋原因／開新卡）。冇 MG 卡或卡冇日期照舊接受；值冇變（成個 form 一齊送）唔擋。
+    if (parsed.hire_date !== undefined || parsed.leave_date !== undefined) {
+      const dayOf = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+      const changed = (parsed.hire_date !== undefined && dayOf(parsed.hire_date as Date | null) !== dayOf(before.hireDate)) || (parsed.leave_date !== undefined && dayOf(parsed.leave_date as Date | null) !== dayOf(before.leaveDate));
+      if (changed) {
+        const ltCodes = [...(await loadStaffSchemes()).values()].filter((x) => x.isLongterm).map((x) => x.code);
+        const dated = ltCodes.length ? await prisma.guardStaffNumber.findFirst({ where: { guardId: id, status: "current", scheme: { in: ltCodes }, OR: [{ validFrom: { not: null } }, { validTo: { not: null } }] }, select: { id: true } }) : null;
+        if (dated) throw new ApiError(409, "use_staff_number_card", "呢個人有帶日期嘅現用長工（MG）工號卡，入職／離職日要喺工號卡改：請改鏈頭（最早一張）卡嘅入職日；換號卡嘅生效日唔影響入職日。結束卡請填離職日＋原因，再入職請開新卡");
+      }
+    }
     // WP-GUARD-FIX（老闆 2026-09-25 要求）：別名唔可以等於「呢次 PATCH
     // 之後嘅有效本名」——同一次 PATCH 可能一齊改咗 `name_zh`，要用嗰個
     // 新值嚟比對，唔係就用 `before.nameZh`（見 schemas.ts `nameAliases`

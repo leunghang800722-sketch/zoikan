@@ -69,6 +69,7 @@ import { monthRange, monthStart as toMonthStart, monthLabel, n, round2 } from "@
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
 import { classifyLongtermShift } from "./shift-classify";
 import { loadStaffSchemes } from "@/lib/guards/staff-schemes";
+import { resolveLongtermPeriod, periodWarningText, type PeriodCard } from "./employment-period";
 import { computeEoAdw, resolveAlDailyRate, eoPeriodMonths, type AlDailyRateBasis, type EoAdwResult } from "./adw";
 import { loadAdwMonthData } from "./adw-history";
 import { HK_STATUTORY_HOLIDAYS_2026 } from "./hk-holidays";
@@ -340,6 +341,16 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     select: { guardId: true, workDate: true, recordType: true, leaveCode: true, otHours: true, settlementBrokerId: true, source: true, siteId: true, staffScheme: true },
   });
   const staffSchemes = await loadStaffSchemes(client as never); // EMP-P2：頂位規則（2026-10-01 起）睇更次 staff_scheme
+  // EMP-P3：長工體系（staff_schemes.is_longterm，出廠 MG）卡——聘用段入職／離職日（2026-10 起）改讀卡鏈，見 employment-period.ts
+  const longtermSchemeCodes = new Set([...staffSchemes.values()].filter((s) => s.isLongterm).map((s) => s.code));
+  const cardRows = longtermSchemeCodes.size
+    ? await client.guardStaffNumber.findMany({
+        where: { guardId: { in: guardIds }, scheme: { in: [...longtermSchemeCodes] } },
+        select: { id: true, guardId: true, scheme: true, status: true, validFrom: true, validTo: true, endReason: true, predecessorId: true },
+      })
+    : [];
+  const cardsByGuard = new Map<string, PeriodCard[]>();
+  for (const c of cardRows) (cardsByGuard.get(c.guardId) ?? cardsByGuard.set(c.guardId, []).get(c.guardId)!).push(c);
   const shiftsByGuard = new Map<string, typeof shiftRecords>();
   for (const r of shiftRecords) {
     const arr = shiftsByGuard.get(r.guardId) ?? [];
@@ -369,9 +380,14 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
   // 呢個月，即 void 舊 run 建新 run 嗰種冪等重算）要用返
   // `alTakenOpening`／`slTakenOpening`（呢個月開始前嘅累積），唔可以
   // 用已經計咗一次「呢個月」嘅 `alTaken`／`slTaken`，否則會愈計愈多。
-  function openingLeaveTaken(guardId: string): { al: number; sl: number } {
+  function openingLeaveTaken(guardId: string, newSegmentStart: Date | null = null): { al: number; sl: number } {
     const b = balanceByGuard.get(guardId);
     if (!b || opts.zeroOpening) return { al: 0, sl: 0 }; // zeroOpening（P15.1 legacy 回滾專用）：以 0 起算攞「呢個月新增」日數
+    // EMP-P3：再入職（新聘用段）——結餘行（guard_id＋year 唯一）最後一次寫回喺新段起點之前＝仍然係舊段嘅累積，新段以 0 開局
+    if (newSegmentStart) {
+      const lastAsOf = b.asOfMonth ?? (b.year < start.getUTCFullYear() ? new Date(Date.UTC(b.year, 11, 31)) : null);
+      if (lastAsOf && lastAsOf.getTime() < newSegmentStart.getTime()) return { al: 0, sl: 0 };
+    }
     if (b.year === start.getUTCFullYear() && b.asOfMonth && b.asOfMonth.getTime() === start.getTime()) {
       return { al: n(b.alTakenOpening), sl: n(b.slTakenOpening) };
     }
@@ -391,6 +407,19 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     if (!guard) continue;
 
     const isVisa = !!guard.visaSponsoredByBrokerId;
+
+    // EMP-P3：聘用段入職／離職日——2026-10 起讀 MG 卡鏈（fallback 人卡兩欄）；生效前月份完全讀人卡（同舊行為一致）
+    const period = resolveLongtermPeriod({ id: guardId, hireDate: guard.hireDate, leaveDate: guard.leaveDate }, cardsByGuard.get(guardId) ?? [], start, longtermSchemeCodes);
+    for (const w of period.warnings) warnings.push(periodWarningText(w, guard.nameZh));
+    const hireEff = period.start;
+    const leaveEff = period.end;
+    // EMP-P3 警告先行（任何月份，唔改數字）：人卡離職日早過現行合約鏈起點＝疑似再入職而人卡離職日未清
+    if (!period.rehire && guard.leaveDate) {
+      const chainStartForWarn = firstContractByGuard.get(guardId, end);
+      if (chainStartForWarn && toUtcDate(guard.leaveDate).getTime() < chainStartForWarn.getTime()) {
+        warnings.push(`[rehire_suspected] ${guard.nameZh}（${guardId}）：人卡離職日 ${iso(toUtcDate(guard.leaveDate))} 早過現行合約鏈起點 ${iso(chainStartForWarn)}——疑似再入職，人卡離職日未清（${monthLabel(start)} 數字未受影響）`);
+      }
+    }
 
     const rawSegs = contractsByGuard.get(guardId)!;
     const segments: ContractSegment[] = rawSegs.map((s) => ({
@@ -412,8 +441,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     // 相等，但呢個人依然係「呢個月離職」，AL 結算唔可以漏計。改用「有冇
     // 明確離職日喺呢個月範圍內」判斷。
     let explicitLeaveDate: Date | null = null;
-    if (guard.leaveDate) {
-      const ld = toUtcDate(guard.leaveDate);
+    if (leaveEff) {
+      const ld = toUtcDate(leaveEff);
       if (ld.getTime() <= end.getTime()) explicitLeaveDate = ld;
       if (ld.getTime() < employEnd.getTime()) employEnd = ld;
     }
@@ -422,8 +451,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
       if (leaverDateOverride.getTime() <= end.getTime()) explicitLeaveDate = leaverDateOverride;
       if (leaverDateOverride.getTime() < employEnd.getTime()) employEnd = leaverDateOverride;
     }
-    if (guard.hireDate) {
-      const hd = toUtcDate(guard.hireDate);
+    if (hireEff) {
+      const hd = toUtcDate(hireEff);
       if (hd.getTime() > employStart.getTime()) employStart = hd;
     }
 
@@ -534,7 +563,9 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     let sl45Total = 0;
     let npslDaysCount = 0;
     const slCoveredDates = new Set<string>();
-    const priorPaidSl = openingLeaveTaken(guardId).sl;
+    const newSegmentStart = period.rehire && period.start ? toUtcDate(period.start) : null;
+    const priorPaidSl = openingLeaveTaken(guardId, newSegmentStart).sl;
+    if (newSegmentStart && priorPaidSl === 0 && balanceByGuard.has(guardId)) notes.push(`再入職新聘用段（${iso(newSegmentStart)} 起）：病假／年假已放日數以 0 開局，唔承接上一段聘用`);
     let usedBal = priorPaidSl;
     for (const seg of slSegmentInputs) {
       const segStart = toUtcDate(seg.dateFrom!);
@@ -550,7 +581,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
       const segDates = segDatesActualSl.length ? segDatesActualSl : Array.from({ length: spanDays }, (_, k) => iso(new Date(segStart.getTime() + k * 86400000)));
       for (const dISO of segDates) slCoveredDates.add(dISO);
       const segDays = segDates.length;
-      const accrued = guard.hireDate ? slAccrued(toUtcDate(guard.hireDate), segStart) : 0;
+      const accrued = hireEff ? slAccrued(toUtcDate(hireEff), segStart) : 0;
       const balance = round2(accrued - usedBal);
       const verdict = slSegmentVerdict(segDays, spanDays, balance, !!seg.doctorNoteVerified);
       let dedForSeg = 0;
@@ -589,7 +620,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     const shSeg = rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= end.getTime());
     // P19a：年資起點＝現行連續合約鏈第一段未作廢長工合約生效日（散工段唔計），fallback guards.hire_date。
     // MPF 僱員供款豁免（首月／60 日）同法定假 3 個月規則共用同一起點。
-    const hireDateIso = guard.hireDate ? toUtcDate(guard.hireDate) : null;
+    const hireDateIso = hireEff ? toUtcDate(hireEff) : null;
     const contractStart = firstContractByGuard.get(guardId, end) ?? null;
     const seniorityStart = contractStart ?? hireDateIso;
     const seniorityNote = contractStart && hireDateIso && contractStart.getTime() > hireDateIso.getTime() ? `年資起點：長工合約 ${iso(contractStart)}（散工段唔計）` : null;
@@ -626,13 +657,13 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     // isLeaver 判斷之外都要計（在職長工都要儲「今年已放幾多日 AL」，
     // 等佢真係離職嗰個月先追溯得到準確結餘）。
     const alDatesThisMonth = [...(leaveDatesByCode.get("AL") ?? [])].filter((dISO) => toUtcDate(dISO).getTime() <= employEnd.getTime());
-    const priorAl = openingLeaveTaken(guardId).al;
+    const priorAl = openingLeaveTaken(guardId, period.rehire && period.start ? toUtcDate(period.start) : null).al;
     const alTakenCumulative = round2(priorAl + alDatesThisMonth.length);
     let alPayment = 0;
     let alDailyRateBasis: AlDailyRateBasis | null = null;
     let alAdw: LeaverAdwInfo | null = null;
     if (isLeaver) {
-      const serviceStart = firstContractByGuard.get(guardId, employEnd) ?? (guard.hireDate ? toUtcDate(guard.hireDate) : employStart); // 規則 9：AL entitlement 由長工合約入職日計，唔計轉長工前散工段
+      const serviceStart = firstContractByGuard.get(guardId, employEnd) ?? (hireEff ? toUtcDate(hireEff) : employStart); // 規則 9：AL entitlement 由長工合約入職日計，唔計轉長工前散工段
       const entitleYearDays = n(rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= employEnd.getTime())?.annualLeaveDays ?? 7);
       const probationMonths = rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= employEnd.getTime())?.probationMonths ?? guard.probationMonths ?? null;
       const hireDateForProbation = serviceStart; // 試用期跟長工合約（Maxwell Commencement）起計
@@ -738,7 +769,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
       leaveBalanceWriteback: {
         alTakenCumulative,
         slTakenCumulative: round2(usedBal),
-        slAccruedAtMonthEnd: guard.hireDate ? slAccrued(toUtcDate(guard.hireDate), end) : 0,
+        slAccruedAtMonthEnd: hireEff ? slAccrued(toUtcDate(hireEff), end) : 0,
         alOpeningUsed: priorAl,
         slOpeningUsed: priorPaidSl,
       },
