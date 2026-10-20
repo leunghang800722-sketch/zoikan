@@ -27,8 +27,17 @@ export interface CardPayrollRow {
   number: string | null;
   settlementBrokerId: string | null;
   shifts: number;
-  /** EMP-P2.2：其中 LINK 盤（sites.guards_paid_by_client）嘅更數——本身冇計價（snapshot null），金額照舊唔入 */
+  /**
+   * EMP-P2.4：以下三個係**額外**資訊（additive），`wage`／`fee`／`amount`／`shifts` 維持原口徑（唔過濾，雞頭 sheet／by_scheme／總表 snapshot 同 base 一樣）；
+   * 逐人糧單（payslips.ts）自己用呢啲欄做 external 剔出同 LINK 金額歸零。
+   */
+  /** 其中 LINK 盤（sites.guards_paid_by_client）嘅更數 */
   linkShifts: number;
+  /** LINK 盤更次 snapshot 工資／雞頭費（可能有舊 snapshot）——逐人糧單要扣走 */
+  linkWage: number;
+  linkFee: number;
+  /** 結算單位 kind=external（客戶自己人，唔入糧）——逐人糧單剔出 */
+  isExternal: boolean;
   wage: number;
   fee: number;
   amount: number;
@@ -41,16 +50,14 @@ interface RawGroup {
   scheme: string | null;
   shifts: bigint | number;
   link_shifts: bigint | number;
+  link_wage: Prisma.Decimal | null;
+  link_fee: Prisma.Decimal | null;
+  is_external: boolean | null;
   wage: Prisma.Decimal | null;
   fee: Prisma.Decimal | null;
 }
 
-/**
- * 每 (結算單位 × 保安員 × 工號卡) 一行。
- *   - EMP-P2.3 M1：結算單位 kind=external（settlementType=none，客戶自己嘅人，唔入糧）嘅更次剔出，唔計人數、唔出行（睇 `countExternalShifts`）。
- *   - EMP-P2.3 S1：LINK 盤（sites.guards_paid_by_client）更次即使有舊 snapshot 都唔計入 wage／fee（SQL FILTER NOT guards_paid_by_client），
- *     但仍計入 shifts／linkShifts（備註「LINK 盤更數 N（唔計價）」）。
- */
+/** 每 (結算單位 × 保安員 × 工號卡) 一行。金額口徑同 EMP-P2 一樣（唔過濾）；external／LINK 資訊另帶欄位，過濾只喺逐人糧單（payslips.ts）做。 */
 export function buildPayrollByCard(month: Date): Promise<CardPayrollRow[]> {
   return memoized(`payrollcard:${monthRange(month).start.toISOString()}`, () => buildPayrollByCardUncached(month));
 }
@@ -63,9 +70,12 @@ async function buildPayrollByCardUncached(month: Date): Promise<CardPayrollRow[]
            COALESCE(sr.staff_number_id, a.staff_number_id) AS card_id,
            COALESCE(sr.staff_scheme, a.staff_scheme) AS scheme,
            COUNT(*) AS shifts,
+           SUM(sr.guard_wage_snapshot) AS wage,
+           SUM(sr.broker_fee_snapshot) AS fee,
            COUNT(*) FILTER (WHERE st.guards_paid_by_client) AS link_shifts,
-           SUM(sr.guard_wage_snapshot) FILTER (WHERE NOT COALESCE(st.guards_paid_by_client, false)) AS wage,
-           SUM(sr.broker_fee_snapshot) FILTER (WHERE NOT COALESCE(st.guards_paid_by_client, false)) AS fee
+           SUM(sr.guard_wage_snapshot) FILTER (WHERE st.guards_paid_by_client) AS link_wage,
+           SUM(sr.broker_fee_snapshot) FILTER (WHERE st.guards_paid_by_client) AS link_fee,
+           BOOL_OR(sb.kind = 'external') AS is_external
       FROM shift_records sr
       LEFT JOIN shift_record_staff_attributions a ON a.shift_record_id = sr.id
       LEFT JOIN sites st ON st.id = sr.site_id
@@ -73,7 +83,6 @@ async function buildPayrollByCardUncached(month: Date): Promise<CardPayrollRow[]
      WHERE sr.record_type IN ('shift', 'ot')
        AND sr.work_date >= ${start.toISOString().slice(0, 10)}::date AND sr.work_date <= ${end.toISOString().slice(0, 10)}::date
        AND sr.status <> 'cancelled'
-       AND (sb.kind IS NULL OR sb.kind <> 'external')
      GROUP BY 1, 2, 3, 4
      ORDER BY 2, 3, 1`);
   const cardIds = [...new Set(groups.map((g) => g.card_id).filter((v): v is string => !!v))];
@@ -92,6 +101,9 @@ async function buildPayrollByCardUncached(month: Date): Promise<CardPayrollRow[]
       settlementBrokerId: g.settlement_broker_id,
       shifts: Number(g.shifts),
       linkShifts: Number(g.link_shifts),
+      linkWage: round2(n(g.link_wage)),
+      linkFee: round2(n(g.link_fee)),
+      isExternal: !!g.is_external,
       wage,
       fee,
       amount: round2(wage + fee),

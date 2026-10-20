@@ -118,7 +118,7 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     expect(String(sheet.getRow(2).values)).toContain("出糧途徑");
   });
 
-  it("EMP-P2.3 M1：客戶自己人（結算單位 kind=external）更次剔出逐人糧單同 by_card 聚合；獨立計數 external_shifts；pay_channel 唔會寫「在勤直接」", async () => {
+  it("EMP-P2.3 M1／P2.4：客戶自己人（結算單位 kind=external）更次剔出逐人糧單（by_card 聚合維持原口徑，只帶 isExternal 旗）；獨立計數 external_shifts；pay_channel 唔會寫「在勤直接」", async () => {
     const ext = await mkBroker("T-EXT", "external");
     const g2 = await mkGuard({ name: "測試戊" });
     const c2 = await prisma.guardStaffNumber.create({ data: { guardId: g2.id, scheme: "U", number: "U90904", status: "current" } });
@@ -126,8 +126,14 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     await rec(g2.id, { cardId: c2.id, scheme: "U", brokerId: ext.id, wage: 100, fee: 10 });
     await rec(fx.guardA.id, { cardId: cardU.id, scheme: "U", brokerId: ext.id, wage: 300, fee: 30 });
     const rows = await buildPayrollByCard(AUG);
-    expect(rows.every((r) => r.settlementBrokerId !== ext.id)).toBe(true);
-    expect(rows.find((r) => r.guardId === g2.id)).toBeUndefined();
+    // EMP-P2.4：by_card 聚合維持原口徑（唔過濾）——雞頭 sheet／by_scheme／總表同 base 一樣；external 只帶 isExternal 旗，逐人糧單先剔
+    const extRows = rows.filter((r) => r.settlementBrokerId === ext.id);
+    expect(extRows.every((r) => r.isExternal)).toBe(true);
+    expect(extRows.map((r) => r.wage).sort()).toEqual([100, 300]);
+    expect(rows.filter((r) => r.settlementBrokerId !== ext.id).every((r) => !r.isExternal)).toBe(true);
+    const totals = await buildPayrollTotals(AUG);
+    const extTotal = totals.find((x) => x.brokerId === ext.id);
+    if (extTotal) expect(extTotal.by_scheme.reduce((a, x) => a + x.amount, 0)).toBe(extTotal.amount); // by_scheme 加埋＝該單位總數（冇被過濾打爛）
     const slips = await buildPayslips(AUG);
     expect(slips.map((x) => x.guardId)).toEqual([fx.guardA.id]); // g2 只有外部更 → 唔出份
     const u = slips[0]!.lines.find((l) => l.scheme === "U")!;

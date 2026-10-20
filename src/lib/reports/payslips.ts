@@ -15,12 +15,12 @@ import { buildPayrollByCard, NO_CARD_LABEL } from "./payroll-by-card";
 import { loadStaffSchemes, schemeInfoOf, type StaffSchemeInfo } from "@/lib/guards/staff-schemes";
 
 export const LONGTERM_NOTE = "見長工糧表";
-export const CHANNEL_DIRECT = "在勤直接";
-export const CHANNEL_UNASSIGNED = "未歸屬";
-export const CHANNEL_EXTERNAL = "不適用（客戶自己人）";
+const CHANNEL_DIRECT = "在勤直接";
+const CHANNEL_UNASSIGNED = "未歸屬";
+const CHANNEL_EXTERNAL = "不適用（客戶自己人）";
 
 /** EMP-P2.2：由結算單位推導出糧途徑（純函數）。 */
-export function payChannelOf(broker: { code: string; kind: string; settlementType: string } | null): string {
+function payChannelOf(broker: { code: string; kind: string; settlementType: string } | null): string {
   if (!broker) return CHANNEL_UNASSIGNED;
   if (broker.kind === "external") return CHANNEL_EXTERNAL; // 客戶自己人：唔係在勤出糧（正常已剔出聚合，呢度係防呆）
   if (broker.settlementType === "cash" && broker.kind !== "internal_cash") return `經雞頭（${broker.code}）`;
@@ -103,12 +103,14 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
   type Acc = { guardId: string; staffNumberId: string | null; scheme: string | null; number: string | null; shifts: number; linkShifts: number; wage: number; fee: number; brokers: Set<string>; channels: Set<string> };
   const accByKey = new Map<string, Acc>();
   for (const r of rows) {
+    if (r.isExternal) continue; // EMP-P2.3／2.4：客戶自己人（external 結算單位）剔出逐人糧單（by_card 聚合本身唔過濾，雞頭 sheet／by_scheme 口徑不變）
     const a = accByKey.get(r.key) ?? { guardId: r.guardId, staffNumberId: r.staffNumberId, scheme: r.scheme, number: r.number, shifts: 0, linkShifts: 0, wage: 0, fee: 0, brokers: new Set<string>(), channels: new Set<string>() };
     a.shifts += r.shifts;
     a.linkShifts += r.linkShifts;
     a.channels.add(r.settlementBrokerId ? (brokerChannel.get(r.settlementBrokerId) ?? CHANNEL_UNASSIGNED) : CHANNEL_UNASSIGNED);
-    a.wage = round2(a.wage + r.wage);
-    a.fee = round2(a.fee + r.fee);
+    // LINK 盤（guards_paid_by_client）更次冇計價：即使有舊 snapshot 都唔入逐人糧單金額（更數照計，備註「LINK 盤更數 N（唔計價）」）
+    a.wage = round2(a.wage + r.wage - r.linkWage);
+    a.fee = round2(a.fee + r.fee - r.linkFee);
     a.brokers.add(r.settlementBrokerId ? (brokerCode.get(r.settlementBrokerId) ?? "?") : "未歸屬");
     accByKey.set(r.key, a);
   }
