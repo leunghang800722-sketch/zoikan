@@ -101,7 +101,7 @@ describe("月結診斷：未標工號更次／盤未設 staff_scheme（直達卡
     expect(f1.detail).toEqual([{ site_name: b.sites.B.name, shifts: 2 }]);
     const f2 = h.findings.find((f) => f.code === "site_no_staff_scheme")!;
     expect(f2.count).toBe(2); // 盤 B、C 都有出更而未設
-    expect(f2.fixLink).toBe("/sites");
+    expect(f2.fixLink).toBe("/sites/staff-scheme-prefill") // SITE-SCHEME-1：直達一頁設定;
     await prisma.site.updateMany({ where: { id: { in: [b.sites.B.id, b.sites.C.id] } }, data: { staffScheme: "U" } });
     const h2 = await buildMonthHealth(SEP_MONTH, session);
     expect(h2.findings.find((f) => f.code === "site_no_staff_scheme")).toBeUndefined();
