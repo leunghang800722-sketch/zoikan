@@ -13,11 +13,10 @@ const SITE_SCHEME_JOB_KEY = "site_scheme_backfill";
 
 type JobSpec = { mode: "backfill"; siteIds: string[] } | { mode: "reinfer"; siteId: string };
 
-/** job 失敗 summary：唔含 PII——error_code＝err.name；message＝err.name＋前 120 字，數字串一律換 #（電話／證件號／金額唔留）。 */
+/** job 失敗 summary：唔含 PII——只存 error_code（＝err.name）；錯誤訊息文字（可能夾人名／電話）一律唔存（S-batch-2）。 */
 export function errorSummary(e: unknown): Prisma.InputJsonValue {
   const name = e instanceof Error && e.name ? e.name : "error";
-  const msg = e instanceof Error ? e.message : "";
-  return { error: name, error_code: name, message: `${name}: ${msg}`.slice(0, 120).replace(/\d+/g, "#") };
+  return { error: name, error_code: name, message: name };
 }
 
 async function runJob(jobId: string, spec: JobSpec, actorUserId: string | null): Promise<void> {

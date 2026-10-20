@@ -11,6 +11,7 @@ import { selectCls } from "@/components/ui/Field";
 import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { kickerFor } from "@/lib/nav/schema";
+import { currentMonthStr } from "@/lib/ui/format";
 
 interface Proposal {
   site_id: string;
@@ -38,6 +39,7 @@ interface ApplyResult {
 interface JobSummary {
   backfilled?: number;
   unresolved?: number;
+  unresolved_by_month?: Array<{ month: string; count: number }>;
   error?: string;
   error_code?: string;
   message?: string;
@@ -47,6 +49,12 @@ interface JobSummary {
 const JOB_POLL_MAX_MS = 10 * 60 * 1000;
 const STALE_JOB_NOTICE = "背景補歸屬等咗超過 10 分鐘仲未完，可能已中斷——盤體系已設定，可以重新套用（只填空位，重做安全）";
 
+/** 推唔到更次最多嘅月份（job summary.unresolved_by_month 已排好）；冇就當月 */
+function topUnresolvedMonth(s: JobSummary | undefined): string {
+  const m = s?.unresolved_by_month?.[0]?.month;
+  return m && /^\d{4}-\d{2}$/.test(m) ? m : currentMonthStr();
+}
+
 export default function StaffSchemePrefillPage() {
   const [rows, setRows] = useState<Proposal[] | null>(null);
   const [notApplicable, setNotApplicable] = useState<NotApplicable[]>([]);
@@ -55,6 +63,7 @@ export default function StaffSchemePrefillPage() {
   const [ticked, setTicked] = useState<Record<string, boolean>>({}); // 預設全部唔剔
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [unresolvedMonth, setUnresolvedMonth] = useState<string>(currentMonthStr()); // 推唔到最多嗰個月；冇就當月
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
 
@@ -94,6 +103,7 @@ export default function StaffSchemePrefillPage() {
       if (!r.ok) continue;
       if (r.data.job.status === "ok") {
         setNotice(resultNotice(applied, r.data.job.summary ?? {}));
+        setUnresolvedMonth(topUnresolvedMonth(r.data.job.summary));
         return;
       }
       if (r.data.job.status === "error") {
@@ -122,7 +132,10 @@ export default function StaffSchemePrefillPage() {
     if (d.job_id && d.status === "running") {
       setNotice(`已設定 ${d.applied} 個盤（${d.by_scheme.map((b) => `${b.scheme} ${b.count}`).join("／")}）；更次歸屬背景補緊…`);
       void pollJob(d.job_id, d.applied);
-    } else if (d.summary) setNotice(resultNotice(d.applied, d.summary));
+    } else if (d.summary) {
+      setNotice(resultNotice(d.applied, d.summary));
+      setUnresolvedMonth(topUnresolvedMonth(d.summary));
+    }
     else setNotice(`已設定 ${d.applied} 個盤`);
   }
 
@@ -150,7 +163,7 @@ export default function StaffSchemePrefillPage() {
       <Banner kind="success" message={notice} />
       {notice && notice.includes("推唔到") && (
         <div className="text-zk-sm text-zk-muted" data-testid="prefill-unresolved-hint">
-          推唔到嘅更次會喺 <Link href="/month-close#health-shifts_no_staff_number" className="text-zk-primary" data-testid="prefill-unresolved-link">月結健康「未標工號」卡 ›</Link> 繼續跟進（補返該人嘅工號卡後再回填）。
+          推唔到嘅更次會喺 <Link href={`/month-close?month=${unresolvedMonth}#health-shifts_no_staff_number`} className="text-zk-primary" data-testid="prefill-unresolved-link">月結健康「未標工號」卡 ›</Link> 繼續跟進（補返該人嘅工號卡後再回填）。
         </div>
       )}
       {rows === null ? (
