@@ -43,7 +43,8 @@
 import type { Prisma, GuardStaffNumber } from "@prisma/client";
 import { ApiError, BadRequest, Conflict, Forbidden } from "../api/errors";
 import { todayLocalStr } from "../ui/format";
-import { writeAudit } from "../audit";
+import { writeAudit, writeAuditTx } from "../audit";
+import { loadStaffSchemes } from "./staff-schemes";
 
 type Tx = Prisma.TransactionClient;
 
@@ -326,6 +327,46 @@ export function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], schem
 // `tx` 入面），拋錯會令外層 `prisma.$transaction()` 自然 rollback，唔使
 // 呢度額外處理。
 export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean }): Promise<void> {
+  await syncLegacyStaffNoColumnsInner(tx, guardId, opts);
+  // EMP-P3：工號卡寫入路徑（POST／PATCH／換號／guard-fix／導入／Maxwell／undo 全部都 call 呢個函數）順便鏡像人卡入職／離職日
+  await syncLegacyGuardEmploymentColumns(tx, guardId);
+}
+
+/**
+ * EMP-P3：人卡 `guards.hire_date`／`leave_date` 變成由工號卡算返嚟嘅鏡像（同 `syncLegacyStaffNoColumns` 一樣喺同一 tx 內）：
+ *   - `hire_date`＝（長工體系）卡最早 `valid_from`（冇卡有 valid_from 就保留原值）；
+ *   - `leave_date`＝（長工體系）卡全部 former 而且最遲 `valid_to`；有任何 current 卡 → null；（全部 former 但冇 valid_to → 保留原值）；
+ *   - `employment_type` 唔郁（留待日後）。
+ * 範圍收窄（安全閥，同 spec 出入）：(1) 只睇長工體系（staff_schemes.is_longterm，出廠 MG）卡；人冇長工體系卡就完全唔鏡像（避免散工 U 卡仲 current 抹走長工離職日，亦唔繞過長工入職日期閘）；
+ * (2) 冇任何一張長工體系卡有日期（valid_from／valid_to 都 null）就完全唔郁（P3 唔郁現有人卡值，等 office 補卡日期後逐個自然同步）。
+ * 結果同原值不同就寫 audit（guards update，事務內）。
+ */
+export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string): Promise<{ changed: boolean }> {
+  const cards = await tx.guardStaffNumber.findMany({ where: { guardId }, select: { scheme: true, status: true, validFrom: true, validTo: true } });
+  if (cards.length === 0) return { changed: false };
+  const schemes = await loadStaffSchemes(tx);
+  const basis = cards.filter((c) => schemes.get(c.scheme)?.isLongterm);
+  if (basis.length === 0) return { changed: false }; // 冇長工體系卡（散工／未開 MG 卡）→ 完全唔鏡像，人卡日期照舊（長工入職閘亦唔會被繞過）
+  if (!basis.some((c) => c.validFrom || c.validTo)) return { changed: false };
+  const froms = basis.map((c) => c.validFrom).filter((d): d is Date => !!d);
+  const tos = basis.map((c) => c.validTo).filter((d): d is Date => !!d);
+  const hire: Date | undefined = froms.length ? new Date(Math.min(...froms.map((d) => d.getTime()))) : undefined;
+  let leave: Date | null | undefined;
+  if (basis.some((c) => c.status === "current")) leave = null;
+  else leave = tos.length ? new Date(Math.max(...tos.map((d) => d.getTime()))) : undefined;
+  const before = await tx.guard.findUnique({ where: { id: guardId } });
+  if (!before) return { changed: false };
+  const same = (a: Date | null, b: Date | null) => (a === null || b === null ? a === b : a.getTime() === b.getTime());
+  const data: Prisma.GuardUpdateInput = {};
+  if (hire !== undefined && !same(before.hireDate, hire)) data.hireDate = hire;
+  if (leave !== undefined && !same(before.leaveDate, leave)) data.leaveDate = leave;
+  if (Object.keys(data).length === 0) return { changed: false };
+  const after = await tx.guard.update({ where: { id: guardId }, data });
+  await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: guardId, action: "update", before, after: { ...after, auto_source: "staff_number_mirror" }, ip: null });
+  return { changed: true };
+}
+
+async function syncLegacyStaffNoColumnsInner(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean }): Promise<void> {
   const allRows = await tx.guardStaffNumber.findMany({ where: { guardId } });
   const hasUHistory = allRows.some((r) => r.scheme === "U");
   const hasMgOrMwHistory = allRows.some((r) => r.scheme === "MG" || r.scheme === "MW");
