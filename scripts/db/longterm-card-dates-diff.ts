@@ -1,4 +1,5 @@
 // EMP-P3：只讀對拍——逐個長工列出 人卡 hire_date／leave_date vs MG 卡鏈 valid_from／valid_to，分類：
+//   （另外兩類獨立清單，各列 guardId＋前後日期：start_after_effective＝選中鏈起點遲過生效日 10/1；mirror_would_change＝鏈頭／current 規則下鏡像會改人卡 hire／leave 嘅人）
 //   consistent（一致）｜card_no_dates（卡冇日期，讀日期時 fallback 人卡）｜mismatch（唔一致，會用卡）｜rehire_suspected（疑似再入職：人卡離職日早過卡鏈起點）｜no_mg_card（冇 MG 卡）
 //   npx tsx scripts/db/longterm-card-dates-diff.ts --out data/longterm-card-dates-diff.json   # --out 必須喺 data/ 或 out/ 之下（gitignored，唔入 git）
 // 只讀（唔寫 DB）；console 只印分類計數；JSON 只有 guardId 同日期（YYYY-MM-DD），唔含姓名／工號。
@@ -8,6 +9,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { prisma } from "../../src/lib/db";
 import { loadStaffSchemes } from "../../src/lib/guards/staff-schemes";
 import { LONGTERM_CARD_DATES_EFFECTIVE_FROM, resolveLongtermPeriod } from "../../src/lib/longterm-payroll/employment-period";
+import { planEmploymentMirror } from "../../src/lib/guards/staff-numbers";
 
 export type CardDatesClass = "consistent" | "card_no_dates" | "mismatch" | "rehire_suspected" | "no_mg_card";
 export interface CardDatesRow {
@@ -21,7 +23,21 @@ export interface CardDatesRow {
 }
 const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
 
-export async function diffLongtermCardDates(asOfMonth: Date = new Date()): Promise<{ rows: CardDatesRow[]; counts: Record<CardDatesClass, number> }> {
+export interface StartAfterEffectiveRow {
+  guard_id: string;
+  card_start: string;
+  effective_from: string;
+}
+export interface MirrorWouldChangeRow {
+  guard_id: string;
+  hire_before: string | null;
+  hire_after: string | null;
+  leave_before: string | null;
+  leave_after: string | null;
+  hints: string[];
+}
+
+export async function diffLongtermCardDates(asOfMonth: Date = new Date()): Promise<{ rows: CardDatesRow[]; counts: Record<CardDatesClass, number>; start_after_effective: StartAfterEffectiveRow[]; mirror_would_change: MirrorWouldChangeRow[] }> {
   const schemes = await loadStaffSchemes();
   const codes = new Set([...schemes.values()].filter((s) => s.isLongterm).map((s) => s.code));
   // 揀鏈用「生效月同今個月之中較遲者」（生效前 helper 一律讀人卡）
@@ -37,6 +53,8 @@ export async function diffLongtermCardDates(asOfMonth: Date = new Date()): Promi
   for (const c of cards) (byGuard.get(c.guardId) ?? byGuard.set(c.guardId, []).get(c.guardId)!).push(c);
   const counts: Record<CardDatesClass, number> = { consistent: 0, card_no_dates: 0, mismatch: 0, rehire_suspected: 0, no_mg_card: 0 };
   const rows: CardDatesRow[] = [];
+  const startAfter: StartAfterEffectiveRow[] = [];
+  const mirror: MirrorWouldChangeRow[] = [];
   for (const g of guards.sort((a, b) => a.id.localeCompare(b.id))) {
     const gc = byGuard.get(g.id) ?? [];
     const p = resolveLongtermPeriod(g, gc, month, codes);
@@ -47,6 +65,20 @@ export async function diffLongtermCardDates(asOfMonth: Date = new Date()): Promi
     else if (p.startSource !== "card" && p.endSource !== "card") klass = "card_no_dates";
     else klass = "consistent";
     counts[klass] += 1;
+    if (p.usedCards && p.startSource === "card" && p.start && p.start.getTime() > LONGTERM_CARD_DATES_EFFECTIVE_FROM.getTime()) startAfter.push({ guard_id: g.id, card_start: iso(p.start)!, effective_from: iso(LONGTERM_CARD_DATES_EFFECTIVE_FROM)! });
+    if (gc.length) {
+      const plan = planEmploymentMirror(g, gc);
+      if (plan.hire !== undefined || plan.leave !== undefined) {
+        mirror.push({
+          guard_id: g.id,
+          hire_before: iso(g.hireDate),
+          hire_after: plan.hire !== undefined ? iso(plan.hire) : iso(g.hireDate),
+          leave_before: iso(g.leaveDate),
+          leave_after: plan.leave !== undefined ? iso(plan.leave) : iso(g.leaveDate),
+          hints: plan.warnings.map((w) => w.split("：")[0]!),
+        });
+      }
+    }
     rows.push({
       guard_id: g.id,
       guard_hire: iso(g.hireDate),
@@ -57,7 +89,7 @@ export async function diffLongtermCardDates(asOfMonth: Date = new Date()): Promi
       chain_card_ids: p.chainCardIds,
     });
   }
-  return { rows, counts };
+  return { rows, counts, start_after_effective: startAfter, mirror_would_change: mirror };
 }
 
 const isMain = process.argv[1] != null && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
@@ -71,8 +103,8 @@ if (isMain) {
     if (rel[0] !== "data" && rel[0] !== "out") throw new Error("--out 必須喺 data/ 或 out/ 之下（gitignored，唔入 git）");
     const r = await diffLongtermCardDates();
     await mkdir(path.dirname(abs), { recursive: true });
-    await writeFile(abs, JSON.stringify({ generated_at: new Date().toISOString(), counts: r.counts, rows: r.rows }, null, 2));
-    console.log(`[longterm-card-dates-diff] 長工 ${r.rows.length} 人｜${Object.entries(r.counts).map(([k, v]) => `${k} ${v}`).join("｜")}｜已寫 --out`);
+    await writeFile(abs, JSON.stringify({ generated_at: new Date().toISOString(), counts: r.counts, start_after_effective: r.start_after_effective, mirror_would_change: r.mirror_would_change, rows: r.rows }, null, 2));
+    console.log(`[longterm-card-dates-diff] 長工 ${r.rows.length} 人｜${Object.entries(r.counts).map(([k, v]) => `${k} ${v}`).join("｜")}｜start_after_effective ${r.start_after_effective.length}｜mirror_would_change ${r.mirror_would_change.length}｜已寫 --out`);
     await prisma.$disconnect();
   })().catch(async (e) => {
     console.error("[longterm-card-dates-diff] 失敗", e instanceof Error ? e.message : e);

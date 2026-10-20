@@ -45,6 +45,7 @@ import { ApiError, BadRequest, Conflict, Forbidden } from "../api/errors";
 import { todayLocalStr } from "../ui/format";
 import { writeAudit, writeAuditTx } from "../audit";
 import { loadStaffSchemes } from "./staff-schemes";
+import { buildLongtermChains, type PeriodCard } from "@/lib/longterm-payroll/employment-period";
 
 type Tx = Prisma.TransactionClient;
 
@@ -326,47 +327,82 @@ export function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], schem
 // 唔相關 500）。呢個函數本身冇開自己個 transaction（call site 已經喺
 // `tx` 入面），拋錯會令外層 `prisma.$transaction()` 自然 rollback，唔使
 // 呢度額外處理。
-export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean }): Promise<void> {
+export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean; actorUserId?: string | null }): Promise<{ employmentWarnings: string[] }> {
   await syncLegacyStaffNoColumnsInner(tx, guardId, opts);
   // EMP-P3：工號卡寫入路徑（POST／PATCH／換號／guard-fix／導入／Maxwell／undo 全部都 call 呢個函數）順便鏡像人卡入職／離職日
-  await syncLegacyGuardEmploymentColumns(tx, guardId);
+  const m = await syncLegacyGuardEmploymentColumns(tx, guardId, { actorUserId: opts?.actorUserId ?? null });
+  return { employmentWarnings: m.warnings };
+}
+
+export interface EmploymentMirrorPlan {
+  /** undefined＝唔郁 */
+  hire?: Date;
+  leave?: Date | null;
+  /** 提示／警告（代碼＋說明，無個人資料）：stale_leave_date_cleared／leave_date_vs_current_card */
+  warnings: string[];
 }
 
 /**
- * EMP-P3：人卡 `guards.hire_date`／`leave_date` 變成由工號卡算返嚟嘅鏡像（同 `syncLegacyStaffNoColumns` 一樣喺同一 tx 內）：
- *   - `hire_date`＝（長工體系）卡最早 `valid_from`（冇卡有 valid_from 就保留原值）；
- *   - `leave_date`＝（長工體系）卡全部 former 而且最遲 `valid_to`；有任何 current 卡 → null；（全部 former 但冇 valid_to → 保留原值）；
- *   - `employment_type` 唔郁（留待日後）。
- * 範圍收窄（安全閥，同 spec 出入）：(1) 只睇長工體系（staff_schemes.is_longterm，出廠 MG）卡；人冇長工體系卡就完全唔鏡像（避免散工 U 卡仲 current 抹走長工離職日，亦唔繞過長工入職日期閘）；
- * (2) 冇任何一張長工體系卡有日期（valid_from／valid_to 都 null）就完全唔郁（P3 唔郁現有人卡值，等 office 補卡日期後逐個自然同步）。
- * 結果同原值不同就寫 audit（guards update，事務內）。
+ * EMP-P3／P3.1：人卡 hire_date／leave_date 鏡像嘅純計算（`syncLegacyGuardEmploymentColumns` 同對拍腳本共用）。只睇長工體系卡 `cards`（caller 先篩）。
+ *   - `hire_date`：只由「鏈頭」（沿 predecessor 最早嗰張）valid_from 決定——取各鏈鏈頭最早；任何鏈頭冇 valid_from → 唔郁（換號新卡永遠唔參與）；
+ *   - `leave_date`：有 current 卡 → 只有人卡 leave_date 早過該 current 卡所屬鏈嘅鏈頭 valid_from（舊段殘留）先清 null＋warning；
+ *     遲過或等於（真係離職）→ 唔郁，出 hint「請用結束卡流程」；鏈頭冇日期 → 唔郁。全部 former → 最遲 valid_to（冇 valid_to 就唔郁）。
+ *   - 長工體系卡全部冇日期 → 完全唔郁。
  */
-export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string): Promise<{ changed: boolean }> {
-  const cards = await tx.guardStaffNumber.findMany({ where: { guardId }, select: { scheme: true, status: true, validFrom: true, validTo: true } });
-  if (cards.length === 0) return { changed: false };
-  const schemes = await loadStaffSchemes(tx);
-  const basis = cards.filter((c) => schemes.get(c.scheme)?.isLongterm);
-  if (basis.length === 0) return { changed: false }; // 冇長工體系卡（散工／未開 MG 卡）→ 完全唔鏡像，人卡日期照舊（長工入職閘亦唔會被繞過）
-  if (!basis.some((c) => c.validFrom || c.validTo)) return { changed: false };
-  const froms = basis.map((c) => c.validFrom).filter((d): d is Date => !!d);
-  const tos = basis.map((c) => c.validTo).filter((d): d is Date => !!d);
-  const hire: Date | undefined = froms.length ? new Date(Math.min(...froms.map((d) => d.getTime()))) : undefined;
-  let leave: Date | null | undefined;
-  if (basis.some((c) => c.status === "current")) leave = null;
-  else leave = tos.length ? new Date(Math.max(...tos.map((d) => d.getTime()))) : undefined;
-  const before = await tx.guard.findUnique({ where: { id: guardId } });
-  if (!before) return { changed: false };
-  const same = (a: Date | null, b: Date | null) => (a === null || b === null ? a === b : a.getTime() === b.getTime());
-  const data: Prisma.GuardUpdateInput = {};
-  if (hire !== undefined && !same(before.hireDate, hire)) data.hireDate = hire;
-  if (leave !== undefined && !same(before.leaveDate, leave)) data.leaveDate = leave;
-  if (Object.keys(data).length === 0) return { changed: false };
-  const after = await tx.guard.update({ where: { id: guardId }, data });
-  await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: guardId, action: "update", before, after: { ...after, auto_source: "staff_number_mirror" }, ip: null });
-  return { changed: true };
+export function planEmploymentMirror(guard: { hireDate: Date | null; leaveDate: Date | null }, cards: readonly PeriodCard[]): EmploymentMirrorPlan {
+  const plan: EmploymentMirrorPlan = { warnings: [] };
+  if (cards.length === 0 || !cards.some((c) => c.validFrom || c.validTo)) return plan;
+  const chains = buildLongtermChains(cards);
+  const heads = chains.map((c) => c[0]!);
+  if (heads.length > 0 && heads.every((h) => h.validFrom)) {
+    const hire = new Date(Math.min(...heads.map((h) => h.validFrom!.getTime())));
+    if (!guard.hireDate || guard.hireDate.getTime() !== hire.getTime()) plan.hire = hire;
+  }
+  const current = cards.find((c) => c.status === "current");
+  if (current) {
+    const chain = chains.find((c) => c.some((x) => x.id === current.id))!;
+    const segStart = chain[0]!.validFrom;
+    if (segStart && guard.leaveDate) {
+      if (guard.leaveDate.getTime() < segStart.getTime()) {
+        plan.leave = null;
+        plan.warnings.push("stale_leave_date_cleared：人卡離職日早過現行 MG 卡鏈起點（舊段殘留），已清走");
+      } else {
+        plan.warnings.push("leave_date_vs_current_card：人卡有離職日而 MG 卡仍然 current——請用結束卡流程（填離職日＋原因），人卡離職日暫時保留");
+      }
+    }
+  } else {
+    const tos = cards.map((c) => c.validTo).filter((d): d is Date => !!d);
+    if (tos.length) {
+      const leave = new Date(Math.max(...tos.map((d) => d.getTime())));
+      if (!guard.leaveDate || guard.leaveDate.getTime() !== leave.getTime()) plan.leave = leave;
+    }
+  }
+  return plan;
 }
 
-async function syncLegacyStaffNoColumnsInner(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean }): Promise<void> {
+/**
+ * EMP-P3：人卡 `guards.hire_date`／`leave_date` 變成由工號卡算返嚟嘅鏡像（同 `syncLegacyStaffNoColumns` 一樣喺同一 tx 內）；規則見 `planEmploymentMirror`。
+ * `employment_type` 唔郁。範圍收窄（安全閥）：只睇長工體系（staff_schemes.is_longterm，出廠 MG）卡；人冇長工體系卡就完全唔鏡像（避免繞過長工入職日期閘）。
+ * 結果同原值不同就寫 audit（guards update，同一 tx，actor＝觸發者）。warnings 回傳俾 caller 顯示（API additive）。
+ */
+export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, opts?: { actorUserId?: string | null }): Promise<{ changed: boolean; warnings: string[] }> {
+  const rows = await tx.guardStaffNumber.findMany({ where: { guardId }, select: { id: true, scheme: true, status: true, validFrom: true, validTo: true, endReason: true, predecessorId: true } });
+  const schemes = await loadStaffSchemes(tx);
+  const cards = rows.filter((c) => schemes.get(c.scheme)?.isLongterm) as PeriodCard[];
+  if (cards.length === 0) return { changed: false, warnings: [] };
+  const before = await tx.guard.findUnique({ where: { id: guardId } });
+  if (!before) return { changed: false, warnings: [] };
+  const plan = planEmploymentMirror(before, cards);
+  const data: Prisma.GuardUpdateInput = {};
+  if (plan.hire !== undefined) data.hireDate = plan.hire;
+  if (plan.leave !== undefined) data.leaveDate = plan.leave;
+  if (Object.keys(data).length === 0) return { changed: false, warnings: plan.warnings };
+  const after = await tx.guard.update({ where: { id: guardId }, data });
+  await writeAuditTx(tx, { actorUserId: opts?.actorUserId ?? null, tableName: "guards", rowId: guardId, action: "update", before, after: { ...after, auto_source: "staff_number_mirror" }, ip: null });
+  return { changed: true, warnings: plan.warnings };
+}
+
+async function syncLegacyStaffNoColumnsInner(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean; actorUserId?: string | null }): Promise<void> {
   const allRows = await tx.guardStaffNumber.findMany({ where: { guardId } });
   const hasUHistory = allRows.some((r) => r.scheme === "U");
   const hasMgOrMwHistory = allRows.some((r) => r.scheme === "MG" || r.scheme === "MW");

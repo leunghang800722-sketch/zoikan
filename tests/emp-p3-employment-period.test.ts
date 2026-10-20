@@ -76,7 +76,13 @@ describe("resolveLongtermPeriod（純函數）", () => {
     const p = resolveLongtermPeriod(g(D(1, 1, 2020), D(3, 31)), [first, second], OCT);
     expect(p.rehire).toBe(true);
     expect([iso(p.start), p.end, p.chainCardIds]).toEqual(["2026-09-15", null, ["b"]]);
-    expect(p.warnings).toEqual([{ code: "rehire_detected", guardId: "G1", cardDate: "2026-09-15", guardDate: "2026-03-31" }]);
+    expect(p.warnings).toEqual([{ code: "rehire_detected", guardId: "G1", basis: "chain", cardDate: "2026-09-15", guardDate: "2026-03-31" }]);
+    // M2（EMP-P3.1）：人卡 leave_date 已被鏡像清走（null）都照樣由卡鏈判斷到再入職
+    const cleared = resolveLongtermPeriod(g(D(1, 1, 2020), null), [first, second], OCT);
+    expect([cleared.rehire, iso(cleared.start), cleared.end, cleared.warnings.map((w) => w.basis)]).toEqual([true, "2026-09-15", null, ["chain"]]);
+    // 只靠人卡舊離職日（冇更早卡鏈）＝fallback 判斷，basis=guard_leave
+    const fb = resolveLongtermPeriod(g(D(1, 1, 2020), D(3, 31)), [second], OCT);
+    expect([fb.rehire, fb.warnings.map((w) => w.basis)]).toEqual([true, ["guard_leave"]]);
     // 揀鏈：9 月（生效前）仍讀人卡；2026-03 之前嘅月份（假設生效後）揀返第一條鏈
     expect(resolveLongtermPeriod(g(D(1, 1, 2020), D(3, 31)), [first, second], D(3, 1, 2027)).chainCardIds).toEqual(["b"]);
   });
@@ -121,29 +127,20 @@ describe("aggregate 改讀 MG 卡日期（2026-10 起）", () => {
     expect(sep.warnings.some((w) => w.includes("card_guard_date_mismatch"))).toBe(false);
   });
 
-  it("再入職：舊 leave_date 3/31 未清、第二段 9/15 起——10 月出糧（唔再跳過），workDays 正確，病假年假以 0 開局；9 月（生效前）照舊跳過但有 rehire_suspected 警告", async () => {
-    const b = await base();
-    const g1 = await guard("測試再入職", D(1, 1, 2020), D(3, 31));
-    await contract(b, g1.id, D(1, 1, 2020), D(3, 31));
-    await contract(b, g1.id, D(9, 15));
-    await mg(g1.id, "MG90611", { status: "former", validFrom: D(1, 1, 2020), validTo: D(3, 31), endReason: "resigned" });
-    await mg(g1.id, "MG90612", { validFrom: D(9, 15) });
-    // 上一段聘用留低嘅結餘（asOf 3 月，已放病假 4 日／年假 3 日）
-    await prisma.guardLeaveBalance.create({ data: { guardId: g1.id, year: 2026, slAccrued: 10, slTaken: 4, alTaken: 3, asOfMonth: D(3, 1), alTakenOpening: 3, slTakenOpening: 4 } });
-    await shifts(b, g1.id, 10, 1, 20);
-    await shifts(b, g1.id, 9, 15, 20);
-    const oct = await buildLongtermPayrollInputs(OCT);
-    const line = oct.lines.find((l) => l.guardId === g1.id)!;
-    expect(line).toBeDefined(); // 以前整行跳過
-    expect(line.workDays).toBe(20);
-    expect(line.netBasic).toBe(15500);
-    expect(line.leaveBalanceWriteback).toMatchObject({ slOpeningUsed: 0, alOpeningUsed: 0 });
-    expect(line.notes.some((n) => n.includes("再入職新聘用段"))).toBe(true);
-    expect(oct.warnings.some((w) => w.includes("[rehire_detected]") && w.includes(g1.id))).toBe(true);
-    // 9 月（生效前）：舊邏輯——employStart 9/15 > employEnd(leave 3/31) → 跳過；只加警告，唔改數字
-    const sep = await buildLongtermPayrollInputs(SEP);
-    expect(sep.lines.find((l) => l.guardId === g1.id)).toBeUndefined();
-    expect(sep.warnings.some((w) => w.includes("[rehire_suspected]") && w.includes(g1.id))).toBe(true);
+});
+
+describe("resolveLongtermPeriod 專用警告（EMP-P3.1 S1／S2）", () => {
+  it("S1 同月兩段聘用：舊段 resigned 同新段起點都喺本月 → two_segments_in_month（舊段未計）", () => {
+    const a = card("a", { status: "former", validFrom: D(1, 1, 2020), validTo: D(10, 10), endReason: "resigned" });
+    const b = card("b", { validFrom: D(10, 20) });
+    const p = resolveLongtermPeriod(g(null, null), [a, b], OCT);
+    expect(p.warnings.map((w) => w.code)).toEqual(["rehire_detected", "two_segments_in_month"]);
+    expect(p.warnings[1]).toMatchObject({ cardDate: "2026-10-20", guardDate: "2026-10-10" });
+    expect(iso(p.start)).toBe("2026-10-20");
+  });
+  it("S2 選中鏈起點遲過月尾 → segment_starts_after_month", () => {
+    const p = resolveLongtermPeriod(g(null, null), [card("a", { validFrom: D(11, 5) })], OCT);
+    expect(p.warnings.map((w) => w.code)).toEqual(["segment_starts_after_month"]);
   });
 });
 
@@ -166,11 +163,18 @@ describe("對拍腳本 longterm-card-dates-diff（只讀）", () => {
     await mg(rehire.id, "MG90704", { status: "former", validFrom: D(1, 1, 2020), validTo: D(3, 31), endReason: "resigned" });
     await mg(rehire.id, "MG90705", { validFrom: D(9, 15) });
     const nocard = await mkG("測試無卡", D(5, 5, 2025));
+    const late = await mkG("測試遲起點", D(11, 5));
+    await mg(late.id, "MG90706", { validFrom: D(11, 5) });
     const before = await prisma.guard.findMany({ orderBy: { id: "asc" }, select: { id: true, hireDate: true, leaveDate: true } });
     const out = await diffLongtermCardDates(D(11, 1));
     const k = (id: string) => out.rows.find((r) => r.guard_id === id)!.klass;
-    expect([k(same.id), k(nodates.id), k(mism.id), k(rehire.id), k(nocard.id)]).toEqual(["consistent", "card_no_dates", "mismatch", "rehire_suspected", "no_mg_card"]);
-    expect(out.counts).toEqual({ consistent: 1, card_no_dates: 1, mismatch: 1, rehire_suspected: 1, no_mg_card: 1 });
+    expect([k(same.id), k(nodates.id), k(mism.id), k(rehire.id), k(nocard.id), k(late.id)]).toEqual(["consistent", "card_no_dates", "mismatch", "rehire_suspected", "no_mg_card", "consistent"]);
+    expect(out.counts).toEqual({ consistent: 2, card_no_dates: 1, mismatch: 1, rehire_suspected: 1, no_mg_card: 1 });
+    // EMP-P3.1 S4：兩類獨立清單，各列 guardId 同前後日期
+    expect(out.start_after_effective).toEqual([{ guard_id: late.id, card_start: "2026-11-05", effective_from: "2026-10-01" }]);
+    expect(out.mirror_would_change.map((r) => r.guard_id).sort()).toEqual([mism.id, rehire.id].sort());
+    expect(out.mirror_would_change.find((r) => r.guard_id === mism.id)).toMatchObject({ hire_before: "2025-03-03", hire_after: "2025-03-05" });
+    expect(out.mirror_would_change.find((r) => r.guard_id === rehire.id)).toMatchObject({ leave_before: "2026-03-31", leave_after: null, hints: ["stale_leave_date_cleared"] });
     expect(Object.keys(out.rows[0]!).sort()).toEqual(["card_end", "card_start", "chain_card_ids", "guard_hire", "guard_id", "guard_leave", "klass"]);
     expect(await prisma.guard.findMany({ orderBy: { id: "asc" }, select: { id: true, hireDate: true, leaveDate: true } })).toEqual(before); // 只讀
   });

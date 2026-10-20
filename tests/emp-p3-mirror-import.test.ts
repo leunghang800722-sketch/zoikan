@@ -5,77 +5,99 @@ import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { POST as cardCreate } from "@/app/api/guards/[id]/staff-numbers/route";
 import { PATCH as cardPatch } from "@/app/api/guards/[id]/staff-numbers/[numberId]/route";
-import { syncLegacyGuardEmploymentColumns } from "@/lib/guards/staff-numbers";
+import { PATCH as guardPatch } from "@/app/api/guards/[id]/route";
 import { importMaxwellContracts } from "@/lib/longterm-payroll/import-service";
 import { heldAll, isLongtermStaffHireKey } from "@/lib/guards/import/ext";
 
 const D = (s: string) => new Date(`${s}T00:00:00.000Z`);
 const dayOf = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
-const sync = (guardId: string) => prisma.$transaction((tx) => syncLegacyGuardEmploymentColumns(tx, guardId));
 
-describe("EMP-P3 鏡像 syncLegacyGuardEmploymentColumns", () => {
+describe("EMP-P3 鏡像（經真實寫入路徑 POST／PATCH／換號）", () => {
   let fx: Wp2Fixture;
+  let cookie: string;
+  const url = (g: string) => `http://test.local/api/guards/${g}/staff-numbers`;
+  const post = (g: string, body: unknown) => cardCreate(new Request(url(g), { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id: g }) });
+  const patch = (g: string, id: string, body: unknown) => cardPatch(new Request(`${url(g)}/${id}`, { method: "PATCH", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id: g, numberId: id }) });
+  const gOf = (id: string) => prisma.guard.findUniqueOrThrow({ where: { id } });
   beforeEach(async () => {
     await clearAll();
     fx = await seedWp2Fixture();
+    cookie = await sessionCookieForUser(fx.userIds["老闆"]);
     await prisma.staffScheme.upsert({ where: { code: "MG" }, update: { isLongterm: true }, create: { code: "MG", labelZh: "MG", isLongterm: true, isFrontline: false, sort: 3 } });
   });
-  const mk = (over: Record<string, unknown>) => prisma.guardStaffNumber.create({ data: { guardId: fx.guardA.id, scheme: "MG", number: `MG9${Math.floor(1000 + Math.random() * 8999)}`, status: "current", ...over } as never });
 
-  it("(1) hire_date＝長工體系卡最早 valid_from（冇卡有 valid_from 就保留原值）", async () => {
-    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { hireDate: D("2019-05-05") } });
-    await mk({ status: "former" });
-    expect((await sync(fx.guardA.id)).changed).toBe(false); // 卡冇任何日期：完全唔郁
-    await mk({ status: "former", validFrom: D("2021-03-03"), validTo: D("2022-02-02"), endReason: "resigned" });
-    await mk({ validFrom: D("2020-01-01") });
-    expect((await sync(fx.guardA.id)).changed).toBe(true);
-    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).hireDate)).toBe("2020-01-01");
+  it("T1 hire_date 只由鏈頭 valid_from 決定：開新鏈鏈頭有日期 → 寫入；冇日期卡完全唔郁；散工 U 卡唔鏡像", async () => {
+    const g = fx.guardA.id;
+    await prisma.guard.update({ where: { id: g }, data: { hireDate: D("2019-05-05"), employmentType: "cash_casual" } });
+    await post(g, { scheme: "U", number: "U99701", valid_from: "2018-01-01" }); // 散工卡：唔鏡像
+    expect(dayOf((await gOf(g)).hireDate)).toBe("2019-05-05");
+    await post(g, { scheme: "MG", number: "MG99702" }); // 無日期：唔郁
+    expect(dayOf((await gOf(g)).hireDate)).toBe("2019-05-05");
+    const first = (await (await post(g, { scheme: "MG", number: "MG99703", status: "former", valid_from: "2021-03-03", valid_to: "2022-02-02", end_reason: "resigned" })).json()) as { id: string };
+    void first; // 仍然有一條無日期鏈頭（MG99702）→ ambiguous → 唔郁
+    expect(dayOf((await gOf(g)).hireDate)).toBe("2019-05-05");
+    expect((await gOf(g)).employmentType).toBe("cash_casual");
   });
 
-  it("(2) leave_date：長工體系卡全部 former → 最遲 valid_to；有任何 current → null；全部 former 但冇 valid_to → 保留原值", async () => {
-    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { leaveDate: D("2020-12-31") } });
-    const a = await mk({ status: "former", validFrom: D("2020-01-01"), validTo: D("2021-06-30"), endReason: "resigned" });
-    await sync(fx.guardA.id);
-    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).leaveDate)).toBe("2021-06-30");
-    const b = await mk({ validFrom: D("2022-01-01") }); // 再入職：current
-    await sync(fx.guardA.id);
-    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).leaveDate).toBeNull();
-    await prisma.guardStaffNumber.update({ where: { id: b.id }, data: { status: "former", validTo: D("2023-03-03"), endReason: "resigned" } });
-    await sync(fx.guardA.id);
-    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).leaveDate)).toBe("2023-03-03");
-    void a;
-    // 全部 former 但冇 valid_to（舊資料）→ 保留
-    await clearAll();
-    fx = await seedWp2Fixture();
-    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { leaveDate: D("2020-12-31") } });
-    await mk({ status: "former", validFrom: D("2020-01-01"), validTo: null, endReason: "cancelled" });
-    await sync(fx.guardA.id);
-    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).leaveDate)).toBe("2020-12-31");
+  it("T2 換號新卡（有 predecessor）永遠唔參與入職日：舊卡冇日期＋換號新卡有 valid_from → hire_date 不變", async () => {
+    const g = fx.guardB.id;
+    await prisma.guard.update({ where: { id: g }, data: { hireDate: D("2025-03-03") } });
+    await prisma.guardStaffNumber.create({ data: { guardId: g, scheme: "MG", number: "MG99711", status: "current" } }); // 生產常見：只抄咗號碼冇日期
+    const res = await post(g, { scheme: "MG", number: "MG99712", valid_from: "2026-10-15", replaces_current: true });
+    expect(res.status).toBe(201);
+    expect(dayOf((await gOf(g)).hireDate)).toBe("2025-03-03");
+    const nc = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { number: "MG99712" } });
+    expect(nc.predecessorId).not.toBeNull();
   });
 
-  it("(3) employment_type 唔郁；只有散工卡（U）完全唔鏡像；結果有變先寫 audit，冇變唔寫", async () => {
-    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { employmentType: "cash_casual" } });
-    await prisma.guardStaffNumber.create({ data: { guardId: fx.guardA.id, scheme: "U", number: "U99701", status: "current", validFrom: D("2018-01-01") } });
-    expect((await sync(fx.guardA.id)).changed).toBe(false); // 無長工體系卡
-    await mk({ validFrom: D("2020-01-01") });
-    const auditBefore = await prisma.auditLog.count({ where: { tableName: "guards", rowId: fx.guardA.id } });
-    expect((await sync(fx.guardA.id)).changed).toBe(true);
-    expect(await prisma.auditLog.count({ where: { tableName: "guards", rowId: fx.guardA.id } })).toBe(auditBefore + 1);
-    expect((await sync(fx.guardA.id)).changed).toBe(false); // 再 sync：冇變 → 冇新 audit
-    expect(await prisma.auditLog.count({ where: { tableName: "guards", rowId: fx.guardA.id } })).toBe(auditBefore + 1);
-    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).employmentType).toBe("cash_casual");
+  it("T3 鏈頭有日期 → 取鏈頭；換號後鏈頭日期仍然係入職日（換號新卡日期唔改寫）", async () => {
+    const g = fx.guardB.id;
+    const first = (await (await post(g, { scheme: "MG", number: "MG99721", valid_from: "2020-01-01" })).json()) as { id: string };
+    void first;
+    expect(dayOf((await gOf(g)).hireDate)).toBe("2020-01-01");
+    await post(g, { scheme: "MG", number: "MG99722", valid_from: "2026-10-15", replaces_current: true });
+    expect(dayOf((await gOf(g)).hireDate)).toBe("2020-01-01");
   });
 
-  it("工號卡寫入路徑（POST／PATCH）自動鏡像", async () => {
-    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
-    const url = `http://test.local/api/guards/${fx.guardB.id}/staff-numbers`;
-    const post = (body: unknown) => cardCreate(new Request(url, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id: fx.guardB.id }) });
-    const res = await post({ scheme: "MG", number: "MG99801", valid_from: "2025-05-05" });
-    const card = (await res.json()) as { id: string };
-    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardB.id } })).hireDate)).toBe("2025-05-05");
-    const patch = await cardPatch(new Request(`${url}/${card.id}`, { method: "PATCH", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ status: "former", valid_to: "2026-02-02", end_reason: "resigned" }) }), { params: Promise.resolve({ id: fx.guardB.id, numberId: card.id }) });
-    expect(patch.status).toBe(200);
-    expect(dayOf((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardB.id } })).leaveDate)).toBe("2026-02-02");
+  it("T4 leave_date 全部 former → 最遲 valid_to；再入職開新卡（current，valid_from 遲過舊離職日）→ 清走舊段殘留；結束新卡 → 新離職日", async () => {
+    const g = fx.guardA.id;
+    const a = (await (await post(g, { scheme: "MG", number: "MG99731", valid_from: "2020-01-01" })).json()) as { id: string };
+    const ended = await patch(g, a.id, { status: "former", valid_to: "2021-06-30", end_reason: "resigned" });
+    expect(ended.status).toBe(200);
+    expect(dayOf((await gOf(g)).leaveDate)).toBe("2021-06-30");
+    const b = await post(g, { scheme: "MG", number: "MG99732", valid_from: "2022-01-01" });
+    expect(b.status).toBe(201);
+    expect((await gOf(g)).leaveDate).toBeNull();
+    const bj = (await b.json()) as { id: string; employment_warnings?: string[] };
+    expect(bj.employment_warnings?.[0]).toContain("stale_leave_date_cleared");
+    const audit = await prisma.auditLog.findFirst({ where: { tableName: "guards", rowId: g, action: "update" }, orderBy: { createdAt: "desc" } });
+    expect(audit!.actorUserId).toBe(fx.userIds["老闆"]); // S3：鏡像 audit 帶觸發者
+    await patch(g, bj.id, { status: "former", valid_to: "2023-03-03", end_reason: "resigned" });
+    expect(dayOf((await gOf(g)).leaveDate)).toBe("2023-03-03");
+  });
+
+  it("M4a 人卡 leave_date 遲過現行 MG 卡 valid_from（真係離職）→ 之後任何工號卡寫入都唔清走，並出提示「請用結束卡流程」", async () => {
+    const g = fx.guardB.id;
+    await post(g, { scheme: "MG", number: "MG99741", valid_from: "2020-01-01" });
+    await prisma.guard.update({ where: { id: g }, data: { leaveDate: D("2026-12-31") } }); // 老闆喺人卡表格填咗離職日
+    const r = await post(g, { scheme: "U", number: "U99742" }); // 之後任何工號卡寫入（例如加 U 卡）
+    expect(r.status).toBe(201);
+    expect(dayOf((await gOf(g)).leaveDate)).toBe("2026-12-31");
+    expect(((await r.json()) as { employment_warnings?: string[] }).employment_warnings?.[0]).toContain("leave_date_vs_current_card");
+  });
+
+  it("M4b 人卡 PATCH 改 hire_date／leave_date：有帶日期嘅 current MG 卡 → 409 use_staff_number_card；值冇變、冇 MG 卡、卡冇日期 → 照舊接受", async () => {
+    const g = fx.guardB.id;
+    const patchGuard = (id: string, body: unknown) => guardPatch(new Request(`http://test.local/api/guards/${id}`, { method: "PATCH", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id }) });
+    expect((await patchGuard(g, { leave_date: "2026-12-31" })).status).toBe(200); // 冇 MG 卡
+    await prisma.guardStaffNumber.create({ data: { guardId: g, scheme: "MG", number: "MG99751", status: "current" } });
+    expect((await patchGuard(g, { hire_date: "2024-04-04" })).status).toBe(200); // 卡冇日期
+    await prisma.guardStaffNumber.updateMany({ where: { guardId: g }, data: { validFrom: D("2020-01-01") } });
+    const blocked = await patchGuard(g, { leave_date: "2027-01-01" });
+    expect(blocked.status).toBe(409);
+    expect(((await blocked.json()) as { error: string }).error).toBe("use_staff_number_card");
+    expect((await patchGuard(g, { hire_date: "2024-04-04", leave_date: "2026-12-31" })).status).toBe(200); // 值冇變（成個 form 一齊送）
+    expect(dayOf((await gOf(g)).leaveDate)).toBe("2026-12-31");
   });
 });
 

@@ -14,6 +14,7 @@ import { writeAuditTx } from "@/lib/audit";
 import { assertMonthRangeNotLockedTx } from "@/lib/month-lock";
 import { ApiError } from "@/lib/api/errors";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns, schemeFromNumber, normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
+import { continuousChainStart } from "./aggregate";
 import { parseMaxwellWorkbook, parseMaxwellCsv, matchMaxwellRows, type MaxwellStaffRow, type GuardCandidate, type ParsedMaxwellWorkbook, type MaxwellCsvFile } from "./maxwell-import";
 
 export interface MaxwellImportSummary {
@@ -228,9 +229,24 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
       const lastDay = row.status === "left" && row.lastDay ? isoToDate(row.lastDay) : null;
       const isMgRow = !!mwRaw && STAFF_NUMBER_NUMBER_RE.test(mwRaw) && schemeFromNumber(mwRaw) === "MG";
       let mgDatedByImport = false;
+      let leaverStale = false;
       if (isMgRow) {
         const mgCards = await tx.guardStaffNumber.findMany({ where: { guardId: guard.id, scheme: "MG" }, orderBy: { createdAt: "asc" } });
         const currentMg = mgCards.find((c) => c.status === "current") ?? null;
+        // EMP-P3.1：離職名單嘅最後一日（或導入入職日）早過「將被結束嗰張卡 valid_from」「人卡 hire_date」「現行合約鏈起點」任何一個＝屬於上一段聘用（再入職者），
+        // 唔結束張卡，加 summary 警告 leaver_date_before_segment（guardId＋日期），交人手處理。
+        let closeDay: Date | null = lastDay;
+        if (lastDay) {
+          const segs = await tx.guardLongtermContract.findMany({ where: { guardId: guard.id, voidedAt: null }, select: { effectiveFrom: true, effectiveTo: true }, orderBy: { effectiveFrom: "asc" } });
+          const chainStart = continuousChainStart(segs.map((c) => ({ effectiveFrom: c.effectiveFrom, effectiveTo: c.effectiveTo })), new Date());
+          const refs = [currentMg?.validFrom ?? null, guard.hireDate, chainStart ?? null].filter((d): d is Date => !!d);
+          const hit = refs.find((r) => lastDay.getTime() < r.getTime() || (!!commence && commence.getTime() < r.getTime()));
+          if (hit) {
+            summary.warnings.push(`[leaver_date_before_segment] guardId=${guard.id} lastDay=${lastDay.toISOString().slice(0, 10)} segmentRef=${hit.toISOString().slice(0, 10)}：離職日（或導入入職日）早過現行聘用段起點，屬上一段聘用，唔結束 MG 卡`);
+            closeDay = null;
+            leaverStale = true;
+          }
+        }
         const taken = await tx.guardStaffNumber.findUnique({ where: { number: mwRaw }, select: { id: true, guardId: true } });
         if (!currentMg) {
           const lastTo = mgCards.reduce<Date | null>((m, c) => (c.validTo && (!m || c.validTo.getTime() > m.getTime()) ? c.validTo : m), null);
@@ -248,19 +264,19 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
                 source: "import:maxwell",
                 createdBy: actorUserId,
                 validFrom: commence,
-                ...(lastDay && (!commence || lastDay.getTime() >= commence.getTime()) ? { status: "former" as const, validTo: lastDay, endReason: "resigned" as const } : {}),
+                ...(closeDay && (!commence || closeDay.getTime() >= commence.getTime()) ? { status: "former" as const, validTo: closeDay, endReason: "resigned" as const } : {}),
               });
-              await syncLegacyStaffNoColumns(tx, guard.id);
+              await syncLegacyStaffNoColumns(tx, guard.id, { actorUserId });
               summary.filled_staff_no_mw += 1;
-              mgDatedByImport = !!commence || !!lastDay;
+              mgDatedByImport = !!commence || !!closeDay;
             } catch (e) {
               if (!(e instanceof ApiError)) throw e;
               summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：開 MG 卡失敗（${e.message}）`);
             }
           }
-        } else if (lastDay && !currentMg.validTo && (!currentMg.validFrom || lastDay.getTime() >= currentMg.validFrom.getTime())) {
-          await tx.guardStaffNumber.update({ where: { id: currentMg.id }, data: { status: "former", validTo: lastDay, endReason: "resigned" } });
-          await syncLegacyStaffNoColumns(tx, guard.id);
+        } else if (closeDay && !currentMg.validTo && (!currentMg.validFrom || closeDay.getTime() >= currentMg.validFrom.getTime())) {
+          await tx.guardStaffNumber.update({ where: { id: currentMg.id }, data: { status: "former", validTo: closeDay, endReason: "resigned" } });
+          await syncLegacyStaffNoColumns(tx, guard.id, { actorUserId });
           mgDatedByImport = true;
         }
       } else if (!guard.staffNoMw && mwRaw && STAFF_NUMBER_NUMBER_RE.test(mwRaw) && schemeFromNumber(mwRaw) === "MW") {
@@ -269,7 +285,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
         const taken = await tx.guardStaffNumber.findUnique({ where: { number: mwRaw }, select: { id: true } });
         if (existingMw === 0 && !taken) {
           await upsertCurrentStaffNumber(tx, { guardId: guard.id, scheme: "MW", number: mwRaw, source: "import:maxwell", createdBy: actorUserId });
-          await syncLegacyStaffNoColumns(tx, guard.id);
+          await syncLegacyStaffNoColumns(tx, guard.id, { actorUserId });
           summary.filled_staff_no_mw += 1;
         } else if (taken) {
           summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：Maxwell 工號 ${mwRaw} 已經掛喺另一個保安員，唔補工號`);
@@ -279,7 +295,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
       if (!mgDatedByImport) {
         const fill: Prisma.GuardUpdateInput = {};
         if (!guard.hireDate && commence) fill.hireDate = commence;
-        if (!guard.leaveDate && lastDay) fill.leaveDate = lastDay;
+        if (!guard.leaveDate && lastDay && !leaverStale) fill.leaveDate = lastDay;
         if (Object.keys(fill).length && !(await hasDatedLongtermCard(tx, guard.id))) {
           await tx.guard.update({ where: { id: guard.id }, data: fill });
           summary.guardFieldsFilled += 1;

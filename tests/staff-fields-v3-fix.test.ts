@@ -393,11 +393,11 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
     });
     it("EMP-P3：長工體系（MG）工號卡入職日期同人層面 hireDate 一樣被長工入職閘擋（held），valid_from 同人卡 hire_date 都冇被批量寫；U 工號照寫", async () => {
       const lt = await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), employmentType: "longterm_autopay" });
-      const r = await applyPkg(owner, pkg3([person({ nos: [{ n: "MG66001", hire: "2020-01-02" }, { n: "U66002", hire: "2020-01-03" }] })]));
+      const r = await applyPkg(owner, pkg3([person({ nos: [{ n: "MG96001", hire: "2020-01-02" }, { n: "U96002", hire: "2020-01-03" }] })]));
       const o = outs(r.body.results[0].ext);
-      expect(o["staffHire.MG66001"]).toBe("held");
-      expect(o["staffHire.U66002"]).toBe("written");
-      const mg = await prisma.guardStaffNumber.findUnique({ where: { number: "MG66001" } });
+      expect(o["staffHire.MG96001"]).toBe("held");
+      expect(o["staffHire.U96002"]).toBe("written");
+      const mg = await prisma.guardStaffNumber.findUnique({ where: { number: "MG96001" } });
       expect(mg?.validFrom ?? null).toBeNull();
       expect((await prisma.guard.findUniqueOrThrow({ where: { id: lt.id } })).hireDate).toBeNull();
     });

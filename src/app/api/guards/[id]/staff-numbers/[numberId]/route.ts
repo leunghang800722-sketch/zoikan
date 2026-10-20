@@ -9,6 +9,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toGuardStaffNumberDTO } from "@/lib/api/dto";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
+import { brandSafeResponse } from "@/lib/api/serialize";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { GuardStaffNumberUpdateSchema } from "@/lib/api/schemas";
@@ -31,7 +32,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const body = await readJson(req);
     const parsed = parseBody(GuardStaffNumberUpdateSchema, body);
 
-    const { before, after } = await prisma.$transaction(async (tx) => {
+    const { before, after, warnings } = await prisma.$transaction(async (tx) => {
       const row = await tx.guardStaffNumber.findFirst({ where: { id: numberId, guardId: id } });
       if (!row) throw NotFound("搵唔到呢個員工編號");
 
@@ -99,12 +100,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       if (parsed.note !== undefined) data.note = parsed.note;
 
       if (Object.keys(data).length === 0) {
-        return { before: row as GuardStaffNumber, after: row as GuardStaffNumber };
+        return { before: row as GuardStaffNumber, after: row as GuardStaffNumber, warnings: [] as string[] };
       }
 
       const updated = await tx.guardStaffNumber.update({ where: { id: row.id }, data });
-      await syncLegacyStaffNoColumns(tx, id, { revealConflictGuardId: isInternalRole(session) });
-      return { before: row as GuardStaffNumber, after: updated };
+      const sync = await syncLegacyStaffNoColumns(tx, id, { revealConflictGuardId: isInternalRole(session), actorUserId: session.userId });
+      return { before: row as GuardStaffNumber, after: updated, warnings: sync.employmentWarnings };
     });
 
     if (before !== after) {
@@ -118,6 +119,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         ip: getClientIp(req),
       });
     }
-    return ok(toGuardStaffNumberDTO(after));
+    return ok(brandSafeResponse({ ...toGuardStaffNumberDTO(after), ...(warnings.length ? { employmentWarnings: warnings } : {}) }));
   });
 }
