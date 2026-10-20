@@ -131,15 +131,15 @@ describe("HIST-1 leave-opening 腳本（DB）", () => {
     const row = dry.rows[0]!;
     expect(row.action).toBe("merge");
     expect(row.existing).toMatchObject({ alTaken: 1, slTaken: 2, alTakenOpening: 0, slTakenOpening: 1, asOfMonth: "2026-09-01" });
-    expect(row.computed).toMatchObject({ alTaken: 3, slTaken: 5, alTakenOpening: 1, slTakenOpening: 4, asOfMonth: "2026-09-01" });
+    expect(row.computed).toMatchObject({ alTaken: 3, slTaken: 5, alTakenOpening: 2, slTakenOpening: 4, asOfMonth: "2026-09-01" }); // 四個欄位加同一個增量（歷史全部喺現有行起算之前）
     expect(row.diffs.alTaken).toEqual([1, 3]);
     const get = () => prisma.guardLeaveBalance.findUniqueOrThrow({ where: { guardId_year: { guardId: g.id, year: 2026 } } });
     expect(Number((await get()).alTaken)).toBe(1); // dry-run 唔寫
     const ap = await leaveOpeningFromRosters({ asOf: JUN, apply: true, mergeIntoExisting: true });
     expect(ap.counts.merge).toBe(1);
     const after = await get();
-    expect([Number(after.alTaken), Number(after.slTaken), Number(after.alTakenOpening), Number(after.slTakenOpening), after.asOfMonth!.toISOString().slice(0, 10)]).toEqual([3, 5, 1, 4, "2026-09-01"]);
-    expect(Number(after.slAccrued)).toBe(40); // 入職 2025-01-01 至 2026-09-30＝20 個月，9 月仍用舊口徑每月 2 日（生效日 10-01 前）
+    expect([Number(after.alTaken), Number(after.slTaken), Number(after.alTakenOpening), Number(after.slTakenOpening), after.asOfMonth!.toISOString().slice(0, 10)]).toEqual([3, 5, 2, 4, "2026-09-01"]);
+    expect(Number(after.slAccrued)).toBe(50); // 歷史段條例口徑：入職 2025-01-01 至 2026-06-30＝17 個月＝12×2＋5×4＝44；6 月之後至 9 月月尾 3 個月按舊口徑每月 2 日＝+6
     expect(await prisma.auditLog.count({ where: { action: "backfill_leave_opening_merge", rowId: g.id } })).toBe(1);
     const again = await leaveOpeningFromRosters({ asOf: JUN, apply: true, mergeIntoExisting: true });
     expect(again.counts).toMatchObject({ merge: 0, already_merged: 1 });
@@ -155,5 +155,31 @@ describe("HIST-1 leave-opening 腳本（DB）", () => {
     const r = await leaveOpeningFromRosters({ asOf: JUN, apply: true, recomputeSameAsOf: true });
     expect(r.rows[0]!.action).toBe("update");
     expect(Number((await prisma.guardLeaveBalance.findUniqueOrThrow({ where: { guardId_year: { guardId: g.id, year: 2026 } } })).alTaken)).toBe(2);
+  });
+
+  it("HIST-1.2：增量合併——先 as-of 05 再 as-of 06 → 5 月只加一次；同／較早 as-of 再跑 already_merged；as-of ≥ 2026-07 拒絕", async () => {
+    const g = await mkLt("測試甲", D(2025, 1, 1), "MG99923");
+    await leave(g.id, D(2026, 5, 10), "AL");
+    await leave(g.id, D(2026, 6, 15), "AL");
+    await prisma.guardLeaveBalance.create({ data: { guardId: g.id, year: 2026, alTaken: 1, alTakenOpening: 0, asOfMonth: D(2026, 9, 1) } });
+    const get = async () => {
+      const r = await prisma.guardLeaveBalance.findUniqueOrThrow({ where: { guardId_year: { guardId: g.id, year: 2026 } } });
+      return [Number(r.alTaken), Number(r.alTakenOpening)];
+    };
+    const MAY = D(2026, 5, 1);
+    expect((await leaveOpeningFromRosters({ asOf: MAY, apply: true, mergeIntoExisting: true })).counts.merge).toBe(1);
+    expect(await get()).toEqual([2, 1]);
+    expect((await leaveOpeningFromRosters({ asOf: JUN, apply: true, mergeIntoExisting: true })).counts.merge).toBe(1);
+    expect(await get()).toEqual([3, 2]); // 5 月只加一次（唔係 1＋1＋2＝4）
+    for (const asOf of [MAY, JUN, D(2026, 4, 1)]) {
+      const r = await leaveOpeningFromRosters({ asOf, apply: true, mergeIntoExisting: true });
+      expect(r.counts, asOf.toISOString()).toMatchObject({ merge: 0, already_merged: 1 });
+    }
+    expect(await get()).toEqual([3, 2]);
+    expect(await prisma.auditLog.count({ where: { action: "backfill_leave_opening_merge", rowId: g.id } })).toBe(2);
+    await expect(leaveOpeningFromRosters({ asOf: D(2026, 8, 1), apply: false, mergeIntoExisting: true })).rejects.toThrow(/只可用於 as-of 早過 2026-07/);
+    await expect(leaveOpeningFromRosters({ asOf: D(2026, 7, 1), apply: true, mergeIntoExisting: true })).rejects.toThrow();
+    // 唔用 merge 旗嘅 as-of 08 照常（dry-run 只出 skip）
+    expect((await leaveOpeningFromRosters({ asOf: D(2026, 8, 1), apply: false })).rows[0]!.action).toBe("skip_existing_newer_or_equal");
   });
 });

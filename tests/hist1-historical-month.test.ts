@@ -21,7 +21,6 @@ import { ONE_CLICK_ADVISORY_LOCK_KEY } from "@/lib/month-close/one-click-lock";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 
 const MAY = new Date(Date.UTC(2026, 4, 1));
-const may = (d: number) => new Date(Date.UTC(2026, 4, d));
 const jsonReq = (url: string, cookie: string, body: unknown) => new Request(url, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) });
 
 async function buildXlsx(siteName: string, y: number, m: number): Promise<Buffer> {

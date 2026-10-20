@@ -34,8 +34,8 @@ export const MPF_FIRST_MONTH_RULE_FROM = "2026-09-01";
 // tests/longterm-payroll-compute.test.ts）。
 export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH（舊口徑每月 2 日；條例口徑下係「首 12 個月」每月日數）
 /** HIST-1.1：《僱傭條例》口徑——首 12 個月每月 2 日、之後每月 4 日、累積上限 120 日。 */
-export const SL_ACCRUAL_PER_MONTH_AFTER_12 = 4;
-export const SL_ACCRUAL_FIRST_MONTHS = 12;
+const SL_ACCRUAL_PER_MONTH_AFTER_12 = 4;
+const SL_ACCRUAL_FIRST_MONTHS = 12;
 /** 條例口徑生效日：`asOf` 早過呢日（8／9 月 gate）照舊每月 2 日到頂 120；呢日起（10 月計糧）用條例口徑。 */
 export const SL_ACCRUAL_EFFECTIVE_FROM = new Date(Date.UTC(2026, 9, 1));
 const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲

@@ -551,7 +551,13 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 - **歷史標記限制**：`HIST_MAX_MONTH = 2026-07-01`（`src/lib/month-close/historical.ts`）——只可標**早過** 2026-07-01 嘅月份（7 月起係正式月結月份）。建新行同就地標記兩條路都喺 tx 內攞一鍵結算 advisory lock（`ONE_CLICK_ADVISORY_LOCK_KEY`，同 `POST /api/month-close/one-click` 共用；one-click 開 run 嗰個 tx 拎鎖後再確認唔係歷史月份），並檢查：未鎖、冇一鍵結算 run、冇未作廢長工糧 run（已作廢嘅唔擋）。違反 → 409。
 - **取消標記**：`PATCH /api/month-closes/:id { "historical": false }`（老闆專用，要「月結鎖定解鎖:void」；寫 audit；其他 body 400；本身唔係歷史月份 409）。
-- **結餘合併模式** `--merge-into-existing`：已有較新結餘行（`asOfMonth` > as-of，例如已計 7／8／9 月）嘅人，將 as-of 前歷史累積**加落**現有行嘅 `alTaken`／`slTaken`／`alTakenOpening`／`slTakenOpening`（`slAccrued` 按入職日重算到該行 `asOfMonth` 月尾，`asOfMonth` 不變）。每人合併後寫 audit `backfill_leave_opening_merge`（`row_id`＝guardId，`after.as_of`），再跑查 audit，已合併 → `already_merged`（唔會雙重加）。dry-run 的 `diffs` 列每人前後值。**只影響下一次重算（10 月起）；7／8／9 月已付數字唔郁。因結餘變化，個別 SL 段「有薪／無薪」判斷可能改變——要老闆知。**
+- **結餘合併模式** `--merge-into-existing`：（HIST-1.2 起限 as-of ≤ 2026-06、增量合併，見下）已有較新結餘行（`asOfMonth` > as-of，例如已計 7／8／9 月）嘅人，將 as-of 前歷史累積**加落**現有行嘅 `alTaken`／`slTaken`／`alTakenOpening`／`slTakenOpening`（`slAccrued` 按入職日重算到該行 `asOfMonth` 月尾，`asOfMonth` 不變）。每人合併後寫 audit `backfill_leave_opening_merge`（`row_id`＝guardId，`after.as_of`），再跑查 audit，已合併 → `already_merged`（唔會雙重加）。dry-run 的 `diffs` 列每人前後值。**只影響下一次重算（10 月起）；7／8／9 月已付數字唔郁。因結餘變化，個別 SL 段「有薪／無薪」判斷可能改變——要老闆知。**
 - `--recompute-same-as-of`：已有行 `asOfMonth` 剛好＝as-of（上次腳本寫嘅）→ 覆蓋重算（補上載咗更多舊更表之後用）。差異清單標籤 `skip_existing_newer` 改名 `skip_existing_newer_or_equal`（asOfMonth ≥ as-of 且無對應旗標）。
 - **SL 累積口徑（《僱傭條例》）**：`compute.ts` `slAccruedStatute`＝做滿 1 個月先儲、**首 12 個月每月 2 日、之後每月 4 日**、累積上限 120。`SL_ACCRUAL_EFFECTIVE_FROM = 2026-10-01`：`slAccrued(入職日, asOf)` 當 `asOf` 早過生效日照舊每月 2 日到頂 120（7／8／9 月已出糧 gate 不變），≥ 生效日用條例口徑。HIST-1 腳本計歷史累積一律用條例口徑（係重建真實結餘）。⚠ 注意：老闆 2026-09-28（WP-BOSS5 決定 4）曾確認「每月累積 2 日」，現按驗收意見改為條例口徑 10 月起生效，請老闆確認。
 - 備註：`tests/emp-p1-backfill.test.ts` 「第一批同第二批之間鎖月」測試 flaky 根因＝回填腳本按 id（隨機 uuid）升序逐批掃所有月份，`--month` 篩選喺掃咗之後先做，第一批可能係其他月份更次（0 寫入）；舊測試固定喺 batch 0 後鎖月，約 1/6 機率 8 月一條都未寫。腳本本身語意正確，已修正測試（8 月寫到第一條後先鎖月）。
+
+### HIST-1.2 補充（合併模式防重複）
+
+- `--merge-into-existing` 只可 **as-of < `HIST_MAX_MONTH`（即 ≤ 2026-06）**；as-of ≥ 2026-07 直接拒絕（錯誤：只可用於 as-of 早過 2026-07）——7 月起嘅更次已經計入現有結餘行，再加會雙重計數。
+- **增量合併**：每個 guard 合併後 audit（`backfill_leave_opening_merge`）記低 `after.as_of` 同當時累積 `cum.al`／`cum.sl`。再跑時：新 as-of 較後 → 只加「上次 as-of 之後至今次 as-of」嘅增量（今次累積 − 上次累積）；新 as-of ≤ 上次 → `already_merged`。例：先 as-of 2026-05 再 as-of 2026-06 → 5 月只加一次。四個欄位（`alTaken`／`slTaken`／`alTakenOpening`／`slTakenOpening`）加同一個增量（歷史全部喺現有行起算月份之前，所以 opening 都加全數而唔係「前一個月」累積）。
+- 合併後 `slAccrued` 口徑：歷史段（入職日至 as-of 月尾）用條例口徑（`slAccruedStatute`），as-of 之後至現有行 `asOfMonth` 月尾按舊口徑每月 2 日（7／8／9 月實際計糧用嘅口徑），按月分段，封頂 120。

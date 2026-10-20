@@ -18,7 +18,11 @@
 //   --recompute-same-as-of：已有行 asOfMonth 剛好＝as-of（上次腳本寫嘅）→ 覆蓋重算（例如之後補上載咗更多舊更表）。
 //   --merge-into-existing（HIST-1.1）：已有較新行（asOfMonth > as-of，例如已計 7／8／9 月）→ 將 as-of 前歷史累積**加落**現有行嘅
 //     alTaken／slTaken／alTakenOpening／slTakenOpening；slAccrued 按入職日重算到該行 asOfMonth 月尾；asOfMonth 不變。
-//     防重複：每個 guard 合併後寫 audit（action=backfill_leave_opening_merge，rowId＝guardId，after.as_of）；再跑查 audit，已合併 → already_merged。
+//     HIST-1.2：只可 as-of < HIST_MAX_MONTH（即 ≤ 2026-06）；否則拒絕（as-of 之後月份屬正式月份，已經計入現有行）。
+//     防重複（增量合併）：每個 guard 合併後寫 audit（action=backfill_leave_opening_merge，rowId＝guardId，after.as_of＋after.cum＝該 as-of 累積 al／sl）；
+//     再跑讀上次已合併嘅 as-of：新 as-of 較後 → 只加「上次 as-of 之後至今次 as-of」嘅增量（今次累積 − 上次累積）；新 as-of ≤ 上次 → already_merged。
+//     例：先 as-of 05 再 as-of 06 → 5 月只加一次。四個欄位（alTaken／slTaken／兩個 opening）加同一個增量（歷史全部喺現有行起算月份之前）。
+//     slAccrued 口徑：歷史段（入職日至 as-of 月尾）用條例口徑（slAccruedStatute）＋as-of 之後至現有行 asOfMonth 月尾按舊口徑每月 2 日（呢段 7／8／9 月實際計糧用嘅口徑），封頂 120。
 //     dry-run 列出每人前後值（diffs）。只影響下一次重算（10 月起）；7／8／9 月已付唔郁。SL 有薪／無薪判斷可能因結餘變而改。
 //   冪等：寫完 asOfMonth＝as-of，再跑唔會再寫。每次 --apply 寫一條 audit summary（action=backfill_leave_opening，只有月份＋計數）。
 import { fileURLToPath } from "node:url";
@@ -28,7 +32,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/lib/db";
 import { writeAudit, writeAuditTx } from "../../src/lib/audit";
 import { loadStaffSchemes } from "../../src/lib/guards/staff-schemes";
-import { slAccrued, slAccruedStatute } from "../../src/lib/longterm-payroll/compute";
+import { SL_ACCRUAL_PER_MONTH, slAccruedStatute, slCompletedMonths } from "../../src/lib/longterm-payroll/compute";
+import { HIST_MAX_MONTH } from "../../src/lib/month-close/historical";
 import { excludeUnapprovedWhatsapp } from "../../src/lib/longterm-payroll/approved-only";
 
 const DAY = 86400000;
@@ -113,8 +118,18 @@ const FIELDS = ["alTaken", "slTaken", "slAccrued", "alTakenOpening", "slTakenOpe
 
 export const MERGE_AUDIT_ACTION = "backfill_leave_opening_merge";
 
+/** 合併模式 slAccrued：歷史段條例口徑＋as-of 之後至 rowEnd 按舊口徑每月 2 日（按月分段），封頂 120。 */
+function slAccruedSplit(hire: Date, asOfEnd: Date, rowEnd: Date): number {
+  const base = slAccruedStatute(hire, asOfEnd);
+  const extra = Math.max(0, slCompletedMonths(hire, rowEnd) - slCompletedMonths(hire, asOfEnd));
+  return Math.min(120, base + extra * SL_ACCRUAL_PER_MONTH);
+}
+
 export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean; mergeIntoExisting?: boolean; recomputeSameAsOf?: boolean }): Promise<LeaveOpeningResult> {
   const asOfStart = opts.asOf;
+  if (opts.mergeIntoExisting && asOfStart.getTime() >= HIST_MAX_MONTH.getTime()) {
+    throw new Error(`--merge-into-existing 只可用於 as-of 早過 ${HIST_MAX_MONTH.toISOString().slice(0, 7)}（即 ≤ 2026-06）；之後月份已經計入現有結餘行`);
+  }
   const asOfEnd = new Date(Date.UTC(asOfStart.getUTCFullYear(), asOfStart.getUTCMonth() + 1, 0));
   const year = asOfStart.getUTCFullYear();
   const schemes = await loadStaffSchemes();
@@ -133,10 +148,17 @@ export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean
     prisma.guardLeaveBalance.findMany({ where: { guardId: { in: ids }, year } }),
   ]);
   const asOfLabel = iso(asOfStart).slice(0, 7);
-  // 合併模式防重複：audit 記錄咗 (guardId, as-of) 就唔再合併
-  const mergedBefore = opts.mergeIntoExisting
-    ? new Set((await prisma.auditLog.findMany({ where: { action: MERGE_AUDIT_ACTION, after: { path: ["as_of"], equals: asOfLabel } }, select: { rowId: true } })).map((a) => a.rowId))
-    : new Set<string>();
+  // 合併模式（增量）：每個 guard 上次已合併到邊個 as-of（最大者）同當時嘅累積 al／sl
+  const mergedBefore = new Map<string, { asOf: string; al: number; sl: number }>();
+  if (opts.mergeIntoExisting) {
+    const prev = await prisma.auditLog.findMany({ where: { action: MERGE_AUDIT_ACTION, rowId: { in: ids } }, select: { rowId: true, after: true } });
+    for (const a of prev) {
+      const af = (a.after ?? {}) as { as_of?: string; cum?: { al?: number; sl?: number } };
+      if (!af.as_of) continue;
+      const cur = mergedBefore.get(a.rowId);
+      if (!cur || af.as_of > cur.asOf) mergedBefore.set(a.rowId, { asOf: af.as_of, al: Number(af.cum?.al ?? 0), sl: Number(af.cum?.sl ?? 0) });
+    }
+  }
   const hireOf = new Map(guards.map((g) => [g.id, g.hireDate]));
   const balOf = new Map(balances.map((b) => [b.guardId, b]));
   const slBy = new Map<string, Date[]>();
@@ -148,6 +170,7 @@ export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean
 
   const counts = { create: 0, update: 0, merge: 0, already_merged: 0, skip_existing_newer_or_equal: 0, nothing_to_write: 0, unchanged: 0, guards: ids.length, no_hire_date: 0, sl_unpaid_segments: 0 };
   const rows: LeaveOpeningRow[] = [];
+  const mergeCum = new Map<string, { al: number; sl: number; incAl: number; incSl: number }>();
   for (const id of ids) {
     const hire = hireOf.get(id) ?? null;
     const { n, unpaidSegments } = computeGuardOpening(hire, slBy.get(id) ?? [], alBy.get(id) ?? [], asOfStart);
@@ -170,18 +193,23 @@ export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean
     let target: LeaveOpeningNumbers = n;
     if (!b) action = allZero ? "nothing_to_write" : "create";
     else if (b.asOfMonth && b.asOfMonth.getTime() > asOfStart.getTime() && opts.mergeIntoExisting) {
-      if (mergedBefore.has(id)) action = "already_merged";
+      const prevMerge = mergedBefore.get(id);
+      if (prevMerge && prevMerge.asOf >= asOfLabel) action = "already_merged";
       else {
         action = "merge";
         const rowEnd = new Date(Date.UTC(b.asOfMonth.getUTCFullYear(), b.asOfMonth.getUTCMonth() + 1, 0));
+        // 增量＝今次 as-of 累積 − 上次已合併 as-of 累積；四個欄位（兩個 taken、兩個 opening）加同一個增量
+        const incAl = r2(n.alTaken - (prevMerge?.al ?? 0));
+        const incSl = r2(n.slTaken - (prevMerge?.sl ?? 0));
         target = {
-          alTaken: r2(existing!.alTaken + n.alTaken),
-          slTaken: r2(existing!.slTaken + n.slTaken),
-          slAccrued: hire ? slAccrued(hire, rowEnd) : existing!.slAccrued, // 按入職日重算到該行 asOfMonth 月尾（同 aggregate 寫回口徑）
-          alTakenOpening: r2(existing!.alTakenOpening + n.alTakenOpening),
-          slTakenOpening: r2(existing!.slTakenOpening + n.slTakenOpening),
+          alTaken: r2(existing!.alTaken + incAl),
+          slTaken: r2(existing!.slTaken + incSl),
+          slAccrued: hire ? slAccruedSplit(hire, asOfEnd, rowEnd) : existing!.slAccrued,
+          alTakenOpening: r2(existing!.alTakenOpening + incAl),
+          slTakenOpening: r2(existing!.slTakenOpening + incSl),
           asOfMonth: existing!.asOfMonth,
         };
+        mergeCum.set(id, { al: n.alTaken, sl: n.slTaken, incAl, incSl });
       }
     } else if (b.asOfMonth && b.asOfMonth.getTime() === asOfStart.getTime() && opts.recomputeSameAsOf) action = "update"; // --recompute-same-as-of：重跑同一 as-of 覆蓋
     else if (b.asOfMonth && b.asOfMonth.getTime() >= asOfStart.getTime()) action = "skip_existing_newer_or_equal";
@@ -212,13 +240,14 @@ export async function leaveOpeningFromRosters(opts: { asOf: Date; apply: boolean
           // 寫入條件喺 where 再扣一次（tx 內防並發：asOfMonth 已被計糧推進就唔蓋）
           if (r.action === "merge") {
             // 合併：computed 已係「現有＋歷史」嘅合併後數值；tx 內再查 audit 防重複、再核對行未被改過（asOfMonth／alTaken／slTaken 同 dry-run 讀到嘅現有值一致）
-            if ((await tx.auditLog.count({ where: { action: MERGE_AUDIT_ACTION, rowId: r.guard_id, after: { path: ["as_of"], equals: asOfLabel } } })) > 0) continue;
+            const prior = await tx.auditLog.findMany({ where: { action: MERGE_AUDIT_ACTION, rowId: r.guard_id }, select: { after: true } });
+            if (prior.some((p) => String((p.after as { as_of?: string } | null)?.as_of ?? "") >= asOfLabel)) continue; // tx 內再查：已合併到 ≥ 今次 as-of
             const ex = r.existing!;
             const res = await tx.guardLeaveBalance.updateMany({
               where: { guardId: r.guard_id, year, asOfMonth: { gt: asOfStart }, alTaken: new Prisma.Decimal(ex.alTaken), slTaken: new Prisma.Decimal(ex.slTaken) },
               data: { alTaken: data.alTaken, slTaken: data.slTaken, slAccrued: data.slAccrued, alTakenOpening: data.alTakenOpening, slTakenOpening: data.slTakenOpening },
             });
-            if (res.count === 1) await writeAuditTx(tx, { actorUserId: null, tableName: "guard_leave_balances", rowId: r.guard_id, action: MERGE_AUDIT_ACTION, before: ex, after: { as_of: asOfLabel, year, merged: r.computed }, ip: null });
+            if (res.count === 1) await writeAuditTx(tx, { actorUserId: null, tableName: "guard_leave_balances", rowId: r.guard_id, action: MERGE_AUDIT_ACTION, before: ex, after: { as_of: asOfLabel, year, cum: { al: mergeCum.get(r.guard_id)!.al, sl: mergeCum.get(r.guard_id)!.sl }, added: { al: mergeCum.get(r.guard_id)!.incAl, sl: mergeCum.get(r.guard_id)!.incSl }, merged: r.computed }, ip: null });
             continue;
           }
           if (r.action === "create") {
