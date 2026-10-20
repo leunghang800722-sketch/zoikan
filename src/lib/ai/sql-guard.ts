@@ -198,11 +198,8 @@ function maskedColumnsOf(table: string): Array<{ group: MaskGroup; columns: Read
   };
   add("clientRate", CLIENT_RATE_FIELDS);
   add("settlement", SETTLEMENT_FIELDS);
-  if (table === "guards") {
-    // AI-PII-2：guards 嘅遮罩改用 AI 專用清單（永遠拒，唔受權限影響）；唔再跟人類 GUARD_PII／GUARD_BANK 組
-    out.push({ group: "aiBlocked", columns: new Set(AI_GUARD_BLOCKED_FIELDS) });
-    return out;
-  }
+  // AI-PII-2／2.1：guards 另加 AI 專用遮罩（永遠拒，唔受權限影響）；原有 guardPii／guardBank 組照舊（冇「保安員個人資料:view」睇唔到緊急聯絡人姓名／別名／黑名單查核日期）
+  if (table === "guards") out.push({ group: "aiBlocked", columns: new Set(AI_GUARD_BLOCKED_FIELDS) });
   add("guardPii", GUARD_PII_FIELDS);
   add("guardBank", GUARD_BANK_FIELDS);
   return out;

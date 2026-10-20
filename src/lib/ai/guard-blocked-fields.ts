@@ -16,4 +16,3 @@ export const AI_GUARD_BLOCKED_FIELDS = [
   "blacklist_check_result",
 ] as const;
 
-export const AI_GUARD_BLOCKED_SET: ReadonlySet<string> = new Set(AI_GUARD_BLOCKED_FIELDS);

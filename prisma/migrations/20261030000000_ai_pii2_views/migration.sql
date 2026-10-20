@@ -1,5 +1,7 @@
 -- AI-PII-2（老闆 2026-10-20 定版 PII 規則）：AI 可講 姓名／工號／人卡 id／月薪／入職離職日／僱傭類型／牌照到期／
 -- 緊急聯絡人姓名／別名／黑名單查核日期；唔可講 身份證／出生日期／住址／銀行任何欄／所有電話（含緊急聯絡人電話）。
+-- 備註：牌照號碼（sia_permit_no）同平安卡號碼（safety_card_no）亦屬「牌照」類，一併加入 ai.guards（連同到期日）；呢兩個號碼唔喺 PII 禁講清單。
+-- 緊急聯絡人姓名／別名／黑名單查核日期雖然 AI 規則容許，應用層仍跟畫面權限（冇「保安員個人資料:view」睇唔到，見 field-scrub.ts／sql-guard.ts）。
 -- 純 CREATE OR REPLACE VIEW（ai schema），冇改任何資料／表。ai.guards 沿用 20260912130100 定義逐字，只加欄；
 -- 新 view：guard_staff_numbers／guard_longterm_contracts／longterm_payroll_runs／longterm_payroll_lines。
 -- 絕對唔加：hkid／date_of_birth／address／tel／emergency_contact_tel／bank_*／blacklist_check_result。

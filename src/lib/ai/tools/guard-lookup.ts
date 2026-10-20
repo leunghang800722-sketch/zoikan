@@ -25,7 +25,7 @@ export function createGuardLookupTool(ctx: AiToolContext) {
          FROM ai.guards g
          LEFT JOIN ai.brokers b ON b.id = g.default_broker_id
          WHERE g.name_zh ILIKE $1 OR g.name_en ILIKE $1 OR g.staff_no ILIKE $1 OR g.staff_no_mw ILIKE $1
-            OR EXISTS (SELECT 1 FROM unnest(g.name_aliases) a WHERE a ILIKE $1)
+            ${ctx.fieldVisibility.guardPiiVisible ? "OR EXISTS (SELECT 1 FROM unnest(g.name_aliases) a WHERE a ILIKE $1)" : ""}
             OR EXISTS (SELECT 1 FROM ai.guard_staff_numbers n WHERE n.guard_id = g.id AND n.number ILIKE $1)
          ORDER BY g.name_zh
          LIMIT 50`,
@@ -51,7 +51,8 @@ export function createGuardLookupTool(ctx: AiToolContext) {
              FROM ai.guard_longterm_contracts WHERE guard_id = ANY($1::text[]) AND voided_at IS NULL ORDER BY guard_id, effective_from`,
             [ids],
           );
-          contractsBy = groupBy(contracts.rows as Array<Record<string, unknown>>);
+          // 月薪／日薪屬「出街價（settlement）」組：冇權就剝（同 guards.monthly_salary 一致）
+          contractsBy = groupBy(contracts.rows as Array<Record<string, unknown>>, ctx.fieldVisibility.settlementVisible ? [] : SETTLEMENT_CONTRACT_FIELDS);
         }
       }
       const guards = scrubbed.map((r) => {
@@ -63,10 +64,14 @@ export function createGuardLookupTool(ctx: AiToolContext) {
   });
 }
 
-function groupBy(rows: Array<Record<string, unknown>>): Map<string, unknown[]> {
+const SETTLEMENT_CONTRACT_FIELDS = ["monthly_salary", "daily_rate"];
+
+function groupBy(rows: Array<Record<string, unknown>>, drop: readonly string[] = []): Map<string, unknown[]> {
   const m = new Map<string, unknown[]>();
   for (const r of rows) {
-    const { guard_id, ...rest } = r;
+    const { guard_id, ...rest0 } = r;
+    const rest: Record<string, unknown> = { ...rest0 };
+    for (const k of drop) delete rest[k];
     const k = String(guard_id);
     (m.get(k) ?? m.set(k, []).get(k)!).push(rest);
   }

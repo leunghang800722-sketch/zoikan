@@ -43,6 +43,7 @@
 import type { Prisma, GuardStaffNumber } from "@prisma/client";
 import { ApiError, BadRequest, Conflict, Forbidden } from "../api/errors";
 import { todayLocalStr } from "../ui/format";
+import { hkDateStr } from "../dates";
 import { writeAudit, writeAuditTx } from "../audit";
 import { loadStaffSchemes } from "./staff-schemes";
 import { buildLongtermChains, type PeriodCard } from "@/lib/longterm-payroll/employment-period";
@@ -401,7 +402,8 @@ export async function syncLegacyGuardEmploymentColumns(tx: Tx, guardId: string, 
   // AI-PII-2：人卡離職＝全部工號卡結束——所有工號卡（任何體系）都 former（冇任何 current）而離職日有值 → guards.status 轉 inactive（離職／停用）。
   // 方向單向：有 current 卡就唔郁（唔准由離職自動轉返在職；復職要人手或開新卡後人手恢復）。
   const effectiveLeave = plan.leave !== undefined ? plan.leave : before.leaveDate;
-  const statusToInactive = rows.length > 0 && rows.every((r) => r.status !== "current") && !!effectiveLeave && before.status !== "inactive";
+  // AI-PII-2.1：離職日要 ≤ 今日（HK）先轉；未來離職日由排程 flipLeftGuards（nightly_month_health 一步）到期先轉
+  const statusToInactive = rows.length > 0 && rows.every((r) => r.status !== "current") && !!effectiveLeave && effectiveLeave.toISOString().slice(0, 10) <= hkDateStr() && before.status !== "inactive";
   if (statusToInactive) data.status = "inactive";
   if (Object.keys(data).length === 0) return { changed: false, warnings: plan.warnings };
   const after = await tx.guard.update({ where: { id: guardId }, data });

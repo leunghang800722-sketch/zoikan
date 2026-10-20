@@ -684,3 +684,10 @@ session` 就 `429`；續用現有 draft（唔開新嘅）唔受呢個上限影�
 - **人卡狀態**：全部工號卡 former（冇任何 current）而人卡離職日有值 → `guards.status` 自動轉 `inactive`（離職／停用，列表預設隱藏），寫 audit（`auto_source=staff_number_mirror`）＋ hint `status_inactive_mirrored`；有 current 卡就唔郁，亦**唔會**由離職自動轉返在職（復職要人手恢復）。即係：**人卡離職＝全部工號卡結束**。注意 `longterm-payroll/drafts.ts` 勤工獎資格清單只列 status=active，離職者之後唔入清單。
 - **Maxwell 導入**直接補人卡 nameEn／入職／離職日而家寫 audit（`auto_source=maxwell_import`）。
 - 測試：`tests/ai-pii2.test.ts`、`tests/wp-pii-ai-guards-view-structural.test.ts`（任何 ai.* view 冇被鎖欄）、`tests/longterm-payroll-ai-isolation.test.ts`；e2e `tests/e2e/ai-pii2-leavers.spec.ts`（本機跑要 `AI_DB_PASSWORD`＋`AI_DATABASE_URL`；fake LLM 問「邊個 N 月離職」會真 call `longterm_leavers`）。
+
+### AI-PII-2.1 修正（Opus 驗收後）
+
+- **PII 權限 gate 恢復（M2）**：老闆 2026-10-20 規則＝AI **可講**緊急聯絡人姓名／別名／黑名單查核日期，但**仍跟畫面權限**——冇「保安員個人資料:view」嘅角色（出廠主管）經 `guard_lookup`／`sql_select`／scrub 一樣睇唔到呢三欄（`guard_lookup` 亦唔會用別名搜尋）；有權限嘅角色（老闆）先見到。`AI_GUARD_BLOCKED_FIELDS` 永久遮罩（身份證／出生日期／住址／電話／緊急聯絡人電話／銀行／黑名單查核結果）照舊，唔受權限影響。`GUARD_PII_FIELDS` 人類 RBAC 清單不變。
+- **狀態轉「離職」只喺離職日 ≤ 今日（HK）（M1）**：工號卡鏡像只喺「全部卡 former 且離職日 ≤ 今日」先將 `guards.status` 轉 `inactive`；未來離職日（例如卡 `valid_to` 係下月）等到期——`nightly_month_health` 加咗一步 `flip_left_guards`（`src/lib/guards/flip-left.ts` `flipLeftGuards`，summary 帶 `flip_left_guards` 數量），到期先轉並寫 audit（`auto_source=flip_left_guards`、`by_job`）。單向，有 current 卡唔郁。
+- `guard_lookup` 長工合約 `monthly_salary`／`daily_rate` 疊「出街價」遮罩（冇權就剝，同 `guards.monthly_salary` 一致）。
+- migration 註釋補充：`sia_permit_no`／`safety_card_no` 屬牌照類，亦加入 `ai.guards`。
