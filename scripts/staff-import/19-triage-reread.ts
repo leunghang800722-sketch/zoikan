@@ -2,7 +2,7 @@
 //   npx tsx scripts/staff-import/19-triage-reread.ts --package data/2026-10/staff-import/out/import-package.json \
 //     --person-fields data/2026-10/staff-fields/person-fields-ext.json --extract data/2026-10/staff-import/out/extract.json \
 //     --index data/2026-10/staff-import/index.json --out data/2026-10/triage-reread/proposals.json [--docs-dir data/2026-09/staff-docs] [--limit N] [--only-key K] [--concurrency 2]
-//     [--cache data/2026-10/triage-reread/cache/] [--no-cache]   # TR-2：每 docId＋doc type＋page 嘅讀數存 JSON（gitignored），再跑命中就唔打 API；--no-cache 強制重讀（並覆寫快取）
+//     [--cache data/2026-10/triage-reread/cache/] [--no-cache] [--list-phones phones.json]   # TR-2：每 docId＋doc type＋page 嘅讀數存 JSON（gitignored），再跑命中就唔打 API；--no-cache 強制重讀（並覆寫快取）
 //   npx tsx scripts/staff-import/19-triage-reread.ts --dry [--out data/…/proposals.json]   # fake client＋記憶體內合成 fixture，唔讀任何 data、唔打 API
 // 對每個「有 ≥1 個 review 欄」嘅 person（package 該欄 status=review；nameZh／hkid 亦然）：經工號連去 person-fields-ext 嘅 docIds，
 // 由 extract 揀身份證／住址證明／入職表各 1 頁，兩段式＋refs 流程讀，mergeDocFields 得最終欄，再按保守規則出「建議答案」。
@@ -77,10 +77,12 @@ export interface Args {
   crosscheck: string | null;
   /** TE-4：vision-ocr 執行檔（二階段局部 OCR；預設由 vision-ocr.swift 編譯） */
   visionBin: string | null;
+  /** OCR-6.2：打字名單電話 JSON（獨立來源）：{ "<person_key>": ["9xxxxxxx", …] }；冇＝電話全部 review（phone_no_independent_source） */
+  listPhones: string | null;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: false, ocrDir: null, crosscheck: null, visionBin: null };
+  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: false, listPhones: null, ocrDir: null, crosscheck: null, visionBin: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => {
@@ -103,6 +105,7 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (k === '--ocr-dir') a.ocrDir = v();
     else if (k === '--crosscheck') a.crosscheck = v();
     else if (k === '--vision-bin') a.visionBin = v();
+    else if (k === '--list-phones') a.listPhones = v();
     else if (k === '--limit') {
       const x = v();
       if (!/^\d+$/.test(x) || Number(x) < 1) throw new ArgError('--limit 必須係正整數');
@@ -253,6 +256,23 @@ interface Inputs {
   card?: { scan(pages: readonly CardPageRef[]): Promise<CardScan> };
   /** TE-11.2：打字名單（按工號／電話對到）嘅姓名同卡上中文名一致（冇＝唔知＝false） */
   listAgree?: (docIds: readonly string[], cardNameZh: string | null, cardNameEn?: string | null) => boolean;
+}
+
+/**
+ * OCR-6.2：讀打字名單電話 JSON → Map<person_key, 電話[]>。接受 `{ "<key>": [..] }` 或 `{ persons: [{ person_key, phones: [..] }] }`；
+ * 每人 ≤5 個、每個 ≤40 字；格式唔啱 → ArgError（只講路徑，唔印值）。
+ */
+export async function loadListPhones(file: string): Promise<Map<string, string[]>> {
+  const raw = JSON.parse(await readFile(path.resolve(file), 'utf-8')) as unknown;
+  const out = new Map<string, string[]>();
+  const add = (key: unknown, phones: unknown, where: string) => {
+    if (typeof key !== 'string' || !key || !Array.isArray(phones) || phones.length > 5 || phones.some((x) => typeof x !== 'string' || x.length > 40)) throw new ArgError(`--list-phones 格式唔啱（${where}）`);
+    out.set(key, [...new Set(phones as string[])]);
+  };
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { persons?: unknown }).persons)) (raw as { persons: Array<{ person_key?: unknown; phones?: unknown }> }).persons.forEach((x, i) => add(x?.person_key, x?.phones, `persons[${i}]`));
+  else if (raw && typeof raw === 'object' && !Array.isArray(raw)) for (const [k, v] of Object.entries(raw as Record<string, unknown>)) add(k, v, 'key');
+  else throw new ArgError('--list-phones 格式唔啱（根）');
+  return out;
 }
 
 async function loadInputs(args: Args): Promise<Inputs> {
@@ -419,6 +439,7 @@ const isHkidMissing = (p: PkgPerson): boolean => p.hkid.status === 'missing' || 
 
 export async function run(args: Args, now: Date = new Date(), cacheOverride?: DocCache): Promise<RunResult> {
   const inp = await loadInputs(args);
+  const listPhones = args.listPhones ? await loadListPhones(args.listPhones) : null; // OCR-6.2
   const summary = emptySummary(now);
   summary.persons_in_package = inp.persons.length;
   let todo = inp.persons.filter((p) => needsReread(p) || (!!inp.card && needsCard(p)));
@@ -480,7 +501,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
     let ok = false;
     for (let attempt = 0; attempt < 2 && !ok; attempt++) {
       try {
-        const r = await readPerson(docs, { ...inp.deps, ...(args.dry ? { now: now } : {}), ...(cache ? { cache } : {}) });
+        const r = await readPerson(docs, { ...inp.deps, ...(args.dry ? { now: now } : {}), ...(cache ? { cache } : {}) }, listPhones?.get(p.key) ?? null);
         const hasCard = docs.some((d) => d.embedded);
         const o = proposeFromPicks(p, r.picks, now, { embedded: hasCard });
         if (hasCard) {

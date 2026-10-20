@@ -15,6 +15,8 @@ import { CONTINUATION_INVALID_MSG, OCR_MAX_CONTINUATION_CHARS, consumeRefsCredit
 import { confirmedRefsFromDocs, countCross, crossForOnboarding, refsCount, tagSourceOfTruth, type CrossOutcome, type Refs } from "@/lib/guards/ocr/refs";
 import { OcrUnavailableError } from "@/lib/guards/ocr/vision-client";
 import { getReadClients } from "@/lib/guards/ocr/clients";
+import { storedPhonesForHkid } from "@/lib/guards/ocr/stored-phones";
+import { stripListPhoneCandidates } from "@/lib/guards/ocr/strip-list";
 import { readDocument, readStageA, readStageB, type DocumentReadResult, type StageAResult } from "@/lib/guards/ocr/read";
 
 export const dynamic = "force-dynamic";
@@ -288,6 +290,12 @@ async function handleStageB(req: Request, session: Session, raw: unknown): Promi
   const client = got.client;
   const t0 = Date.now();
   const imagesCount = docs.reduce((n, d) => n + (d.full ? 1 : 0) + d.images_b.images.length, 0);
+  // OCR-6.2：refs_token 先驗（原本喺讀完先驗）——有效 refs 嘅 HKID（身份證 confirmed）配對到系統已有保安員 → 佢嘅 tel＋guard_phones 做電話獨立來源（伺服器端查）。
+  // 冇有效 refs／冇配對到＝只用 client 傳嘅 independent_phones；兩者都冇＝電話只會 review（phone_no_independent_source）。
+  const rv = parsed.data.refs_token !== undefined ? verifyRefs(parsed.data.refs_token, secret, session.userId) : null;
+  const storedPhones = rv && rv.ok && docs.some((d) => d.type === "onboarding_form") ? await storedPhonesForHkid(rv.refs.hkid) : [];
+  const clientPhones = parsed.data.independent_phones ?? [];
+  const independent = [...new Set([...clientPhones, ...storedPhones])];
   let results: DocumentReadResult[];
   try {
     results = await Promise.all(
@@ -299,7 +307,7 @@ async function handleStageB(req: Request, session: Session, raw: unknown): Promi
           { a_fields_raw: payload.a, provider: payload.provider, model: payload.model, fallback_reason: payload.fb },
           { kind: d.images_b.kind, images: d.images_b.images, ...(d.images_b.field_of ? { fieldOf: d.images_b.field_of } : {}), ...(d.full ? { full: d.full } : {}) },
           new Date(),
-          { independentPhones: parsed.data.independent_phones ?? null },
+          { independentPhones: independent },
         );
       }),
     );
@@ -310,8 +318,9 @@ async function handleStageB(req: Request, session: Session, raw: unknown): Promi
     }
     throw e;
   }
+  // 伺服器端查到嘅已存電話只用嚟比對，唔經回應洩漏：phone_differs_from_list 時剔走候選入面嘅名單值（client 自己傳嘅照舊保留）
+  if (storedPhones.length > 0 && clientPhones.length === 0) for (const r of results) stripListPhoneCandidates(r);
   // WP-OCR-1：有效 refs_token → 入職表欄同身份證值交叉核對（伺服器計；冇 refs 就冇 cross）
-  const rv = parsed.data.refs_token !== undefined ? verifyRefs(parsed.data.refs_token, secret, session.userId) : null;
   const refsRejected = rv !== null && !rv.ok ? 1 : 0;
   let cross: CrossOutcome | null = null;
   const formRes = results.find((r) => r.type === "onboarding_form");

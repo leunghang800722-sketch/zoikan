@@ -253,6 +253,12 @@ OCR-5.6 起，有 `DEEPSEEK_API_KEY` 時另跑 DeepSeek 段（三種文件各 1 
 **OCR-6.1 電話盲讀仲裁＋獨立來源佐證（2026-10-20）**：真 API 評估（102 人，phone n=36）顯示三讀一致規則冇減少 confirmed_wrong（7 → 7）——7 個係三讀一致咁讀錯（仲裁見到候選值會錨定，同讀 A 同一個 model），所以：
 - **盲讀仲裁**（只對 phone）：`read.ts` 仲裁 phone 時 prompt **唔帶**兩讀候選值（user text 只講 BLIND、要求獨立讀 8 位數；system prompt 講明盲讀、唔好由其他欄推斷）；其他欄候選照舊。仍要三讀一致先可能 confirmed。`ReadOptions.phoneBlind`（預設 true；eval `--no-phone-blind` 可還原舊行為做前後對照）。
 - **獨立來源佐證**：電話 confirmed 要 OCR 三讀一致值同**獨立來源**（打字名單 crosscheck 電話／已存 `guards.tel`／`guard_phones`）正規化後相同。冇獨立來源 → `review`，reason `phone_no_independent_source`（預填 OCR 值）；獨立來源唔同 → `review`，reason `phone_differs_from_list`（候選兩個，OCR 值預填）。即電話同 TE-12 證件欄一樣要「兩個獨立來源」。API：`POST /api/guards/ocr/read` 的 stage b／舊單次 body 可帶 additive `independent_phones: string[]`（≤5 個、每個 ≤40 字）；冇帶＝電話只會 review。TR 重讀腳本（`19-triage-reread`）冇獨立電話來源，所以電話唔再出自動建議（全部 review）。
+
+**OCR-6.2 獨立電話來源接駁（2026-10-21）**：邊個 caller 有獨立來源：
+- **new-from-docs（stage b）**：伺服器端——refs_token 內身份證 confirmed 嘅 HKID 配對到系統已有保安員（`guards.hkid`，只用 HKID，唔用姓名）→ 佢嘅 `guards.tel`＋`guard_phones` 自動做 `independent_phones`（client 唔使傳，亦可額外傳）。冇配對（全新保安員）→ 電話 review＋預填 OCR 值，畫面顯示「冇獨立來源（名單／已存電話）可以佐證，請對住圖核對電話」。`phone_differs_from_list` 回應會剔走已存電話候選（唔洩露已存電話）。
+- **舊單次 body／stage b 無 refs**：只用 client 傳嘅 `independent_phones`；冇傳＝review。
+- **導入管線**（`scripts/staff-import` extract／aggregate）：用 Apple Vision 本機 OCR，唔經產品 OCR 讀取，所以冇 OCR 電話 confirmed 要佐證；打字名單電話已係 `person-fields` crosscheck 嘅來源。
+- **重讀腳本 `19-triage-reread`**：`--list-phones <json>`（`{"<person_key>":["9xxxxxxx"]}` 或 `{"persons":[{"person_key","phones":[]}]}`；每人 ≤5、每個 ≤40 字；格式唔啱即停，訊息唔印值）。有名單電話且三讀一致相同 → 電話出建議；冇傳／唔同＝照舊全部 review。讀數快取 key 帶名單電話指紋，`OCR_PIPELINE_VERSION` 已升（舊快取失效）。
 - **eval**（`scripts/staff-import/eval-ocr.ts`）：manifest case 可選 `list: { phone }`（獨立來源）同 `truth_source: { phone: 'list'|'form' }`；報表 `by_field.phone.breakdown` 逐類計 confirmed_wrong：`unanimous_wrong`（三讀一致但錯）／`arbiter_anchored`（仲裁同其中一讀一致、另一讀唔同）／`truth_from_list_differs`（真值嚟自名單而手寫 OCR 值唔同）／`other`；只比較正規化值，**唔寫值**。flags：`--phone-blind`（預設）／`--no-phone-blind`。console 另印 phone 逐類計數。
 
 **`GUARD_OCR_ALS`**（Zeabur env，預設 `1`＝開，老闆 2026-10-15 決定）：證件辨識（住址證明、入職表）嘅地址欄，喺兩讀完成後（仲裁之前）向香港政府 ALS（Address Lookup Service，`https://www.als.gov.hk/lookup`，免費、免 key）查一次標準地址，作為額外候選（chip 上有細字「政府地址庫」），**唔會自動 confirmed**。
