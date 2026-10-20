@@ -56,6 +56,8 @@ export function GuardsTable({
     const hasCurrentU = g.staff_numbers ? g.staff_numbers.some((n) => n.scheme === "U" && n.status === "current") : !!g.staff_no;
     if (!hasCurrentU) return <Pill variant="warning">未有現用 U 號</Pill>;
     if (g.status === "active") return <Pill variant="success">在職</Pill>;
+    if (g.status === "left") return <Pill variant="neutral">已離職</Pill>;
+    if (g.status === "inactive") return <Pill variant="neutral">已停用</Pill>;
     return <Pill variant="neutral">{g.status}</Pill>;
   }
 
@@ -170,7 +172,7 @@ export function GuardsTable({
                           <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                             編輯
                           </Button>
-                          {r.status === "inactive" ? (
+                          {(r.status === "inactive" || r.status === "left") ? (
                             <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() => onUnvoid(r.id)}
@@ -218,7 +220,7 @@ export function GuardsTable({
                     <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                       編輯
                     </Button>
-                    {r.status === "inactive" ? (
+                    {(r.status === "inactive" || r.status === "left") ? (
                       <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                         恢復
                       </Button>

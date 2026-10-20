@@ -633,7 +633,7 @@ export function RateCardsClient({
           <Field label="保安員" hint="留空＝通用">
             <select className={selectCls} value={form.guard_id} onChange={(e) => setForm((f) => ({ ...f, guard_id: e.target.value }))}>
               <option value="">（通用）</option>
-              {guards.filter((g) => g.status !== "inactive" || g.id === form.guard_id).map((g) => (
+              {guards.filter((g) => (g.status !== "inactive" && g.status !== "left") || g.id === form.guard_id).map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name_zh}
                   {g.staff_no ? `（${g.staff_no}）` : ""}

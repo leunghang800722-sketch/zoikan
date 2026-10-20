@@ -598,3 +598,10 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - gross-margin `sites[].shiftTypes` 排序改用穩定業務欄（code → label → otHours → kind → revenue → cost → shifts），**唔用 UUID**（先前 tie-breaker 用 shiftTypeId，每次 DB 唔同令 snapshot 次序漂移）。
 - 對數頁「相似保安員」名冊（`loadGuardDirectory`）加 `include_inactive=1`，離職者（status inactive）標「已離職」（`guardStatusLabel`）。
 - HIST merge：as-of 年份冇結餘行而較後年份有行（`!b` 且 later-year）→ 同樣 `merge_rejected_different_year`（唔建 as-of 年份嘅行）。
+
+### S-batch-1021：保安員狀態「已離職」(left) 同「作廢」(inactive) 分開
+
+- `guards.status`（enum `ActiveStatus`）加值 `left`（migration `20261031000000_guard_status_left`，純加 enum 值，現有 `inactive` 行唔改）。`inactive`＝作廢／停用（void route 寫）；`left`＝已離職（人卡鏡像 `syncLegacyGuardEmploymentColumns` 同夜間 `flipLeftGuards` 寫，只由 `active` 轉）。
+- 「非在職」判斷：server 端全部用 `status: "active"` 過濾（列表預設隱藏、`include_inactive=1` 先帶 left＋inactive、勤工獎／雞頭 dashboard／長工草稿等），自動包 left；client 端 `!== "inactive"` 位（更表揀人選單、價目表揀人）已改為同時排除 left。「恢復」（unvoid）對 inactive 同 left 都出現。
+- 對數 label（`guardStatusLabel`）：left→「已離職」、inactive→「已停用」；列表狀態 pill 同。
+- 舊資料：現有已離職但仍係 `inactive` 嘅行唔會自動改成 left（唔改現有資料）；下次鏡像／人手唔會再轉。需要時人手或另寫 backfill。

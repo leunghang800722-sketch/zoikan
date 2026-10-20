@@ -186,10 +186,10 @@ describe("AI-PII-2", () => {
     expect((night.summary as { flip_left_guards: number }).flip_left_guards).toBe(0);
     // 到期之後
     expect((await flipLeftGuards(new Date("2100-01-01T04:00:00Z"), "nightly_month_health")).flipped).toBe(1);
-    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).status).toBe("inactive");
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).status).toBe("left");
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: g2.id } })).status).toBe("active");
     const audit = await prisma.auditLog.findFirst({ where: { tableName: "guards", rowId: g.id, action: "update" }, orderBy: { createdAt: "desc" } });
-    expect(audit!.after).toMatchObject({ status: "inactive", auto_source: "flip_left_guards", by_job: "nightly_month_health" });
+    expect(audit!.after).toMatchObject({ status: "left", auto_source: "flip_left_guards", by_job: "nightly_month_health" });
     expect((await flipLeftGuards(new Date("2100-01-01T04:00:00Z"))).flipped).toBe(0); // 冪等
   });
 
@@ -206,13 +206,13 @@ describe("AI-PII-2", () => {
     const body = (await r.json()) as { employment_warnings?: string[] };
     expect(body.employment_warnings?.some((w) => w.startsWith("status_inactive_mirrored"))).toBe(true);
     const after = await prisma.guard.findUniqueOrThrow({ where: { id: g.id } });
-    expect([after.status, after.leaveDate?.toISOString().slice(0, 10)]).toEqual(["inactive", "2026-09-30"]);
+    expect([after.status, after.leaveDate?.toISOString().slice(0, 10)]).toEqual(["left", "2026-09-30"]);
     const audit = await prisma.auditLog.findFirst({ where: { tableName: "guards", rowId: g.id, action: "update" }, orderBy: { createdAt: "desc" } });
-    expect((audit!.after as { status?: string; auto_source?: string }).status).toBe("inactive");
+    expect((audit!.after as { status?: string; auto_source?: string }).status).toBe("left");
     expect((audit!.after as { auto_source?: string }).auto_source).toBe("staff_number_mirror");
     // 再入職開新 current 卡：唔自動轉返在職（單向）
     await post(g.id, { scheme: "MG", number: "MG99942", valid_from: "2026-11-01" });
-    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).status).toBe("inactive");
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).status).toBe("left");
   });
 
   it("Maxwell 導入直接補人卡欄位（nameEn／入職日）留 audit（auto_source=maxwell_import）", async () => {

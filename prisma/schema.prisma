@@ -32,7 +32,8 @@ enum SettlementType {
 
 enum ActiveStatus {
   active
-  inactive
+  inactive // 作廢／停用（void）
+  left // 已離職（S-batch-1021：同作廢分開；非在職，所有「非在職」判斷要同時包 inactive＋left）
 }
 
 enum SiteStatus {
