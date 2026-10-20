@@ -605,3 +605,10 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 「非在職」判斷：server 端全部用 `status: "active"` 過濾（列表預設隱藏、`include_inactive=1` 先帶 left＋inactive、勤工獎／雞頭 dashboard／長工草稿等），自動包 left；client 端 `!== "inactive"` 位（更表揀人選單、價目表揀人）已改為同時排除 left。「恢復」（unvoid）對 inactive 同 left 都出現。
 - 對數 label（`guardStatusLabel`）：left→「已離職」、inactive→「已停用」；列表狀態 pill 同。
 - 舊資料：現有已離職但仍係 `inactive` 嘅行唔會自動改成 left（唔改現有資料）；下次鏡像／人手唔會再轉。需要時人手或另寫 backfill。
+
+### S-batch-1021：背景 job 體驗／細項
+
+- **盤體系補推導／重推 job（`job_runs.job_key = site_scheme_backfill`）**：失敗 summary 而家係 `{ error, error_code, message }`——`error_code`＝`err.name`，`message`＝`err.name: 訊息` 前 120 字，數字串一律換 `#`（唔留電話／證件號／金額）。UI 輪詢最多 10 分鐘；仍 running 顯示「可能已中斷，可重新套用」（補推導只填空位，重做安全）。scheduler `sweepStaleRuns`：呢類 job running 超過 **15 分鐘**即標 `error / stale_running`（其他 job 仍 1 小時）。
+- **補推導 unresolved 連結**：`/month-close#health-shifts_no_staff_number`——直達月結健康「未標工號」卡（MonthHealthCard 按 hash 切去該項嘅級別 tab 並捲到卡）。
+- **HKID 配對 index**：migration `20261031010000_guards_hkid_canon_index` 加 `guards_hkid_canon_idx` ON `upper(regexp_replace(hkid,'[^A-Za-z0-9]','','g'))`（`storedPhonesForHkid` 用同一表達式；普通 `CREATE INDEX IF NOT EXISTS`，CONCURRENTLY 唔可以喺 migration 交易內）。
+- **OCR 電話 reason 口徑依賴導入預覽權限**：stage b 嘅 `phone_differs_from_list`／`phone_no_independent_source` 會透露「該 HKID 喺系統有冇保安員」（OCR-6.3 殘餘 oracle）；目前只有「安員批量導入:create」可用。**收緊導入預覽權限時要統一 reason**（例如兩者都回 `phone_no_independent_source`），免得權限同口徑唔一致。

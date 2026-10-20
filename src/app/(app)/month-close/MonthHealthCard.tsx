@@ -72,6 +72,13 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
       if (cancelled) return;
       if (res.ok) {
         setHealth(res.data);
+        // S-batch-1021：#health-<code> 直達——切去該項嘅嚴重級別 tab，下一輪 render 後捲到該卡
+        const code = typeof window !== "undefined" && window.location.hash.startsWith("#health-") ? window.location.hash.slice("#health-".length) : null;
+        const hit = code ? res.data.findings.find((f) => f.code === code) : null;
+        if (hit) {
+          setTab(hit.severity);
+          setTimeout(() => document.getElementById(`health-${hit.code}`)?.scrollIntoView({ block: "center" }), 0);
+        }
         onLoaded?.({ critical: res.data.summary.critical, warn: res.data.summary.warn, info: res.data.summary.info });
       } else setErr(res.message);
     });
@@ -115,7 +122,7 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
             const dup = healthDupReviewCount(f.code, groups);
             const dot = f.severity === "critical" ? "var(--zk-danger)" : f.severity === "warn" ? "var(--zk-warning)" : "var(--zk-faint)";
             return (
-              <li key={f.code} className="border-b border-zk-border-soft px-3 py-2 last:border-b-0" data-health={f.code}>
+              <li key={f.code} className="border-b border-zk-border-soft px-3 py-2 last:border-b-0" data-health={f.code} id={`health-${f.code}`}>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zk-base">
                   <span className="h-1.5 w-1.5 flex-none rounded-full" style={{ background: dot }} />
                   <span className="min-w-0 flex-1">{humanizeHealth(f.message)}</span>
