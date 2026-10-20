@@ -5,6 +5,7 @@ import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { POST as createUpload } from "@/app/api/roster-uploads/route";
 import { POST as createMonthClose } from "@/app/api/month-closes/route";
+import { PATCH as patchMonthClose } from "@/app/api/month-closes/[id]/route";
 import { POST as lockMonth } from "@/app/api/month-closes/[id]/lock/route";
 import { POST as oneClickPost } from "@/app/api/month-close/one-click/route";
 import { GET as pendingSummary } from "@/app/api/roster-uploads/pending-summary/route";
@@ -15,7 +16,8 @@ import { ensureJobRows } from "@/lib/scheduler/runner";
 import { mergeJobState } from "@/lib/scheduler/state";
 import { buildMonthHealth } from "@/lib/ops/month-health";
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
-import { isHistoricalMonth } from "@/lib/month-close/historical";
+import { isHistoricalMonth, markHistoricalMonth, HIST_MAX_MONTH } from "@/lib/month-close/historical";
+import { ONE_CLICK_ADVISORY_LOCK_KEY } from "@/lib/month-close/one-click-lock";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 
 const MAY = new Date(Date.UTC(2026, 4, 1));
@@ -145,5 +147,60 @@ describe("HIST-1 歷史月份", () => {
     const get = async (qs: string) => (await (await pendingSummary(new Request(`http://test.local/api/roster-uploads/pending-summary${qs}`, { headers: { cookie } }))).json()) as { entries: { month: string }[]; total: number };
     expect((await get("?months=0")).entries).toHaveLength(0);
     expect((await get("?month=2026-05")).entries.length).toBeGreaterThan(0);
+  });
+
+  it("HIST-1.1 M1：只可標早過 HIST_MAX_MONTH（2026-07-01）——新建同就地標記兩條路都擋 7 月及之後；有未作廢長工糧 run 擋，已作廢嘅唔擋", async () => {
+    expect(HIST_MAX_MONTH.toISOString().slice(0, 10)).toBe("2026-07-01");
+    for (const m of ["2026-07", "2026-08", "2027-01"]) {
+      expect((await createMonthClose(jsonReq("http://test.local/api/month-closes", cookie, { month: m, historical: true }))).status, `新建 ${m}`).toBe(409);
+      await prisma.monthClose.create({ data: { month: new Date(`${m}-01T00:00:00Z`) } });
+      expect((await createMonthClose(jsonReq("http://test.local/api/month-closes", cookie, { month: m, historical: true }))).status, `就地 ${m}`).toBe(409);
+    }
+    // 6 月前：有未作廢長工糧 run → 409；作廢咗 → 可標
+    const apr = new Date(Date.UTC(2026, 3, 1));
+    const run = await prisma.longtermPayrollRun.create({ data: { month: apr, status: "computed", createdBy: fx.userIds["老闆"] } });
+    expect((await createMonthClose(jsonReq("http://test.local/api/month-closes", cookie, { month: "2026-04", historical: true }))).status).toBe(409);
+    await prisma.longtermPayrollRun.update({ where: { id: run.id }, data: { voidedAt: new Date(), status: "void" } });
+    expect((await createMonthClose(jsonReq("http://test.local/api/month-closes", cookie, { month: "2026-04", historical: true }))).status).toBe(201);
+  });
+
+  it("HIST-1.1：標記同一鍵結算共用 advisory lock——有人持鎖（模擬一鍵結算開 run 中）時標記要等；放鎖後先完成", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const gotLock = new Promise<void>((r) => (acquired = r));
+    const holder = prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${ONE_CLICK_ADVISORY_LOCK_KEY})`);
+      acquired();
+      await held;
+    });
+    await gotLock;
+    let done = false;
+    const marking = markHistoricalMonth(MAY, fx.userIds["老闆"]!, { ip: null }).then((r) => {
+      done = true;
+      return r;
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(done).toBe(false);
+    release();
+    await holder;
+    expect((await marking).row.historical).toBe(true);
+  });
+
+  it("HIST-1.1：PATCH { historical:false } 取消標記（老闆專用、寫 audit）；非老闆 403；非歷史 409；其他 body 400；取消後排程唔再跳過", async () => {
+    await createMonthClose(jsonReq("http://test.local/api/month-closes", cookie, { month: "2026-05", historical: true }));
+    const mc = await prisma.monthClose.findUniqueOrThrow({ where: { month: MAY } });
+    const patch = (c: string, body: unknown) => patchMonthClose(new Request(`http://test.local/api/month-closes/${mc.id}`, { method: "PATCH", headers: { "content-type": "application/json", cookie: c }, body: JSON.stringify(body) }), { params: Promise.resolve({ id: mc.id }) });
+    const acc = await sessionCookieForUser(fx.userIds["會計"]);
+    expect((await patch(acc, { historical: false })).status).toBe(403);
+    expect((await patch(cookie, { historical: true })).status).toBe(400);
+    expect((await patch(cookie, { historical: false, locked: true })).status).toBe(400);
+    const r = await patch(cookie, { historical: false });
+    expect(r.status).toBe(200);
+    expect((await r.json()).historical).toBe(false);
+    expect(await isHistoricalMonth(MAY)).toBe(false);
+    const audits = await prisma.auditLog.findMany({ where: { tableName: "month_closes", rowId: mc.id, action: "update" } });
+    expect(audits.some((a) => (a.after as { historical?: boolean } | null)?.historical === false)).toBe(true);
+    expect((await patch(cookie, { historical: false })).status).toBe(409); // 已唔係歷史
   });
 });

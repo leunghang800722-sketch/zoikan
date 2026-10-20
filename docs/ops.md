@@ -546,3 +546,12 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 寫入（`--apply`）`guard_leave_balances (guardId, year=as-of 年)`：`alTaken`／`slTaken`＝截至 as-of 月尾累積（as-of 之後月份計糧讀呢兩欄做 opening）、`alTakenOpening`／`slTakenOpening`＝截至 as-of 前一個月月尾累積（同月重算用）、`slAccrued`＝as-of 月尾累積結餘、`asOfMonth`＝as-of 月。只喺該 guard 該 year 行 `asOfMonth` 為 null 或早過 as-of 先寫；冇行就建（全部歸零就唔建）；asOfMonth ≥ as-of（計糧已推進，例如已計 7／8／9 月）一律唔郁，只喺差異清單 `skip_existing_newer` 列出。冪等；每次 `--apply` 一條 audit summary（`action=backfill_leave_opening`，只有月份＋計數）。
 - 輸出：console 計數；`--out`（限 `data/` 或 `out/`）JSON 只有 `guard_id`＋數字＋月份，每人 `computed` vs `existing` 同 `diffs`（欄位 → [現有, 計算]），用嚟同銀行差額（8 月 −3,936.43、9 月 +1,287.97）對返；`flags`：`no_hire_date`、`sl_unpaid_segments:N`。
 - 已計過 7／8／9 月嘅現有環境：`guard_leave_balances` 2026 行 `asOfMonth` 已係 9 月，腳本唔會覆蓋，只出差異清單俾人手判斷（要改需先處理已計月份，見 `recomputeLongtermPayroll` 「later asOfMonth」保護）。
+
+### HIST-1.1 補充（Opus 驗收後）
+
+- **歷史標記限制**：`HIST_MAX_MONTH = 2026-07-01`（`src/lib/month-close/historical.ts`）——只可標**早過** 2026-07-01 嘅月份（7 月起係正式月結月份）。建新行同就地標記兩條路都喺 tx 內攞一鍵結算 advisory lock（`ONE_CLICK_ADVISORY_LOCK_KEY`，同 `POST /api/month-close/one-click` 共用；one-click 開 run 嗰個 tx 拎鎖後再確認唔係歷史月份），並檢查：未鎖、冇一鍵結算 run、冇未作廢長工糧 run（已作廢嘅唔擋）。違反 → 409。
+- **取消標記**：`PATCH /api/month-closes/:id { "historical": false }`（老闆專用，要「月結鎖定解鎖:void」；寫 audit；其他 body 400；本身唔係歷史月份 409）。
+- **結餘合併模式** `--merge-into-existing`：已有較新結餘行（`asOfMonth` > as-of，例如已計 7／8／9 月）嘅人，將 as-of 前歷史累積**加落**現有行嘅 `alTaken`／`slTaken`／`alTakenOpening`／`slTakenOpening`（`slAccrued` 按入職日重算到該行 `asOfMonth` 月尾，`asOfMonth` 不變）。每人合併後寫 audit `backfill_leave_opening_merge`（`row_id`＝guardId，`after.as_of`），再跑查 audit，已合併 → `already_merged`（唔會雙重加）。dry-run 的 `diffs` 列每人前後值。**只影響下一次重算（10 月起）；7／8／9 月已付數字唔郁。因結餘變化，個別 SL 段「有薪／無薪」判斷可能改變——要老闆知。**
+- `--recompute-same-as-of`：已有行 `asOfMonth` 剛好＝as-of（上次腳本寫嘅）→ 覆蓋重算（補上載咗更多舊更表之後用）。差異清單標籤 `skip_existing_newer` 改名 `skip_existing_newer_or_equal`（asOfMonth ≥ as-of 且無對應旗標）。
+- **SL 累積口徑（《僱傭條例》）**：`compute.ts` `slAccruedStatute`＝做滿 1 個月先儲、**首 12 個月每月 2 日、之後每月 4 日**、累積上限 120。`SL_ACCRUAL_EFFECTIVE_FROM = 2026-10-01`：`slAccrued(入職日, asOf)` 當 `asOf` 早過生效日照舊每月 2 日到頂 120（7／8／9 月已出糧 gate 不變），≥ 生效日用條例口徑。HIST-1 腳本計歷史累積一律用條例口徑（係重建真實結餘）。⚠ 注意：老闆 2026-09-28（WP-BOSS5 決定 4）曾確認「每月累積 2 日」，現按驗收意見改為條例口徑 10 月起生效，請老闆確認。
+- 備註：`tests/emp-p1-backfill.test.ts` 「第一批同第二批之間鎖月」測試 flaky 根因＝回填腳本按 id（隨機 uuid）升序逐批掃所有月份，`--month` 篩選喺掃咗之後先做，第一批可能係其他月份更次（0 寫入）；舊測試固定喺 batch 0 後鎖月，約 1/6 機率 8 月一條都未寫。腳本本身語意正確，已修正測試（8 月寫到第一條後先鎖月）。

@@ -72,6 +72,8 @@ export type AuditAction =
   | "backfill_shift_staff_numbers"
   // HIST-1：由歷史更表回填長工假期結餘 opening（只有月份＋計數）。
   | "backfill_leave_opening"
+  // HIST-1.1：合併模式逐人 audit（rowId＝guardId，after.as_of＋合併值），再跑時查呢度防重複合併。
+  | "backfill_leave_opening_merge"
   // WP-MULTI（老闆 2026-09-19 拍板）：guard_phones／
   // guard_emergency_contacts／guard_addresses 呢三張新表冇「former／已
   // 取消」呢個狀態（唔似 guard_staff_numbers），DELETE 係真刪一行（俾

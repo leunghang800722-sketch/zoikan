@@ -33,6 +33,8 @@ import {
   MPF_MIN_GROSS,
   MPF_FIRST_MONTH_RULE_FROM,
   SL_ACCRUAL_PER_MONTH,
+  SL_ACCRUAL_EFFECTIVE_FROM,
+  slAccruedStatute,
 } from "@/lib/longterm-payroll/compute";
 
 describe("round2", () => {
@@ -225,6 +227,17 @@ describe("MPF 首月（§25.6，老闆 2026-09-28 追加決定 #3；monthStart �
 describe("病假 4/5（§14 規則 9）", () => {
   it("WP-BOSS5 25.3：老闆 2026-09-28 確認每月累積 2 日，防手多改", () => {
     expect(SL_ACCRUAL_PER_MONTH).toBe(2);
+  });
+
+  it("HIST-1.1 條例口徑（asOf ≥ 2026-10-01）：首 12 個月每月 2 日、之後每月 4 日、上限 120；生效前照舊每月 2 日", () => {
+    const hire = toUtcDate("2025-01-01");
+    expect(slAccrued(hire, toUtcDate("2026-09-30"))).toBe(40); // 生效前：20 個月 × 2
+    expect(slAccrued(hire, toUtcDate("2026-10-31"))).toBe(60); // 21 個月：12×2＋9×4＝60
+    expect(slAccruedStatute(hire, toUtcDate("2026-01-01"))).toBe(24); // 剛滿 12 個月
+    expect(slAccruedStatute(hire, toUtcDate("2026-02-01"))).toBe(28);
+    expect(slAccruedStatute(toUtcDate("2020-01-01"), toUtcDate("2026-10-31"))).toBe(120); // 封頂
+    expect(slAccruedStatute(toUtcDate("2026-09-20"), toUtcDate("2026-10-10"))).toBe(0); // 未滿 1 個月
+    expect(SL_ACCRUAL_EFFECTIVE_FROM.toISOString().slice(0, 10)).toBe("2026-10-01");
   });
 
   it("做滿 1 個月先開始儲：未滿 1 個月＝0", () => {
