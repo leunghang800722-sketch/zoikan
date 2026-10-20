@@ -146,3 +146,32 @@ describe("aggregate 改讀 MG 卡日期（2026-10 起）", () => {
     expect(sep.warnings.some((w) => w.includes("[rehire_suspected]") && w.includes(g1.id))).toBe(true);
   });
 });
+
+describe("對拍腳本 longterm-card-dates-diff（只讀）", () => {
+  it("逐個長工分類：一致／卡冇日期／唔一致／疑似再入職／冇 MG 卡；只讀唔寫；rows 只有 guardId 同日期", async () => {
+    const { diffLongtermCardDates } = await import("../scripts/db/longterm-card-dates-diff");
+    const b = await base();
+    const mkG = async (name: string, hire: Date | null, leave: Date | null = null) => {
+      const x = await guard(name, hire, leave);
+      await contract(b, x.id, D(1, 1, 2020));
+      return x;
+    };
+    const same = await mkG("測試一致", D(1, 1, 2025));
+    await mg(same.id, "MG90701", { validFrom: D(1, 1, 2025) });
+    const nodates = await mkG("測試無日期", D(2, 2, 2025));
+    await mg(nodates.id, "MG90702");
+    const mism = await mkG("測試唔一致", D(3, 3, 2025));
+    await mg(mism.id, "MG90703", { validFrom: D(3, 5, 2025) });
+    const rehire = await mkG("測試再入職", D(1, 1, 2020), D(3, 31));
+    await mg(rehire.id, "MG90704", { status: "former", validFrom: D(1, 1, 2020), validTo: D(3, 31), endReason: "resigned" });
+    await mg(rehire.id, "MG90705", { validFrom: D(9, 15) });
+    const nocard = await mkG("測試無卡", D(5, 5, 2025));
+    const before = await prisma.guard.findMany({ orderBy: { id: "asc" }, select: { id: true, hireDate: true, leaveDate: true } });
+    const out = await diffLongtermCardDates(D(11, 1));
+    const k = (id: string) => out.rows.find((r) => r.guard_id === id)!.klass;
+    expect([k(same.id), k(nodates.id), k(mism.id), k(rehire.id), k(nocard.id)]).toEqual(["consistent", "card_no_dates", "mismatch", "rehire_suspected", "no_mg_card"]);
+    expect(out.counts).toEqual({ consistent: 1, card_no_dates: 1, mismatch: 1, rehire_suspected: 1, no_mg_card: 1 });
+    expect(Object.keys(out.rows[0]!).sort()).toEqual(["card_end", "card_start", "chain_card_ids", "guard_hire", "guard_id", "guard_leave", "klass"]);
+    expect(await prisma.guard.findMany({ orderBy: { id: "asc" }, select: { id: true, hireDate: true, leaveDate: true } })).toEqual(before); // 只讀
+  });
+});
