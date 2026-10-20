@@ -6,10 +6,12 @@
 import { wahaApiKey, wahaBaseUrl, wahaSession } from "./config";
 
 const TIMEOUT_MS = 5000;
+/** groups 專用 timeout（群組多時 WAHA 慢；session status 維持 5s）。 */
+export const GROUPS_TIMEOUT_MS = 20000;
 
 export type WahaResult<T> = { ok: true; data: T } | { ok: false; error: "not_configured" | "unreachable" | "timeout" | "http_error" | "bad_response"; status?: number };
 
-async function wahaGet(path: string, fetchImpl: typeof fetch): Promise<WahaResult<unknown>> {
+async function wahaGet(path: string, fetchImpl: typeof fetch, timeoutMs: number = TIMEOUT_MS): Promise<WahaResult<unknown>> {
   const base = wahaBaseUrl();
   if (!base) return { ok: false, error: "not_configured" };
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -17,7 +19,7 @@ async function wahaGet(path: string, fetchImpl: typeof fetch): Promise<WahaResul
   if (key) headers["X-Api-Key"] = key;
   let res: Response;
   try {
-    res = await fetchImpl(`${base}${path}`, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS), cache: "no-store" });
+    res = await fetchImpl(`${base}${path}`, { method: "GET", headers, signal: AbortSignal.timeout(timeoutMs), cache: "no-store" });
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
     return { ok: false, error: name === "TimeoutError" || name === "AbortError" ? "timeout" : "unreachable" };
@@ -58,9 +60,28 @@ function jidOf(id: unknown): string | null {
   return null;
 }
 
-/** 假設回傳係陣列（亦容忍 { groups: [] }）；每項 id 可係字串或 {_serialized}；名取 name／subject。 */
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  return !!x && typeof x === "object" && !Array.isArray(x);
+}
+
+/** WA-6：NOWEB 某些版本回「以 jid 為 key 嘅 object map」（{ "123@g.us": { subject, ... } }）。空 object 當空列表；有 key 但冇一個係 @g.us → 唔當 map（格式錯）。 */
+function isJidMap(data: unknown): data is Record<string, unknown> {
+  if (!isPlainObject(data) || "groups" in data) return false;
+  const keys = Object.keys(data);
+  return keys.length === 0 || keys.some((k) => k.endsWith("@g.us"));
+}
+
+/** WA-6：形狀是否可解析（array／{groups:[]}／jid map）；listGroups 用嚟分辨 bad_response。 */
+export function isGroupsShape(data: unknown): boolean {
+  return Array.isArray(data) || Array.isArray((data as { groups?: unknown } | null)?.groups) || isJidMap(data);
+}
+
+/** 接受三種形狀：陣列、{ groups: [] }、以 jid 為 key 嘅 object map（value 內 subject／name，id 可缺）；每項 id 可係字串或 {_serialized}；名取 name／subject。 */
 export function parseGroups(data: unknown): WahaGroup[] {
-  const arr = Array.isArray(data) ? data : Array.isArray((data as { groups?: unknown } | null)?.groups) ? ((data as { groups: unknown[] }).groups) : null;
+  let arr: unknown[] | null = Array.isArray(data) ? data : Array.isArray((data as { groups?: unknown } | null)?.groups) ? ((data as { groups: unknown[] }).groups) : null;
+  if (!arr && isJidMap(data)) {
+    arr = Object.entries(data).map(([k, v]) => (isPlainObject(v) ? { ...v, id: v.id ?? k } : { id: k }));
+  }
   if (!arr) return [];
   const out: WahaGroup[] = [];
   const seen = new Set<string>();
@@ -77,8 +98,9 @@ export function parseGroups(data: unknown): WahaGroup[] {
 }
 
 export async function listGroups(fetchImpl: typeof fetch = fetch): Promise<WahaResult<WahaGroup[]>> {
-  const r = await wahaGet(`/api/${encodeURIComponent(wahaSession())}/groups`, fetchImpl);
+  // exclude=participants：WAHA 文件話攞參與者好慢，我哋只要 id＋名
+  const r = await wahaGet(`/api/${encodeURIComponent(wahaSession())}/groups?exclude=participants`, fetchImpl, GROUPS_TIMEOUT_MS);
   if (!r.ok) return r;
-  if (!Array.isArray(r.data) && !Array.isArray((r.data as { groups?: unknown } | null)?.groups)) return { ok: false, error: "bad_response" };
+  if (!isGroupsShape(r.data)) return { ok: false, error: "bad_response" };
   return { ok: true, data: parseGroups(r.data) };
 }

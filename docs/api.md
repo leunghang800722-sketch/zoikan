@@ -2729,6 +2729,8 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 - PATCH body：`{ id, label?, kind?(site|multi_site|broker|office|ignored), site_id?, broker_id?, shift_word_map?:[{word,code}] (≤30，口語唔可重覆), auto_write?, auto_confirm?, active? }`。保守一致性檢查（400）：`site` 要綁盤、`broker` 要綁判頭、`ignored`／`office` 唔准開自動、`auto_confirm` 要先 `auto_write`、盤／判頭要存在；轉類型而冇傳 `site_id`／`broker_id` 會清走唔相干嘅舊綁定。寫 audit（`whatsapp_groups`，`update`，before／after 白名單 DTO）。
 
 ### `POST /api/whatsapp/groups/sync`（update，老闆）
+WA-6：WAHA 列表接受 array／`{groups:[]}`／以 jid 為 key 嘅 object map；請求加 `?exclude=participants`、timeout 20s；列表之後再由已收訊息補群（`from_messages`，label「未命名群組（尾 6 位）」、`label_locked=false`）。WAHA 失敗唔再回 502/503：照樣補群，回 200 並多 `waha_error { kind, status?, code, message }`、`summary`（同平面計數）；audit `whatsapp_group_sync_failed`（after 淨 kind／status）。
+
 向 WAHA `GET /api/{session}/groups` 攞群組（只取 id＋名；id 可係字串或 `{_serialized}`；只收 `@g.us`），新群 `kind=ignored`、自動寫入全關；已存在只更新群名。回 `{ total, created, relabelled }`；audit action `whatsapp_group_sync`（`row_id="sync"`）。`WAHA_BASE_URL` 未設 → `503 waha_not_configured`；WAHA 連唔到／非 2xx／格式錯 → `502 waha_unavailable`（唔洩漏 URL／key）。
 
 ### `GET /api/whatsapp/messages?group=&status=&take=`（view）

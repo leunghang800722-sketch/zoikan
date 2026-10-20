@@ -11,7 +11,7 @@ import { JOBS } from "@/lib/jobs/registry";
 import { isValidCron } from "@/lib/scheduler/cron";
 import { computeHmacHex, safeEqualStr, verifyWebhook } from "@/lib/whatsapp/verify";
 import { WebhookEnvelopeSchema, normalizeEvent, parseTimestamp, telFromJid, isGroupJid } from "@/lib/whatsapp/schema";
-import { parseGroups } from "@/lib/whatsapp/waha";
+import { parseGroups, isGroupsShape } from "@/lib/whatsapp/waha";
 import { ignoreReasonFor } from "@/lib/whatsapp/ingest";
 import { middleware } from "@/middleware";
 import { DEFAULT_MATRIX, MODULES, ROLE_NAMES } from "@/lib/rbac/matrix";
@@ -199,6 +199,17 @@ describe("W0 純函數", () => {
     ]);
     expect(parseGroups({ groups: [{ id: "z@g.us" }] })).toEqual([{ jid: "z@g.us", name: "" }]);
     expect(parseGroups("nope")).toEqual([]);
+    // WA-6：以 jid 為 key 嘅 object map（value 內 subject／name；id 可缺；非群 key 過濾）
+    expect(parseGroups({ "x@g.us": { subject: "甲群" }, "y@g.us": { name: "乙群", id: "y@g.us" }, "z@g.us": {}, "p@c.us": { subject: "私" } })).toEqual([
+      { jid: "x@g.us", name: "甲群" },
+      { jid: "y@g.us", name: "乙群" },
+      { jid: "z@g.us", name: "" },
+    ]);
+    expect(parseGroups({})).toEqual([]);
+    expect(parseGroups({ not: "array" })).toEqual([]);
+    expect(isGroupsShape({})).toBe(true);
+    expect(isGroupsShape({ "x@g.us": {} })).toBe(true);
+    expect(isGroupsShape({ not: "array" })).toBe(false);
   });
 });
 

@@ -377,6 +377,8 @@ npx tsx scripts/staff-import/20-triage-evidence.ts --dry     # 合成假證件�
 - 重覆投遞（WAHA 重試）由 `message_id` 唯一約束吸收，回 200。
 - 保留期：`whatsapp_retention` job 每日 03:00 將超過 90 日嘅訊息原文置空（設定頁「自動排程」可見）。
 - 一旦封號／斷線：系統其他部分唔受影響，照舊人手入更；健康區 WAHA 狀態會變 `FAILED`／「連唔到」。
+- **群組列表空（「同步群組」後群組 0 個，訊息清單見「（未同步群組）」）**：WAHA NOWEB engine 預設 `config.noweb.store.enabled=false`，**呢個係建 session 時先決定**——冇 store 時 `GET /api/{session}/groups` 回空；要開 store 就要改 session config 後 **logout 再重新掃 QR**。部分 NOWEB 版本回應係以 jid 做 key 嘅 object map（唔係 array），系統三種形狀（array／`{groups:[]}`／jid map）都接受。系統已有後備（WA-6）：撳「同步群組」時，WAHA 列表之後再由已收訊息（`whatsapp_messages.chat_jid` 以 `@g.us` 結尾而 `whatsapp_groups` 冇）補群——`kind=ignored`、群名「未命名群組（尾 6 位 jid）」、`label_locked=false`；之後 WAHA 列表有名會自動改名，老闆亦可喺群組行／綁定設定直接改名（改咗即 `label_locked=true`，同步唔再覆蓋）。我哋唔會呼叫 `POST /api/{session}/groups/refresh`（WAHA 文件警告 rate-overlimit）。
+- **同步群組失敗原因分類**（WA-6）：群組請求加 `?exclude=participants`、timeout 20 秒（session 狀態仍 5 秒）。WAHA 列表失敗唔令 sync 失敗：照樣由訊息補群，回 200＋`waha_error { kind, status?, code, message }`——`timeout`（`waha_timeout`，群組太多或 WAHA 忙）、`http_error`（`waha_http_error`，帶 HTTP status）、`bad_response`（`waha_bad_response`）、`unreachable`（`waha_unavailable`）、`not_configured`（`waha_not_configured`）；server 一行 log `[whatsapp] group sync failed kind=… status=…`（唔含 URL／key／內容），audit `whatsapp_group_sync_failed`（after 只有 kind／status）。
 - **鐵則**：系統永遠唔呼叫任何發送／已讀／輸入中 API（`tests/whatsapp-misc.test.ts` 掃描 `src/lib/whatsapp` 等目錄禁用字串）。
 
 ## WhatsApp 解析 dry-run 流程（W1，2026-10）

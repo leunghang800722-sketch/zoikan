@@ -136,13 +136,18 @@ export default function WhatsappPage() {
     setSyncing(true);
     setError(null);
     setNotice(null);
-    const r = await apiPost<{ total: number; created: number; relabelled: number }>("/api/whatsapp/groups/sync");
+    const r = await apiPost<{ total: number; created: number; relabelled: number; from_messages: number; waha_error?: { kind: string; status?: number; code: string; message: string } }>("/api/whatsapp/groups/sync");
     setSyncing(false);
     if (!r.ok) {
       setError(r.message);
       return;
     }
-    setNotice(`已同步：WAHA 共 ${r.data.total} 個群，新增 ${r.data.created} 個（預設「略過」），更新群名 ${r.data.relabelled} 個。`);
+    const d = r.data;
+    setNotice(
+      d.waha_error
+        ? `WAHA 列表失敗（${d.waha_error.message}），已由已收訊息補 ${d.from_messages} 個群（預設「略過」，可喺群組行改名同綁定）。`
+        : `WAHA 列表 ${d.total} 個；新增 ${d.created} 個（預設「略過」）、更新群名 ${d.relabelled} 個；由已收訊息補 ${d.from_messages} 個。`,
+    );
     await loadGroups();
   }
 
@@ -230,7 +235,7 @@ export default function WhatsappPage() {
           <div className="text-zk-sm text-zk-faint">載入緊…</div>
         ) : groups.rows.length === 0 ? (
           <div className="rounded-lg border border-zk-border bg-white">
-            <EmptyState title="未有群組" description={canUpdate ? "撳「同步群組」由 WAHA 攞群組列表；新群預設「略過」，綁定後先會處理。" : "未有群組。請老闆同步群組。"} />
+            <EmptyState title="未有群組" description={canUpdate ? "撳「同步群組」由 WAHA 攞群組列表（列表攞唔到會由已收訊息補群）；新群預設「略過」，綁定後先會處理。" : "未有群組。請老闆同步群組。"} />
           </div>
         ) : (
           <ul className="grid gap-2 sm:grid-cols-2" data-testid="wa-group-list">
@@ -283,7 +288,10 @@ export default function WhatsappPage() {
             {messages.map((m) => (
               <li key={m.id} className="px-3 py-2 text-zk-sm" data-testid="wa-message-row">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                  <span className="min-w-0 truncate font-medium text-zk-text">{m.group_label}</span>
+                  <span className="min-w-0 truncate font-medium text-zk-text">
+                    {m.group_label}
+                    {m.group_label === "（未同步群組）" && <span className="ml-1 text-zk-xs font-normal text-zk-muted">撳「同步群組」會自動補</span>}
+                  </span>
                   <span className="text-zk-xs text-zk-muted">{fmtDateTime(m.ts)}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -388,6 +396,7 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
   onSaved: () => Promise<void>;
 }) {
   const [kind, setKind] = useState(group.kind);
+  const [label, setLabel] = useState(group.label ?? "");
   const [siteId, setSiteId] = useState(group.site_id ?? "");
   const [brokerId, setBrokerId] = useState(group.broker_id ?? "");
   const [pairs, setPairs] = useState<WordPair[]>(group.shift_word_map);
@@ -426,6 +435,7 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
     const cleaned = pairs.map((p) => ({ word: p.word.trim(), code: p.code.trim() })).filter((p) => p.word && p.code);
     const r = await apiPatch(`/api/whatsapp/groups`, {
       id: group.id,
+      ...(label.trim() !== (group.label ?? "") ? { label: label.trim() } : {}), // 改名後 label_locked=true，WAHA 同步唔再覆蓋
       kind,
       site_id: kind === "site" ? siteId || null : null,
       broker_id: kind === "broker" ? brokerId || null : null,
@@ -449,6 +459,10 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
     <Drawer open title={`綁定設定：${group.label || "（未命名群組）"}`} onClose={onClose} widthClassName="w-full max-w-[420px]">
       <div className="space-y-3" data-testid="wa-group-editor">
         <Banner kind="error" message={err} />
+        <label className="block space-y-1">
+          <span className="block text-sm text-zk-text-secondary">群組名稱（可自行改；改咗之後 WAHA 同步唔會覆蓋）</span>
+          <input className={inputCls} maxLength={200} aria-label="群組名稱" value={label} onChange={(e) => setLabel(e.target.value)} />
+        </label>
         <label className="block space-y-1">
           <span className="block text-sm text-zk-text-secondary">群組類型</span>
           <select className={selectCls} value={kind} onChange={(e) => setKind(e.target.value)} aria-label="群組類型">
