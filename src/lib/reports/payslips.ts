@@ -2,6 +2,9 @@
 // 同一人同月有 MP 更同 U 更 → 兩行分開列明（唔准撈埋一個總數），最後先加總額。
 //   - 每行 key＝guardId＋工號卡 id（見 payroll-by-card.ts），冇歸屬嘅更次歸「未標工號」一行（排最後）。
 //   - 出糧方／出糧方式讀 `staff_schemes`（唔寫死）。
+//   - 個人金額唔含雞頭費：每行「個人金額」＝工資（wage）；雞頭費（fee）另一欄顯示，唔入 `total`。
+//     `total`＝散更行（非長工體系，包括未標工號行）個人金額之和；長工體系行（MG）金額係長工毛額，另行獨立小計
+//     （`longtermTotal`），唔併入散更 `total`。
 //   - 長工體系（staff_schemes.is_longterm，出廠 MG）行：P3 前金額由長工糧表現有 line 取（`longterm_payroll_lines`
 //     按 guardId＋月，取該月未作廢嘅最新 run；攞唔到就 0），標 note「見長工糧表」；唔用該卡更次 snapshot 加總（避免重複計）。
 // 只讀報表，唔掂計糧邏輯。
@@ -27,8 +30,12 @@ interface PayslipLine {
   settlementBrokerCode: string;
   shifts: number;
   wage: number;
+  /** 雞頭費（資料欄，唔入個人金額／total） */
   fee: number;
+  /** 個人金額：散更行＝工資（唔含雞頭費）；長工體系行＝長工毛額（見長工糧表） */
   amount: number;
+  /** true＝長工體系行（金額係長工毛額，唔併入散更 total） */
+  isLongterm: boolean;
   note?: string;
 }
 
@@ -38,7 +45,12 @@ export interface Payslip {
   /** guards.staff_no（舊顯示欄；未標工號行用） */
   staffNo: string | null;
   lines: PayslipLine[];
+  /** 散更個人金額總額＝各散更行（非長工體系）工資之和；唔含雞頭費、唔含長工毛額 */
   total: number;
+  /** 散更行雞頭費之和（資料，唔入 total） */
+  feeTotal: number;
+  /** 長工毛額小計（長工體系行，另行獨立；冇長工行＝null） */
+  longtermTotal: number | null;
 }
 
 export function buildPayslips(month: Date): Promise<Payslip[]> {
@@ -85,6 +97,7 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
     const codes = [...a.brokers].sort();
     const wage = longtermAmount === null ? a.wage : 0;
     const fee = longtermAmount === null ? a.fee : 0;
+    // M2：個人金額＝工資，唔含雞頭費（雞頭費係俾雞頭，唔係個人糧）
     return {
       staffNumberId: a.staffNumberId,
       scheme: a.scheme,
@@ -98,7 +111,8 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
       shifts: a.shifts,
       wage,
       fee,
-      amount: longtermAmount === null ? round2(wage + fee) : round2(longtermAmount),
+      amount: longtermAmount === null ? round2(wage) : round2(longtermAmount),
+      isLongterm: longtermAmount !== null,
       ...(note ? { note } : {}),
     };
   };
@@ -130,7 +144,17 @@ async function buildPayslipsUncached(month: Date): Promise<Payslip[]> {
   for (const [guardId, lines] of byGuard) {
     const g = guardById.get(guardId);
     lines.sort((x, y) => sortKey(x) - sortKey(y) || (x.number ?? "").localeCompare(y.number ?? ""));
-    out.push({ guardId, guardName: g?.nameZh ?? "", staffNo: g?.staffNo ?? null, lines, total: round2(lines.reduce((s, l) => s + l.amount, 0)) });
+    const scatter = lines.filter((l) => !l.isLongterm);
+    const lt = lines.filter((l) => l.isLongterm);
+    out.push({
+      guardId,
+      guardName: g?.nameZh ?? "",
+      staffNo: g?.staffNo ?? null,
+      lines,
+      total: round2(scatter.reduce((s, l) => s + l.amount, 0)),
+      feeTotal: round2(scatter.reduce((s, l) => s + l.fee, 0)),
+      longtermTotal: lt.length ? round2(lt.reduce((s, l) => s + l.amount, 0)) : null,
+    });
   }
   out.sort((a, b) => a.guardName.localeCompare(b.guardName, "zh-Hant") || a.guardId.localeCompare(b.guardId));
   return out;

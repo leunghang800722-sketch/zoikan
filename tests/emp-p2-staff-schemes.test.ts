@@ -70,3 +70,21 @@ describe("EMP-P2 staff_schemes", () => {
     expect((await listSchemes(req("http://test.local/api/admin/staff-schemes", brokerCookie))).status).toBe(403);
   });
 });
+
+describe("EMP-P2.1 ai.audit_log 白名單", () => {
+  it("staff_schemes 變更 audit 俾 AI 助手睇到（無 PII）；其他未登記表照舊唔入", async () => {
+    const { aiQuery } = await import("@/lib/ai/db");
+    // 個別 test（wp-one-click-auto-isolation）會重跑舊 migration 令 view 退回舊定義，所以先重跑本 migration（CREATE OR REPLACE VIEW，冪等）確保測的係 migration 本身嘅定義
+    const dir = readdirSync(path.join(process.cwd(), "prisma/migrations")).find((d) => d.endsWith("_emp_p2_1_ai_audit_staff_schemes"))!;
+    await prisma.$executeRawUnsafe(readFileSync(path.join(process.cwd(), "prisma/migrations", dir, "migration.sql"), "utf-8"));
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const marker = `ai-wl-${Date.now()}`;
+    for (const t of ["staff_schemes", "guard_staff_numbers"]) {
+      await prisma.auditLog.create({ data: { actorUserId: fx.userIds["老闆"], tableName: t, rowId: marker, action: "update", after: { label_zh: "x", tel: "90000000" } } });
+    }
+    const { rows } = await aiQuery(`SELECT table_name, after FROM ai.audit_log WHERE row_id = '${marker}'`);
+    expect(rows.map((r) => (r as { table_name: string }).table_name)).toEqual(["staff_schemes"]);
+    expect(JSON.stringify((rows[0] as { after: unknown }).after)).not.toContain("90000000"); // tel 被 scrub
+  });
+});

@@ -244,13 +244,16 @@ async function buildPayrollWorkbook(month: Date): Promise<{ wb: ExcelJS.Workbook
   // EMP-P2：逐人糧單（additive 新 sheet，放最後，唔改上面任何 sheet 次序）。每人一組：標題行＋每張工號卡一行＋小計行＋空行。
   const payslips = await buildPayslips(month);
   const slipSheet = wb.addWorksheet("逐人糧單");
-  slipSheet.addRow(["Staff No.", "姓名／體系", "出糧方", "結算單位", "更數", "工資", "雞頭費", "金額", "備註"]);
+  // 個人金額唔含雞頭費：每行個人金額＝工資；雞頭費另欄（不入小計）；長工毛額另行獨立小計。
+  slipSheet.addRow(["逐人糧單（個人金額唔含雞頭費；長工毛額另行小計，見長工糧表）"]).font = { bold: true };
+  slipSheet.addRow(["Staff No.", "姓名／體系", "出糧方", "結算單位", "更數", "個人金額（工資，唔含雞頭費）", "雞頭費（唔入個人金額）", "備註"]);
   for (const p of payslips) {
     slipSheet.addRow([p.staffNo ?? "", p.guardName]).font = { bold: true };
     for (const l of p.lines) {
-      slipSheet.addRow([l.staffNumberId ? (l.number ?? "") : (p.staffNo ?? ""), l.schemeLabel, l.payerLabel ?? "", l.settlementBrokerCode, l.shifts, l.wage, l.fee, l.amount, l.note ?? ""]);
+      slipSheet.addRow([l.staffNumberId ? (l.number ?? "") : (p.staffNo ?? ""), l.schemeLabel, l.payerLabel ?? "", l.settlementBrokerCode, l.shifts, l.isLongterm ? l.amount : l.wage, l.isLongterm ? "" : l.fee, l.note ?? ""]);
     }
-    slipSheet.addRow(["", "小計", "", "", p.lines.reduce((a, l) => a + l.shifts, 0), "", "", p.total, ""]);
+    slipSheet.addRow(["", "小計（散更個人金額，唔含雞頭費）", "", "", p.lines.filter((l) => !l.isLongterm).reduce((a, l) => a + l.shifts, 0), p.total, p.feeTotal, ""]);
+    if (p.longtermTotal !== null) slipSheet.addRow(["", "長工毛額小計（見長工糧表，另計）", "", "", "", p.longtermTotal, "", ""]);
     slipSheet.addRow([]);
   }
 

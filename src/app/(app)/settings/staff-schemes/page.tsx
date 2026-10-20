@@ -62,7 +62,7 @@ export default function StaffSchemesPage() {
 
   return (
     <div className="flex flex-col gap-4" data-testid="staff-schemes-page">
-      <PageHeader kicker={kickerFor("/settings/staff-schemes")} title="工號體系" subtitle="U／MP／MG／MW 邊個出糧、點出糧。代號固定，只可以改顯示名、出糧方同出糧方式（空白＝跟雞頭）。" />
+      <PageHeader kicker={kickerFor("/settings/staff-schemes")} title="工號體系" subtitle="U／MP／MG／MW 邊個出糧、點出糧。代號固定，只可以改顯示名、出糧方同出糧方式（空白＝跟雞頭）。注意：改動會即時反映喺所有月份嘅逐人糧單（只係顯示，唔影響金額）。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       {rows === null ? (

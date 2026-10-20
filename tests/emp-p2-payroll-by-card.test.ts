@@ -62,12 +62,26 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     const slips = await buildPayslips(AUG);
     expect(slips).toHaveLength(1);
     const p = slips[0]!;
-    expect(p.lines.map((l) => [l.scheme, l.number, l.amount])).toEqual([["U", "U90901", 440], ["MP", "MP90901", 165], [null, null, 55]]); // U→MP→未標
+    expect(p.lines.map((l) => [l.scheme, l.number, l.amount, l.fee])).toEqual([["U", "U90901", 400, 40], ["MP", "MP90901", 150, 15], [null, null, 50, 5]]); // U→MP→未標；個人金額＝工資（唔含雞頭費），雞頭費另欄
     expect(p.lines[0]).toMatchObject({ payerLabel: "Wilson 出糧", schemeLabel: expect.stringContaining("U") });
     expect(p.lines[1]).toMatchObject({ payerLabel: "在勤出糧" });
     expect(p.lines[2]).toMatchObject({ schemeLabel: "未標工號", staffNumberId: null });
-    expect(p.total).toBe(660); // 兩行（加未標）之和
+    expect(p.total).toBe(600); // 各行個人金額（工資）之和，唔含雞頭費
+    expect(p.feeTotal).toBe(60);
+    expect(p.longtermTotal).toBeNull();
     expect(p.total).toBe(p.lines.reduce((s, l) => s + l.amount, 0));
+  });
+
+  it("M2（Opus 個案）：U 3 更每更工資 500＋MP 2 更每更 620 → U 行 1500、MP 行 1240、散更 total 2740；雞頭費欄 120／60 唔入 total", async () => {
+    for (let i = 0; i < 3; i++) await rec(fx.guardA.id, { cardId: cardU.id, scheme: "U", wage: 500, fee: 40 });
+    for (let i = 0; i < 2; i++) await rec(fx.guardA.id, { cardId: cardMP.id, scheme: "MP", wage: 620, fee: 30 });
+    const p = (await buildPayslips(AUG))[0]!;
+    expect(p.lines.map((l) => [l.scheme, l.shifts, l.amount, l.wage, l.fee])).toEqual([["U", 3, 1500, 1500, 120], ["MP", 2, 1240, 1240, 60]]);
+    expect(p.total).toBe(2740);
+    expect(p.feeTotal).toBe(180);
+    // buildPayrollTotals（按雞頭）仍然係工資＋雞頭費（雞頭角度），唔受影響
+    const t = (await buildPayrollTotals(AUG)).find((x) => x.brokerId === fx.brokerA.id)!;
+    expect(t).toMatchObject({ wage: 2740, fee: 180, amount: 2920 });
   });
 
   it("改一張卡嘅薪率只影響該行（另一張卡嘅行不變）", async () => {
@@ -79,7 +93,7 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     const after = (await buildPayslips(AUG))[0]!;
     expect(after.lines.find((l) => l.scheme === "MP")).toEqual(before.lines.find((l) => l.scheme === "MP"));
     expect(after.lines.find((l) => l.scheme === "U")!.wage).toBe(999);
-    expect(after.total).toBe(999 + 20 + 165);
+    expect(after.total).toBe(999 + 150);
   });
 
   it("buildPayrollTotals 總數不變；by_scheme 小計加埋＝該雞頭總數；已鎖月只有側表歸屬都歸返卡", async () => {
@@ -116,8 +130,11 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     await prisma.longtermPayrollLine.create({ data: { runId: run.id, guardId: g.id, contractSnapshot: [], daysInMonth: 31, netBasic: 12000, gross: 12500, autopay: 11900 } });
     slip = (await buildPayslips(AUG)).find((p) => p.guardId === g.id)!;
     expect(slip.lines[1]).toMatchObject({ scheme: "MG", amount: 12500, note: LONGTERM_NOTE, payerLabel: "在勤長工糧", payMethod: "autopay" });
-    expect(slip.lines[0]).toMatchObject({ scheme: "MP", amount: 300 });
-    expect(slip.total).toBe(12800);
+    expect(slip.lines[0]).toMatchObject({ scheme: "MP", amount: 300, isLongterm: false });
+    expect(slip.lines[1]!.isLongterm).toBe(true);
+    // M2：長工毛額另行獨立小計，唔併入散更 total
+    expect(slip.total).toBe(300);
+    expect(slip.longtermTotal).toBe(12500);
     // 有長工糧但冇任何 MG 更次 → 補 MG 行
     const g2 = await mkGuard({ employmentType: "longterm_autopay" });
     await prisma.guardStaffNumber.create({ data: { guardId: g2.id, scheme: "MG", number: "MG90903", status: "current" } });
@@ -147,8 +164,12 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     const slip = wb.getWorksheet("逐人糧單")!;
     const slipRows: unknown[][] = [];
     slip.eachRow((r) => slipRows.push((r.values as unknown[]).slice(1)));
-    const sub = slipRows.find((r) => r[1] === "小計")!;
-    expect(sub[7]).toBe(440);
+    const sub = slipRows.find((r) => String(r[1]).startsWith("小計"))!;
+    expect(sub[5]).toBe(400); // 散更個人金額小計（工資，唔含雞頭費）
+    expect(sub[6]).toBe(40); // 雞頭費小計（資料欄）
+    // 新欄位次序
+    expect(slipRows[0]).toEqual(["逐人糧單（個人金額唔含雞頭費；長工毛額另行小計，見長工糧表）"]);
+    expect(slipRows[1]).toEqual(["Staff No.", "姓名／體系", "出糧方", "結算單位", "更數", "個人金額（工資，唔含雞頭費）", "雞頭費（唔入個人金額）", "備註"]);
   });
 
   it("API：?view=person 老闆 200；雞頭 403（跨雞頭）；舊 totals 回應仍有 by_scheme", async () => {

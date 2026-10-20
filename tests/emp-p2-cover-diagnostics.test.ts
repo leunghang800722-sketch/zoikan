@@ -6,7 +6,10 @@ import { classifyLongtermShift, LONGTERM_SCATTER_EFFECTIVE_FROM } from "@/lib/lo
 import { loadStaffSchemes } from "@/lib/guards/staff-schemes";
 import { buildMonthHealth } from "@/lib/ops/month-health";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import { p10Base, mkLongterm, shiftAt, D, AUG_MONTH, SEP_MONTH } from "./p10-helpers";
+import { buildLongtermPayrollInputs } from "@/lib/longterm-payroll/aggregate";
+import { p10Base, mkLongterm, shiftAt, D, SEP_MONTH } from "./p10-helpers";
+
+const OCT_MONTH = D(10, 1);
 
 function sys(userId: string): AuthedSession {
   return { userId, tel: "", name: "", roleId: "", roleName: "老闆", baseRole: "老闆", brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString() };
@@ -18,42 +21,64 @@ afterAll(async () => {
 });
 
 describe("classifyLongtermShift（EMP-P2 頂位規則）", () => {
-  it("生效日 2026-09-01；之前舊邏輯；之後睇 staff_scheme：MG＝own、U／MP＝scatter、null＋B07＝own、null＋其他雞頭＝cover", async () => {
-    expect(LONGTERM_SCATTER_EFFECTIVE_FROM.toISOString().slice(0, 10)).toBe("2026-09-01");
+  it("生效日 2026-10-01；之前舊邏輯；之後 scatter 只適用於「本來判 cover」嘅更：B07 永遠 own、null 永遠 own_unsettled", async () => {
+    expect(LONGTERM_SCATTER_EFFECTIVE_FROM.toISOString().slice(0, 10)).toBe("2026-10-01");
     const schemes = await loadStaffSchemes();
     const c = (settle: string | null, scheme: string | null, date: Date) => classifyLongtermShift(settle, "B07", { staffScheme: scheme, workDate: date, schemes });
-    // 7／8 月（生效前）：即使有 U／MP scheme 都行舊邏輯（非 B07 有結算＝cover）
+    // 生效前（7／8／9 月）：即使有 U／MP scheme 都行舊邏輯（非 B07 有結算＝cover）
     expect(c("EXT", "U", D(8, 31))).toBe("cover");
-    expect(c("EXT", "MP", D(8, 15))).toBe("cover");
-    // 9 月起
-    expect(c("EXT", "U", D(9, 1))).toBe("scatter");
-    expect(c("EXT", "MP", D(9, 20))).toBe("scatter");
-    expect(c("EXT", "MG", D(9, 20))).toBe("own"); // MG 即使結算唔係 B07 都係自己崗位
-    expect(c("B07", null, D(9, 20))).toBe("own");
-    expect(c(null, null, D(9, 20))).toBe("own_unsettled");
-    expect(c("EXT", null, D(9, 20))).toBe("cover"); // 冇 scheme → 照舊
-    expect(c("EXT", "MW", D(9, 20))).toBe("cover"); // 非前線非長工體系 → 照舊
+    expect(c("EXT", "MP", D(9, 15))).toBe("cover");
+    expect(c("EXT", "U", D(9, 30))).toBe("cover");
+    // 10 月起：settlement 有值而且唔係 B07
+    expect(c("EXT", "U", D(10, 1))).toBe("scatter");
+    expect(c("EXT", "MP", D(10, 20))).toBe("scatter");
+    expect(c("EXT", "MG", D(10, 20))).toBe("own"); // MG 即使結算唔係 B07 都係自己崗位
+    expect(c("EXT", null, D(10, 20))).toBe("cover"); // 冇 scheme → 照舊
+    expect(c("EXT", "MW", D(10, 20))).toBe("cover"); // 非前線非長工體系 → 照舊
+    expect(c("EXT", "ZZ", D(10, 20))).toBe("cover"); // 未知 scheme → 落返 settlement 邏輯
+    // M1：settlement＝B07 永遠 own（就算 scheme＝U／MP）；settlement null 永遠 own_unsettled
+    expect(c("B07", "U", D(10, 5))).toBe("own");
+    expect(c("B07", "MP", D(10, 5))).toBe("own");
+    expect(c("B07", null, D(10, 20))).toBe("own");
+    expect(c(null, "MP", D(10, 5))).toBe("own_unsettled");
+    expect(c(null, "U", D(10, 5))).toBe("own_unsettled");
+    expect(c(null, null, D(10, 20))).toBe("own_unsettled");
     // 冇傳 opts（舊 call site）＝完全舊邏輯
     expect(classifyLongtermShift("EXT", "B07")).toBe("cover");
   });
+
+  it("M1 日薪制長工：10 月自己崗位更（settlement＝B07，scheme＝U／MP）workDays 照計，Net Basic 唔少計", async () => {
+    const b = await p10Base();
+    const g = await prisma.guard.create({ data: { nameZh: "測試日薪長工", employmentType: "longterm_autopay", hireDate: new Date("2020-01-01"), createdBy: "t" } });
+    await prisma.guardLongtermContract.create({ data: { guardId: g.id, monthlySalary: 600, payBasis: "daily", dailyRate: 600, effectiveFrom: new Date("2020-01-01"), effectiveTo: null, source: "manual", createdBy: b.actorUserId } });
+    await prisma.guardLongtermPost.create({ data: { guardId: g.id, siteId: b.sites.A.id, effectiveFrom: new Date("2020-01-01"), source: "manual", createdBy: b.actorUserId } });
+    for (const [i, scheme] of ["U", "MP", null, "U", "MP"].entries()) {
+      const r = await shiftAt(b, g.id, "A", D(10, i + 1), { own: true });
+      if (scheme) await prisma.shiftRecord.update({ where: { id: r.id }, data: { staffScheme: scheme } });
+    }
+    const out = await buildLongtermPayrollInputs(OCT_MONTH);
+    const line = out.lines.find((l) => l.guardId === g.id)!;
+    expect(line.workDays).toBe(5);
+    expect(line.netBasic).toBe(3000);
+  });
 });
 
-describe("loadCoverShifts：9 月起 U／MP 卡散更唔計頂位津貼；8 月舊邏輯不變", () => {
-  it("同一長工：9 月 U／MP／null scheme 外判更 → 只有 null scheme 係頂位；8 月 U scheme 外判更仍係頂位", async () => {
+describe("loadCoverShifts：10 月起 U／MP 卡散更唔計頂位津貼；9 月（含）之前舊邏輯不變", () => {
+  it("同一長工：10 月 U／MP／null scheme 外判更 → 只有 null scheme 係頂位；9 月 U scheme 外判更仍係頂位", async () => {
     const b = await p10Base();
     const g = await mkLongterm(b, "測試甲");
     const put = async (date: Date, scheme: string | null) => {
       const r = await shiftAt(b, g.id, "B", date);
       if (scheme) await prisma.shiftRecord.update({ where: { id: r.id }, data: { staffScheme: scheme } });
     };
-    await put(D(9, 3), "U");
-    await put(D(9, 4), "MP");
-    await put(D(9, 5), null);
-    await put(D(8, 6), "U"); // 生效前
+    await put(D(10, 3), "U");
+    await put(D(10, 4), "MP");
+    await put(D(10, 5), null);
+    await put(D(9, 6), "U"); // 生效前
+    const oct = await loadCoverShifts([OCT_MONTH]);
+    expect(oct.shifts.map((s) => s.date)).toEqual(["2026-10-05"]);
     const sep = await loadCoverShifts([SEP_MONTH]);
-    expect(sep.shifts.map((s) => s.date)).toEqual(["2026-09-05"]);
-    const aug = await loadCoverShifts([AUG_MONTH]);
-    expect(aug.shifts.map((s) => s.date)).toEqual(["2026-08-06"]);
+    expect(sep.shifts.map((s) => s.date)).toEqual(["2026-09-06"]);
   });
 });
 

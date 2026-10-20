@@ -503,6 +503,8 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 - 糧單以「工號卡」為最細單位：同一人同月有 MP 更同 U 更，出糧單合併做同一份，但分開兩行列明（逐人糧單）。要睇準，更次要有工號卡歸屬：先去「盤」設定頁設好各盤 `staff_scheme`、補齊人嘅 U／MP／MG 卡，再跑回填（`npm run db:backfill-shift-staff-numbers`，見 EMP-P1 回填）；未標工號嘅更次會歸「未標工號」一行，月結診斷有「未標工號更次」同「盤未設工號體系」兩條直達卡。
 - 出糧方按體系：設定頁「工號體系」（`/settings/staff-schemes`，老闆）改 U／MP／MG／MW 嘅顯示名、出糧方、出糧方式；唔寫死。
-- 長工頂位規則（老闆 2026-10-20 拍板）：長工用 U／MP 卡開散更唔計頂位津貼（散更糧已出）。2026-09-01（`LONGTERM_SCATTER_EFFECTIVE_FROM`）起生效，看更次 `staff_scheme`；7／8 月鎖月行舊邏輯。9 月起更次要有 `staff_scheme`（盤已設 scheme 或回填）規則先會生效；冇 scheme 嘅更次照舊跟 settlement。
+- 長工頂位規則（老闆 2026-10-20 拍板）：長工用 U／MP 卡開散更唔計頂位津貼（散更糧已出）。2026-10-01（`LONGTERM_SCATTER_EFFECTIVE_FROM`，`src/lib/longterm-payroll/shift-classify.ts`；10 月係第一個肯定未鎖嘅月，9 月如已出糧唔郁）起生效，看更次 `staff_scheme`；7／8／9 月行舊邏輯。規則只適用於「settlement 有值而且唔係 B07」嘅更（B07 更永遠係自己崗位）；10 月起更次要有 `staff_scheme`（盤已設 scheme 或回填）規則先會生效；冇 scheme 嘅更次照舊跟 settlement。要改生效日只改該常數＋api.md／本段文字。
+- 逐人糧單「個人金額」唔含雞頭費；雞頭費另欄顯示、唔入個人 total；長工毛額（MG 行）另行獨立小計，見長工糧表。
+- 改 `staff_schemes`（出糧方／出糧方式／顯示名）會即時反映喺所有月份嘅逐人糧單（顯示層），唔影響金額。
 - Gate 備註：每雞頭 sheet 行數會變（每人每卡一行），`糧明細總表(按雞頭)`／`buildPayrollTotals` 數字不變（`perf:snapshot` 的 payroll 欄位逐項相同）。
 

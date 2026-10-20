@@ -1,7 +1,7 @@
 // P10.2：長工「頂位更」認定（唯讀），同 aggregate 口徑一致（共用 `classifyLongtermShift`）：
 // 非簽證長工、recordType=shift、settlement_broker_id 有值且 ≠ B07（internal_longterm）＝頂位更（幫雞頭頂散更）；
 // B07 或 null＝自己崗位。崗位盤判斷（母盤／構造盤 activityProxy 摺疊、Postorder 權威月只認 manual）已在對數時寫入 settlement，呢度唔再自己查崗位。
-// EMP-P2（老闆 2026-10-20 拍板）：2026-09-01 起，更次 `staff_scheme` 係 U／MP（前線散更體系）嘅更唔當頂位更，唔計頂位津貼（見 shift-classify.ts）；7／8 月行舊邏輯。
+// EMP-P2（老闆 2026-10-20 拍板）：2026-10-01 起，更次 `staff_scheme` 係 U／MP（前線散更體系）嘅更唔當頂位更，唔計頂位津貼（見 shift-classify.ts）；7／8／9 月行舊邏輯。
 // 注意：呢啲更喺 aggregate 已經由雞頭現金結算（唔當長工返工日）——是否再出頂位津貼會唔會雙重支付，要老闆決定（見 P3 §14.2）。
 // 職級 grade：更表行 `rank_raw` 經 `classifyRank`（含 IC／SIC＝IC，其他＝兵）；搵唔到行就跟更別（billing_group=monthly_ic 或 code 含 IC）。
 import { prisma } from "@/lib/db";
@@ -74,7 +74,7 @@ export async function loadCoverShifts(months: Date[]): Promise<CoverShiftLoad> {
       for (const r of rows) rankByRow.set(r.id, r.rankRaw);
     }
     for (const r of recs) {
-      // EMP-P2：2026-09-01 起，U／MP 卡散更（kind=scatter）唔計頂位津貼；只有 kind=cover 先係頂位更
+      // EMP-P2：2026-10-01 起，U／MP 卡散更（kind=scatter）唔計頂位津貼；只有 kind=cover 先係頂位更
       if (classifyLongtermShift(r.settlementBrokerId, internalId, { staffScheme: r.staffScheme, workDate: r.workDate, schemes: staffSchemes }) !== "cover") continue;
       const date = ymd(r.workDate);
       const rid = r.provenance && typeof r.provenance === "object" && !Array.isArray(r.provenance) ? (r.provenance as Record<string, unknown>).row_id : null;

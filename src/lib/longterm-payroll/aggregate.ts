@@ -339,7 +339,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, ...excludeUnapprovedWhatsapp() },
     select: { guardId: true, workDate: true, recordType: true, leaveCode: true, otHours: true, settlementBrokerId: true, source: true, siteId: true, staffScheme: true },
   });
-  const staffSchemes = await loadStaffSchemes(client as never); // EMP-P2：頂位規則（2026-09-01 起）睇更次 staff_scheme
+  const staffSchemes = await loadStaffSchemes(client as never); // EMP-P2：頂位規則（2026-10-01 起）睇更次 staff_scheme
   const shiftsByGuard = new Map<string, typeof shiftRecords>();
   for (const r of shiftRecords) {
     const arr = shiftsByGuard.get(r.guardId) ?? [];

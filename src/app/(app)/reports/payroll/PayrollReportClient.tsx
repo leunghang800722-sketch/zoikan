@@ -48,6 +48,7 @@ interface SlipLine {
   wage: number;
   fee: number;
   amount: number;
+  is_longterm: boolean;
   note?: string;
 }
 interface Slip {
@@ -56,6 +57,8 @@ interface Slip {
   staff_no: string | null;
   lines: SlipLine[];
   total: number;
+  fee_total: number;
+  longterm_total: number | null;
 }
 
 interface UnpricedGroup {
@@ -321,10 +324,13 @@ function PayslipView({ slips, loading }: { slips: Slip[]; loading: boolean }) {
         <section key={p.guard_id} className="rounded-[10px] border border-zk-border bg-white" data-testid={`payslip-${p.guard_id}`}>
           <div className="flex items-center justify-between border-b border-zk-border-soft px-3.5 py-2">
             <span className="text-zk-base font-semibold text-zk-text">{p.guard_name}</span>
-            <span className="text-zk-base font-bold text-zk-text">總額 {fmtMoney(p.total)}</span>
+            <span className="text-zk-base font-bold text-zk-text">
+              散更個人金額 {fmtMoney(p.total)}
+              {p.longterm_total !== null && <span className="ml-3 font-normal text-zk-muted">長工毛額（另計，見長工糧表）{fmtMoney(p.longterm_total)}</span>}
+            </span>
           </div>
           <div className="overflow-x-auto">
-            <table className={tableCls.table} style={{ minWidth: tableMinWidth(8) }}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
               <thead>
                 <tr>
                   <th className={tableCls.th}>工號</th>
@@ -332,9 +338,8 @@ function PayslipView({ slips, loading }: { slips: Slip[]; loading: boolean }) {
                   <th className={tableCls.th}>出糧方</th>
                   <th className={tableCls.th}>結算單位</th>
                   <th className={tableCls.thNum}>更數</th>
-                  <th className={tableCls.thNum}>工資</th>
-                  <th className={tableCls.thNum}>雞頭費</th>
-                  <th className={tableCls.thNum}>金額</th>
+                  <th className={tableCls.thNum}>個人金額（唔含雞頭費）</th>
+                  <th className={tableCls.thNum}>雞頭費（唔入個人金額）</th>
                 </tr>
               </thead>
               <tbody>
@@ -348,9 +353,8 @@ function PayslipView({ slips, loading }: { slips: Slip[]; loading: boolean }) {
                     <td className={tableCls.td}>{l.payer_label ?? ""}</td>
                     <td className={tableCls.td}>{l.settlement_broker_code}</td>
                     <td className={tableCls.tdNum}>{l.shifts}</td>
-                    <td className={tableCls.tdNum}>{fmtMoney(l.wage)}</td>
-                    <td className={tableCls.tdNum}>{fmtMoney(l.fee)}</td>
-                    <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(l.amount)}</td>
+                    <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(l.is_longterm ? l.amount : l.wage)}</td>
+                    <td className={tableCls.tdNum}>{l.is_longterm ? "" : fmtMoney(l.fee)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -34,8 +34,8 @@ export async function loadStaffSchemes(db: Db = prisma): Promise<Map<string, Sta
   return map;
 }
 
-/** 未知 scheme（例如將來自填）嘅顯示：label＝code，冇出糧方。 */
+/** 未知 scheme（例如將來自填）嘅顯示：label＝code，冇出糧方；既非前線亦非長工（同 `classifyLongtermShift` 口徑一致：未知 scheme 一律落返 settlement 邏輯，唔當散更）。 */
 export function schemeInfoOf(map: ReadonlyMap<string, StaffSchemeInfo>, code: string | null): StaffSchemeInfo | null {
   if (!code) return null;
-  return map.get(code) ?? { code, labelZh: code, payerCode: null, payerLabelZh: null, payMethod: null, isFrontline: true, isLongterm: false, sort: 99 };
+  return map.get(code) ?? { code, labelZh: code, payerCode: null, payerLabelZh: null, payMethod: null, isFrontline: false, isLongterm: false, sort: 99 };
 }
