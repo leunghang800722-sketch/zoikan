@@ -126,7 +126,9 @@ describe("reconcile（WP-OCR-4）：候選池、舊格式相容、仲裁規則",
     expect(reconcile("name_zh", "測試甲", "測試甲")).toMatchObject({ status: "confirmed", value: "測試甲", candidates: [], candidates_ranked: [] });
   });
   it("新 object 格式一致 → confirmed；confidence 低都照 confirmed（規則不變）", () => {
-    expect(reconcile("phone", { value: "9000 1111", confidence: "low", reason: "blurry" }, { value: "90001111", confidence: "medium" })).toMatchObject({ status: "confirmed", value: "90001111" });
+    expect(reconcile("name_zh", { value: "測試 甲", confidence: "low", reason: "blurry" }, { value: "測試甲", confidence: "medium" })).toMatchObject({ status: "confirmed", value: "測試甲" });
+    // OCR-6：電話要三讀一致，少一讀就 review
+    expect(reconcile("phone", { value: "9000 1111", confidence: "low", reason: "blurry" }, { value: "90001111", confidence: "medium" }, NOW, "90001111")).toMatchObject({ status: "confirmed", value: "90001111" });
   });
   it("兩讀唔同：value＝最高分候選（HKID check digit 啱嗰個，即使係讀 B）", () => {
     const r = reconcile("hkid", "Z900001(3)", goodId, NOW);
@@ -166,11 +168,11 @@ describe("reconcile（WP-OCR-4）：候選池、舊格式相容、仲裁規則",
   });
   describe("仲裁（arbiter）", () => {
     it("仲裁值同讀 A 一致且 valid → confirmed（2/3），arbiter=agree_a", () => {
-      const r = reconcile("phone", "90001111", "90001112", NOW, { value: "9000 1111" });
-      expect(r).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a", candidates: [] });
+      const r = reconcile("name_zh", "測試甲", "測試乙", NOW, { value: "測試 甲" });
+      expect(r).toMatchObject({ status: "confirmed", value: "測試甲", arbiter: "agree_a", candidates: [] });
     });
     it("仲裁值同讀 B 一致且 valid → confirmed，arbiter=agree_b", () => {
-      expect(reconcile("phone", "90001111", "90001112", NOW, "90001112")).toMatchObject({ status: "confirmed", value: "90001112", arbiter: "agree_b" });
+      expect(reconcile("name_zh", "測試甲", "測試乙", NOW, "測試乙")).toMatchObject({ status: "confirmed", value: "測試乙", arbiter: "agree_b" });
     });
     it("仲裁值同其中一讀一致但 invalid（check digit 錯）→ 唔 confirmed", () => {
       const r = reconcile("hkid", "Z900001(3)", "Z900001(4)", NOW, "Z900001(3)");

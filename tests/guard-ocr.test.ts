@@ -70,7 +70,8 @@ describe("正規化／格式驗證／reconcile（純函數）", () => {
     expect(reconcile("name_zh", SYN_NAME, ` ${SYN_NAME} `)).toMatchObject({ status: "confirmed", value: SYN_NAME });
     expect(reconcile("hkid", "A123456(3)", "a123456 (3)")).toMatchObject({ status: "confirmed", value: "A123456(3)" });
     expect(reconcile("dob", "15-03-1988", "1988-03-15")).toMatchObject({ status: "confirmed", value: "1988-03-15" });
-    expect(reconcile("phone", "6123 4567", "+852 6123-4567")).toMatchObject({ status: "confirmed", value: "61234567" });
+    expect(reconcile("phone", "6123 4567", "+852 6123-4567", new Date(), "61234567")).toMatchObject({ status: "confirmed", value: "61234567" }); // OCR-6：電話要三讀一致
+    expect(reconcile("phone", "6123 4567", "+852 6123-4567")).toMatchObject({ status: "review", value: "61234567", reason: "phone_needs_three_way" });
     expect(reconcile("name_en", "CHAN, Tai Man", "Chan Tai Man")).toMatchObject({ status: "confirmed", value: "CHAN TAI MAN" });
     expect(reconcile("sex", "M", "male")).toMatchObject({ status: "confirmed", value: "M" });
   });
@@ -96,8 +97,8 @@ describe("正規化／格式驗證／reconcile（純函數）", () => {
     expect(reconcile("dob", "31-02-1990", "31-02-1990")).toMatchObject({ status: "review", reason: "dob_calendar" });
     expect(reconcile("dob", "15-03-1850", "15-03-1850")).toMatchObject({ status: "review", reason: "dob_year_implausible" });
     expect(reconcile("dob", "15-03-2015", "15-03-2015", new Date("2026-10-05"))).toMatchObject({ status: "review", reason: "dob_year_implausible" });
-    expect(reconcile("phone", "12345678", "12345678")).toMatchObject({ status: "review", reason: "phone_not_hk" });
-    expect(reconcile("phone", "6123", "6123")).toMatchObject({ status: "review", reason: "phone_format" });
+    expect(reconcile("phone", "12345678", "12345678", new Date(), "12345678")).toMatchObject({ status: "review", reason: "phone_not_hk" });
+    expect(reconcile("phone", "6123", "6123", new Date(), "6123")).toMatchObject({ status: "review", reason: "phone_digit_count" });
     expect(reconcile("name_zh", "CHAN", "CHAN")).toMatchObject({ status: "review", reason: "name_zh_format" });
     expect(reconcile("sex", "X", "X")).toMatchObject({ status: "review", reason: "sex_format" });
   });
@@ -157,7 +158,7 @@ describe("readDocument：兩次獨立讀", () => {
     expect(Object.keys(p.fields)).toEqual(["address"]);
     const f = await readDocument(client, "onboarding_form", { full: IMG, tiles: [IMG] });
     expect(Object.keys(f.fields).sort()).toEqual(["address", "dob", "hkid", "name_zh", "phone"]); // OCR-1：入職表加讀姓名／HKID／出生日期（交叉核對用）
-    expect(f.fields.phone).toMatchObject({ status: "confirmed", value: SYN_TEL });
+    expect(f.fields.phone).toMatchObject({ status: "review", value: SYN_TEL, reason: "phone_needs_three_way" }); // OCR-6：冇仲裁 client 唔 confirmed
   });
   it("模型輸出解析失敗 → 該次讀全部 unclear（唔拋錯）；兩次都壞 → 全部 missing", async () => {
     const { client } = fakeVision({ raw: { a: "我睇唔到 {壞", b: "nope" } });

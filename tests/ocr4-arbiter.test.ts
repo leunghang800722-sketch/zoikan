@@ -44,7 +44,7 @@ function trio(answers: Parameters<typeof fake>[1]) {
 const obj = (value: string, confidence: "high" | "medium" | "low", extra: Spec = {}) => ({ value, confidence, reason: confidence === "high" ? null : "blurry", alternatives: [], ...extra });
 
 describe("第三讀仲裁：觸發條件", () => {
-  it("兩讀唔同且 confidence 都唔係 high → 觸發 1 次；仲裁同讀 A 一致且 valid → confirmed", async () => {
+  it("兩讀唔同且 confidence 都唔係 high → 觸發 1 次；仲裁同讀 A 一致且 valid → review（OCR-6：電話 2/3 唔再 confirmed）", async () => {
     const t = trio({
       a: { phone: obj("90001111", "low"), address: obj("新界火炭示範街99號虛構大廈15樓A室", "high") },
       b: { phone: obj("90001112", "medium"), address: obj("新界火炭示範街99號虛構大廈15樓A室", "high") },
@@ -52,7 +52,7 @@ describe("第三讀仲裁：觸發條件", () => {
     });
     const r = await readDocument(t.clients, "onboarding_form", IMGS);
     expect(t.arbCalls()).toHaveLength(1);
-    expect(r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
+    expect(r.fields.phone).toMatchObject({ status: "review", value: "90001111", arbiter: "agree_a", reason: "phone_needs_three_way" });
     expect(r.fields.address).toMatchObject({ status: "confirmed" });
     expect(r.arbiter).toEqual({ called: true, fields: 1 });
     // 仲裁 request：只問分歧欄、圖＝全圖＋全部格、prompt 列出候選
@@ -70,22 +70,27 @@ describe("第三讀仲裁：觸發條件", () => {
       return { n: t.arbCalls().length, r };
     };
     const hh = await run("high", "high");
-    expect(hh.n).toBe(0);
-    expect(hh.r.fields.phone).toMatchObject({ status: "review", reason: "reads_differ" });
-    expect(hh.r.arbiter).toEqual({ called: false, fields: 0 });
-    expect(hh.r.usage.calls).toBe(2);
+    expect(hh.n).toBe(1); // OCR-6：電話永遠仲裁（兩讀都 high 都跑）
+    expect(hh.r.fields.phone).toMatchObject({ status: "review", reason: "phone_needs_three_way", arbiter: "agree_a" });
+    expect(hh.r.arbiter).toEqual({ called: true, fields: 1 });
+    expect(hh.r.usage.calls).toBe(3);
     for (const [ca, cb] of [["high", "medium"], ["medium", "high"], ["low", "low"], ["high", "low"]] as const) {
       const x = await run(ca, cb);
       expect(x.n, `${ca}/${cb}`).toBe(1);
-      expect(x.r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
+      expect(x.r.fields.phone).toMatchObject({ status: "review", value: "90001111", arbiter: "agree_a", reason: "phone_needs_three_way" });
     }
   });
-  it("OCR-4.4：兩讀一致（即使都 high 或 low）唔觸發", async () => {
+  it("OCR-6：電話兩讀一致（即使都 high 或 low）都跑仲裁；三讀一致先 confirmed；仲裁唔同 → review independent", async () => {
     for (const c of ["high", "low"] as const) {
       const t = trio({ a: { phone: obj("90001111", c) }, b: { phone: obj("90001111", c) }, arbiter: { phone: obj("90001112", "high") } });
       const r = await readDocument(t.clients, "onboarding_form", IMGS);
-      expect(t.arbCalls()).toHaveLength(0);
-      expect(r.fields.phone).toMatchObject({ status: "confirmed" });
+      expect(t.arbCalls()).toHaveLength(1);
+      expect(t.arbCalls()[0]!.fields).toEqual(["phone"]);
+      expect(r.fields.phone).toMatchObject({ status: "review", value: "90001111", arbiter: "independent", reason: "phone_needs_three_way" });
+      const t3 = trio({ a: { phone: obj("90001111", c) }, b: { phone: obj("90001111", c) }, arbiter: { phone: obj("90001111", "high") } });
+      const r3 = await readDocument(t3.clients, "onboarding_form", IMGS);
+      expect(t3.arbCalls()).toHaveLength(1);
+      expect(r3.fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
     }
   });
   it("OCR-4.4：地址只差形近字（村／邨）→ strict 分歧入仲裁（即使 canon 一致）；仲裁同讀 B strict 一致 → confirmed", async () => {
@@ -129,10 +134,14 @@ describe("第三讀仲裁：觸發條件", () => {
     expect(r.fields.phone).toMatchObject({ status: "review", reason: "reads_differ", arbiter: "independent" });
     expect(r.fields.phone!.candidates).toHaveLength(3);
   });
-  it("兩讀一致／一邊 unclear → 唔觸發", async () => {
+  it("地址兩讀一致／一邊 unclear → 唔觸發（OCR-6：只有電話欄永遠入仲裁）", async () => {
     const t = trio({ a: { phone: "90001111", address: "unclear" }, b: { phone: "9000 1111", address: "新界火炭示範街99號虛構大廈15樓A室" } });
     await readDocument(t.clients, "onboarding_form", IMGS);
-    expect(t.arbCalls()).toHaveLength(0);
+    expect(t.arbCalls()).toHaveLength(1);
+    expect(t.arbCalls()[0]!.fields).toEqual(["phone"]);
+    const t2 = trio({ a: { address: "unclear" }, b: { address: "新界火炭示範街99號虛構大廈15樓A室" } });
+    await readDocument(t2.clients, "onboarding_form", IMGS);
+    expect(t2.arbCalls()).toHaveLength(0);
   });
   it("多個分歧欄 → 一次過問（每份文件最多 1 次呼叫）", async () => {
     const t = trio({
@@ -288,7 +297,7 @@ describe("POST /api/guards/ocr/read：新舊格式回應 additive", () => {
     const res = await call([doc("onboarding_form")]);
     const j = await res.json();
     expect(res.status).toBe(200);
-    expect(j.documents[0].fields.phone).toMatchObject({ status: "confirmed", value: "90001112", arbiter: "agree_b" });
+    expect(j.documents[0].fields.phone).toMatchObject({ status: "review", value: "90001112", arbiter: "agree_b", reason: "phone_needs_three_way" });
     expect(j.documents[0].arbiter).toEqual({ called: true, fields: 1 });
     expect(j.usage.calls).toBe(3);
     const row = (await prisma.auditLog.findMany({ where: { action: "guard_ocr_read", actorUserId: fx.userIds["老闆"] }, orderBy: { createdAt: "desc" }, take: 1 }))[0]!;
@@ -307,5 +316,26 @@ describe("POST /api/guards/ocr/read：新舊格式回應 additive", () => {
     expect(nz.status).toBe("review");
     expect(nz.candidates).toEqual(["測試申", "測試由", "測試甲"]);
     expect(nz.candidates_ranked.map((c: { sources: string[] }) => c.sources)).toEqual([["a"], ["b"], ["a_alt"]]);
+  });
+});
+
+describe("OCR-6：read.ts 電話強制仲裁", () => {
+  it("兩讀一致都 high、只有電話 → 仲裁只問 phone；三讀一致 confirmed；仲裁 prompt 候選淨一個值", async () => {
+    const t = trio({ a: { phone: obj("90001111", "high") }, b: { phone: obj("90001111", "high") }, arbiter: { phone: obj("90001111", "high") } });
+    const r = await readDocument(t.clients, "onboarding_form", IMGS);
+    expect(t.arbCalls()).toHaveLength(1);
+    expect(t.arbCalls()[0]!.fields).toEqual(["phone"]);
+    expect(r.arbiter).toEqual({ called: true, fields: 1 });
+    expect(r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111" });
+  });
+  it("冇仲裁 client（例如純 DeepSeek 模式）→ 電話唔會 confirmed", async () => {
+    const t = trio({ a: { phone: obj("90001111", "high") }, b: { phone: obj("90001111", "high") } });
+    const r = await readDocument({ a: t.clients.a, b: t.clients.b }, "onboarding_form", IMGS);
+    expect(r.fields.phone).toMatchObject({ status: "review", reason: "phone_needs_three_way" });
+  });
+  it("其他欄兩讀一致 high 仍唔觸發仲裁（身份證）", async () => {
+    const t = trio({ a: { hkid: obj("Z900001(2)", "high") }, b: { hkid: obj("Z900001(2)", "high") } });
+    await readDocument(t.clients, "id_card", IMGS);
+    expect(t.arbCalls()).toHaveLength(0);
   });
 });

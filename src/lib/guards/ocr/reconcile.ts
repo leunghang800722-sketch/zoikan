@@ -69,6 +69,31 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
   const na = ua ? null : normalizeField(key, ra.value!, now);
   const nb = ub ? null : normalizeField(key, rb.value!, now);
 
+  // OCR-6：手寫電話收緊——confirmed 必須 a、b、仲裁三讀（正規化後）逐字相同＋valid（8 位、冇分格線嫌疑）。
+  //   任何一讀位數唔係 8 → review phone_digit_count；兩讀相同但冇仲裁／仲裁唔同 → review phone_needs_three_way；
+  //   2/3 一致（仲裁同其中一讀）→ review，預填一致嗰個值，arbiter agree_a|agree_b。
+  if (key === "phone" && na && nb) {
+    const nr = rr && !urr ? normalizeField(key, rr.value!, now) : null;
+    const digits = (x: { canon: string }) => x.canon.replace(/\D/g, "").length;
+    const tag: FieldResult["arbiter"] = rr ? (urr ? "unclear" : nr!.canon === na.canon ? "agree_a" : nr!.canon === nb.canon ? "agree_b" : "independent") : undefined;
+    const withTag = (r: FieldResult): FieldResult => (tag ? { ...r, arbiter: tag } : r);
+    const reviewRanked = (reason: string, prefer?: string): FieldResult => {
+      const ranked = rankFieldCandidates(key, pool, now);
+      return withTag({ status: "review", value: prefer ?? ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason });
+    };
+    if ([na, nb, ...(nr ? [nr] : [])].some((x) => digits(x) !== 8)) return reviewRanked("phone_digit_count");
+    if (na.canon === nb.canon) {
+      if (!na.valid) return reviewRanked(na.reason ?? "invalid_format", na.display); // 8 位但格式不合（例如非 2–9 開頭）
+      if (nr && nr.canon === na.canon && nr.valid) return { status: "confirmed", value: nr.display, candidates: [], candidates_ranked: [], arbiter: "agree_a" };
+      return reviewRanked("phone_needs_three_way", na.display);
+    }
+    if (nr && tag !== "independent") {
+      const chosen = tag === "agree_a" ? na : nb;
+      return reviewRanked(chosen.valid ? "phone_needs_three_way" : (chosen.reason ?? "invalid_format"), chosen.display);
+    }
+    // 兩讀唔同、仲裁獨立／unclear／冇仲裁 → 沿用下面 reads_differ 路徑
+  }
+
   if (na && nb && na.canon === nb.canon) {
     // WP-OCR-2：canon（形近字歸一）只用嚟配對兩讀；地址要 strict（只做 NFKC／空白／標點）都相同且冇糾錯建議先 confirmed。
     // 只差形近／簡繁字 → review（候選＝兩個寫法，標準寫法排前）；有形近字糾錯建議 → review（候選＝原文＋建議）

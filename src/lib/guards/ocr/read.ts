@@ -355,7 +355,7 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
 }
 
 /**
- * 兩讀都有值、正規化後唔同，**除非兩讀 confidence 都係 high** 嘅欄位（OCR-4.4：讀 A 多數自報 high，
+ * （OCR-6：phone 永遠算分歧＝永遠仲裁。）兩讀都有值、正規化後唔同，**除非兩讀 confidence 都係 high** 嘅欄位（OCR-4.4：讀 A 多數自報 high，
  * 舊條件「兩讀都唔係 high」令分歧欄留喺 review）。地址欄用 strict 比較：只差形近／簡繁字都當分歧。
  */
 function disputedFields(fields: readonly OcrFieldKey[], pa: ModelReads | null, pb: ModelReads | null, now: Date): OcrFieldKey[] {
@@ -363,6 +363,7 @@ function disputedFields(fields: readonly OcrFieldKey[], pa: ModelReads | null, p
     const x = pa?.[f];
     const y = pb?.[f];
     if (!x || !y || isUnclear(x.value) || isUnclear(y.value)) return false;
+    if (f === "phone") return true; // OCR-6：手寫電話永遠仲裁（即使兩讀一致／都 high），confirmed 要三讀一致
     if (x.confidence === "high" && y.confidence === "high") return false;
     const nx = normalizeField(f, x.value!, now);
     const ny = normalizeField(f, y.value!, now);

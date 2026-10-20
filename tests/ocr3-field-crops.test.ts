@@ -260,12 +260,12 @@ describe("readStageA／readStageB", () => {
     expect(solo.field_boxes).toEqual({});
   });
   it("stage B（field_crops）：prompt 講明邊張係邊欄、只抄該欄；reconcile＋images_b_kind／field_boxes_used；用量只計讀 B", async () => {
-    const { clients, calls } = clientsOf({ a: { phone: obj("90001111"), address: obj(ADDR_TXT), field_boxes: { phone: PHONE, address: ADDR } }, b: { phone: obj("90001111"), address: obj(ADDR_TXT) } });
+    const { clients, calls } = clientsOf({ a: { phone: obj("90001111"), address: obj(ADDR_TXT), field_boxes: { phone: PHONE, address: ADDR } }, b: { phone: obj("90001111"), address: obj(ADDR_TXT) }, arbiter: { phone: obj("90001111") } });
     const a = await readStageA(clients, "onboarding_form", IMG);
     calls.length = 0;
     const crops = [IMG + "P", IMG + "A"];
     const r = await readStageB(clients, "onboarding_form", a, { kind: "field_crops", images: crops, fieldOf: ["phone", "address"], full: IMG });
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2); // 讀 B＋電話永遠仲裁（OCR-6）
     expect(calls[0]!.images).toEqual(crops);
     expect(calls[0]!.userText).toBe(buildUserTextFieldCrops("onboarding_form", ["phone", "address"]));
     expect(calls[0]!.userText).toMatch(/Image 1 is the phone number field/);
@@ -275,7 +275,7 @@ describe("readStageA／readStageB", () => {
     expect(r.field_boxes_used).toBe(true);
     expect(r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111" });
     expect(r.fields.address).toMatchObject({ status: "confirmed" });
-    expect(r.usage.calls).toBe(1);
+    expect(r.usage.calls).toBe(2);
     expect(r.provider_used).toEqual({ a: "claude", b: "deepseek" });
   });
   it("stage B（field_crops）仲裁：用全圖＋分歧欄對應裁圖", async () => {
@@ -290,7 +290,7 @@ describe("readStageA／readStageB", () => {
     const arb = calls.find((c) => c.system.includes("tie-breaker"))!;
     expect(arb.images).toEqual([IMG + "F", IMG + "P"]); // 全圖＋電話裁圖（地址冇分歧）
     expect(arb.userText).toBe(buildArbiterUserTextCrops("onboarding_form", { phone: ["90001111", "90001112"] }, ["phone"]));
-    expect(r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
+    expect(r.fields.phone).toMatchObject({ status: "review", value: "90001111", arbiter: "agree_a", reason: "phone_needs_three_way" }); // OCR-6：2/3 一致唔再 confirmed
     expect(r.arbiter).toEqual({ called: true, fields: 1 });
     expect(r.usage.calls).toBe(2); // B＋仲裁（不含 A）
   });
@@ -307,13 +307,13 @@ describe("readStageA／readStageB", () => {
     expect(r.arbiter.called).toBe(false);
   });
   it("legacy readDocument 行為不變：A 冇 box 要求、images_b_kind=tiles、兩次呼叫", async () => {
-    const { clients, calls } = clientsOf({ a: { phone: obj("90001111"), address: obj(ADDR_TXT) }, b: { phone: obj("90001111"), address: obj(ADDR_TXT) } });
+    const { clients, calls } = clientsOf({ a: { phone: obj("90001111"), address: obj(ADDR_TXT) }, b: { phone: obj("90001111"), address: obj(ADDR_TXT) }, arbiter: { phone: obj("90001111") } });
     const r = await readDocument(clients, "onboarding_form", { full: IMG, tiles: [IMG, IMG, IMG, IMG] });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3); // A、B＋電話永遠仲裁（OCR-6）
     expect(calls.every((c) => c.boxFields === undefined)).toBe(true);
     expect(r.images_b_kind).toBe("tiles");
     expect(r.field_boxes_used).toBe(false);
-    expect(r.usage.calls).toBe(2);
+    expect(r.usage.calls).toBe(3);
   });
   it("Claude schema：stage A 加 field_boxes（required、可 null）；電話欄加 digit_count；其他不變", () => {
     const s = ocrJsonSchema(["phone", "address"], ["phone", "address"]);
@@ -385,7 +385,7 @@ describe("電話分格線（9–10 位）", () => {
   it("reconcile：兩讀同樣 9 位 → review（唔 confirmed），預填＝剔走 1 嘅 8 位，候選含原值", () => {
     const r = reconcile("phone", "912345678", "912345678");
     expect(r.status).toBe("review");
-    expect(r.reason).toBe("phone_gridline_suspect");
+    expect(r.reason).toBe("phone_digit_count"); // OCR-6：位數唔係 8 統一原因碼
     expect(r.value).toBe("92345678");
     expect(r.candidates).toContain("912345678");
     expect(r.candidates_ranked[0]).toMatchObject({ value: "92345678", reason: "valid" });
@@ -394,7 +394,7 @@ describe("電話分格線（9–10 位）", () => {
   it("reconcile：A 9 位、B 剛好係剔走 1 嘅 8 位 → review reads_differ，候選排第一（兩源一致加權），仍唔自動確認", () => {
     const r = reconcile("phone", "912345678", "92345678");
     expect(r.status).toBe("review");
-    expect(r.reason).toBe("reads_differ");
+    expect(r.reason).toBe("phone_digit_count");
     expect(r.value).toBe("92345678");
     expect(r.candidates_ranked[0]!.sources).toEqual(["b", "a_grid"]);
   });
@@ -611,6 +611,7 @@ describe("POST /api/guards/ocr/read：stage a／stage b", () => {
   const formAnswers = (aOver: Spec = {}, bOver: Spec = {}, extra: Partial<Parameters<typeof fake>[1]> = {}) => ({
     a: { phone: obj("90001111"), address: obj(ADDR_TXT), field_boxes: { phone: PHONE, address: ADDR }, ...aOver },
     b: { phone: obj("90001111"), address: obj(ADDR_TXT), ...bOver },
+    arbiter: { phone: obj("90001111") }, // OCR-6：電話永遠仲裁
     ...extra,
   });
   async function stageA(answers: Parameters<typeof fake>[1], calls: VisionRequest[] = []) {
@@ -672,8 +673,8 @@ describe("POST /api/guards/ocr/read：stage a／stage b", () => {
     expect(d.field_boxes_used).toBe(true);
     expect(d.fields.phone).toMatchObject({ status: "confirmed", value: "90001111" });
     expect(d.fields.address).toMatchObject({ status: "confirmed" });
-    expect(jb.usage.calls).toBe(1); // stage b 只計讀 B
-    expect(calls).toHaveLength(2);
+    expect(jb.usage.calls).toBe(2); // stage b 只計讀 B＋電話仲裁（OCR-6）
+    expect(calls).toHaveLength(3);
     expect(calls[1]!.userText).toMatch(/Image 1 is the phone number field/);
   });
   it("stage b（tiles 後備）：images_b_kind=tiles", async () => {
@@ -730,7 +731,7 @@ describe("POST /api/guards/ocr/read：stage a／stage b", () => {
     const calls: VisionRequest[] = [];
     const { j } = await stageA(answers, calls);
     const jb = await (await post(bBody(j.documents[0].continuation, { kind: "field_crops", images: [IMG + "P", IMG + "A"], field_of: ["phone", "address"] }, IMG + "F"))).json();
-    expect(jb.documents[0].fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
+    expect(jb.documents[0].fields.phone).toMatchObject({ status: "review", value: "90001111", arbiter: "agree_a", reason: "phone_needs_three_way" });
     expect(jb.documents[0].arbiter).toEqual({ called: true, fields: 1 });
     expect(calls.at(-1)!.images).toEqual([IMG + "F", IMG + "P"]);
     const { j: j2 } = await stageA(answers);
@@ -745,7 +746,7 @@ describe("POST /api/guards/ocr/read：stage a／stage b", () => {
     const j = await res.json();
     expect(j.documents[0].fields.phone.status).toBe("confirmed");
     expect(j.documents[0].images_b_kind).toBe("tiles");
-    expect(j.usage.calls).toBe(2);
+    expect(j.usage.calls).toBe(3); // A＋B＋電話仲裁（OCR-6）
     expect((await post({ documents: [{ type: "onboarding_form", full: IMG }] })).status).toBe(400);
   });
   it("audit：stage a／b 都只記計數（field_crops_docs／fallback_tiles_docs），冇值、冇 box 座標、冇 continuation、冇圖", async () => {
@@ -824,7 +825,7 @@ describe("評估腳本 --flow（兩段式／legacy）＋ Node 裁圖幾何", () 
     const two = await run([]);
     expect(two).toContain("流程 two-stage｜欄位級裁圖文件 1｜後備 2×2 格文件 2");
     expect(two).toContain("cases 4/4 ok");
-    expect(two).toContain("呼叫 8"); // 4 份文件 × (A＋B)
+    expect(two).toContain("呼叫 11（仲裁 3 份文件）"); // 4 份文件 × (A＋B)＋3 份有電話欄嘅文件各 1 次仲裁（OCR-6）
     const legacy = await run(["--flow", "legacy"]);
     expect(legacy).toContain("流程 legacy｜欄位級裁圖文件 0｜後備 2×2 格文件 0");
     for (const v of ["測試甲", "Z900001", "90001111", "示範街", "crop-0", "form.png", "0.1"]) {
