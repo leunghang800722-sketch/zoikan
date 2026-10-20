@@ -22,6 +22,7 @@ import { buildReconciliation } from "@/lib/reports/reconciliation";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { checkRosterUploadCoverage } from "@/lib/roster-upload/lock-precondition";
 import { countSlPending } from "@/lib/longterm-payroll/sl-confirm";
+import { assertNotHistoricalMonth } from "@/lib/month-close/historical";
 import { listLeaverAdwPending } from "@/lib/longterm-payroll/leaver-adw-pending";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -35,6 +36,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     const before = await prisma.monthClose.findUniqueOrThrow({ where: { id } });
     if (before.lockedAt) throw Conflict("呢個月已經鎖定咗");
+    await assertNotHistoricalMonth(before.month, "鎖月"); // HIST-1
 
     // B1-6（規則 10，§14）：月結鎖定前檢查——該月有出更（shift_records／
     // daily_requirements）嘅盤，冇 active 更表上載→擋鎖；有上載但未對數

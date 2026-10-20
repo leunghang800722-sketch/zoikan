@@ -10,6 +10,7 @@
 // 一律唔會出現喺任何明細入面——缺資料類只講「缺邊樣」，唔回值。
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { assertNotHistoricalMonth } from "@/lib/month-close/historical";
 import { n, round2, monthRange, monthStart as toMonthStart } from "@/lib/reports/money";
 import { buildMonthlyClose, type MonthlyCloseSiteRow } from "@/lib/reports/monthly-close";
 import { buildPayrollTotals } from "@/lib/reports/payroll";
@@ -91,6 +92,7 @@ function finding(f: Omit<HealthFinding, "detail" | "detailTruncated"> & { detail
 }
 
 export async function buildMonthHealth(month: Date, session: AuthedSession): Promise<MonthHealth> {
+  await assertNotHistoricalMonth(month, "月結健康體檢"); // HIST-1
   const m0 = toMonthStart(month);
   const m1 = addMonths(m0, -1);
   const { start, end } = monthRange(m0);

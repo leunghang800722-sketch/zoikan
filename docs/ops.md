@@ -525,3 +525,24 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - P3.2：Maxwell 離職名單只睇「最後一日」早過卡 valid_from／人卡 hire／合約鏈起點先當上一段（唔結束卡）；導入入職日差幾日唔阻結束卡（只出 `[import_hire_date_differs]` 提示）。鏡像改咗人卡日期會喺工號卡操作後即時顯示 hint（`hire_date_mirrored`／`leave_date_mirrored`／`leave_date_overwritten_by_card`）；**未鎖月份重算會跟新人卡值，已鎖月不變（接受）**。上線前對拍腳本睇 `resigned_without_valid_to`，補晒 valid_to 先令再入職判斷準確。
 - 警告：長工糧 `warnings` 會出 `[rehire_suspected]`（任何月份）、`[card_guard_date_mismatch]`／`[rehire_detected]`（10 月起）。
 
+
+## HIST-1 歷史月份更表上載＋假期結餘回填（2026-10）
+
+目的：老闆唔俾現成病假結餘數，會逐步上載 2026-07 之前月份嘅更表，由系統由更表計返長工病假／年假結餘。
+
+**核實結果（舊月份上載點處理）**：roster-upload（`service.ts` `processRosterUpload`、`reconcile-apply.ts`、`lock-precondition.ts`）對月份冇下限、唔要求 `month_closes` 行存在（冇行＝未鎖）；`lock-precondition` 對 2026-08 前月份直接放行；介紹費自動計（`REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH=2026-08`）只喺一鍵結算入面跑，早過起計月份唔重算。**唯一會自動撞板嘅副作用**係排程：`auto_one_click`（每 5 分鐘）對「任何未鎖、有 parsed 上載」嘅月份自動跑一鍵結算（含長工糧、月結），舊月份上載後靜置 10 分鐘就會被觸發；另外 `nightly_month_health`／`longterm_input_drafts` 對本月＋上月、待對數總覽 `pending-summary`（冇指定月份）會涵蓋。所以要標記。
+
+**歷史月份標記**：`month_closes.historical Boolean @default(false)`（migration `20261029000000_hist1_month_close_historical`，純加欄）。建立：`POST /api/month-closes { month:"2026-05", historical:true }`（`糧務:create`）；該月已有 month_closes 行而未鎖、冇一鍵結算 run、冇長工糧 run → 就地標記（200）；已鎖或做過月結／糧 → 409。標記後該月：
+- 可以照常上載更表、對數、套用（落更 `shift_records`，含 leave SL／AL／SH；leave 本身無 snapshot）；
+- `POST /api/month-close/one-click`、`POST /api/month-closes/:id/lock`、`POST /api/month-closes/:id/generate`、`GET /api/reports/month-health`、`GET /api/diagnostics/month`、長工糧計算（`recomputeLongtermPayroll`）一律 409 `historical_month`；
+- 排程 `auto_one_click`（summary.skipped=`historical`）、`nightly_month_health`、`longterm_input_drafts` 跳過；`pending-summary` 冇帶 month 嘅總覽唔計（明確指定該月照出）。
+- 介紹費、糧、鎖月流程唔會跑。標記冇「取消」API（要取消搵管理員改 DB）。ops digest 只睇當月起計三個月，唔受影響。
+
+**流程**：(1) 對每個舊月份 `POST /api/month-closes {historical:true}`；(2) 逐盤上載該月更表、對數套用；(3) 全部上載完，`npx tsx scripts/db/leave-opening-from-rosters.ts --as-of 2026-06 --out data/leave-opening.json`（dry-run，預設）睇差異清單；(4) 確認後加 `--apply` 寫入。
+
+**結餘腳本** `scripts/db/leave-opening-from-rosters.ts`（`npm run db:leave-opening-from-rosters -- --as-of 2026-06`）：
+- 對象＝長工（有未作廢長工合約，或有長工體系（`staff_schemes.is_longterm`，出廠 MG）工號卡）；
+- 計算（截至 as-of 月尾含）：AL＝不同 AL 日子數；SL＝SL 日子按連續曆日分段，逐段按 compute.ts 規則模擬（段開始日累積結餘 `slAccrued(入職日, 段開始日)`＝做滿 1 個月先儲、每月 2 日、上限 120，減已用；結餘 ≥ 段日數＝有薪 4/5 食結餘，否則無薪唔食）。**假設**：歷史月份冇醫生紙人手確認，一律當已確認（同 P17.1 `SL_CONFIRMED_SHORT_PAID`）；RD／OFF 夾中間唔橋接；WhatsApp 未批核更唔計；入職日用 `guards.hire_date`（EMP-P3 `resolveLongtermPeriod` 未合併；合併後可換成 helper，冇入職日標 `no_hire_date`，slAccrued 當 0）。
+- 寫入（`--apply`）`guard_leave_balances (guardId, year=as-of 年)`：`alTaken`／`slTaken`＝截至 as-of 月尾累積（as-of 之後月份計糧讀呢兩欄做 opening）、`alTakenOpening`／`slTakenOpening`＝截至 as-of 前一個月月尾累積（同月重算用）、`slAccrued`＝as-of 月尾累積結餘、`asOfMonth`＝as-of 月。只喺該 guard 該 year 行 `asOfMonth` 為 null 或早過 as-of 先寫；冇行就建（全部歸零就唔建）；asOfMonth ≥ as-of（計糧已推進，例如已計 7／8／9 月）一律唔郁，只喺差異清單 `skip_existing_newer` 列出。冪等；每次 `--apply` 一條 audit summary（`action=backfill_leave_opening`，只有月份＋計數）。
+- 輸出：console 計數；`--out`（限 `data/` 或 `out/`）JSON 只有 `guard_id`＋數字＋月份，每人 `computed` vs `existing` 同 `diffs`（欄位 → [現有, 計算]），用嚟同銀行差額（8 月 −3,936.43、9 月 +1,287.97）對返；`flags`：`no_hire_date`、`sl_unpaid_segments:N`。
+- 已計過 7／8／9 月嘅現有環境：`guard_leave_balances` 2026 行 `asOfMonth` 已係 9 月，腳本唔會覆蓋，只出差異清單俾人手判斷（要改需先處理已計月份，見 `recomputeLongtermPayroll` 「later asOfMonth」保護）。

@@ -15,6 +15,7 @@ import { BadRequest, Conflict } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { writeAudit } from "@/lib/audit";
 import { findOneClickRuns, findOneClickRunSummaries, oneClickRunToDTO, oneClickRunSummaryToDTO } from "@/lib/month-close/one-click-read";
+import { assertNotHistoricalMonth } from "@/lib/month-close/historical";
 import { runOneClickMonthClose, ONE_CLICK_ADVISORY_LOCK_KEY, ONE_CLICK_STALE_MS } from "@/lib/month-close/one-click";
 
 export async function POST(req: Request) {
@@ -23,6 +24,7 @@ export async function POST(req: Request) {
     const body = (await readJson(req)) as { month?: unknown };
     const month = typeof body.month === "string" ? parseMonthParam(body.month) : null;
     if (!month) throw BadRequest("請傳 month（YYYY-MM 或 YYYY-MM-01）");
+    await assertNotHistoricalMonth(month, "一鍵結算"); // HIST-1
 
     const now = new Date();
     const staleBefore = new Date(now.getTime() - ONE_CLICK_STALE_MS);

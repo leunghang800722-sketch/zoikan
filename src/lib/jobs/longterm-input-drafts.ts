@@ -7,6 +7,7 @@ import { createNotification } from "@/lib/notify/create";
 import { generateLongtermInputDrafts, listAttendanceBonusEligible, type DraftMonthResult } from "@/lib/longterm-payroll/drafts";
 import { notifySlDraftsPending } from "@/lib/longterm-payroll/sl-confirm";
 import { generateCoverDrafts, type CoverDraftResult } from "@/lib/longterm-payroll/cover-drafts";
+import { historicalMonthKeys } from "@/lib/month-close/historical";
 import { withAuditJob } from "@/lib/audit-job-context";
 import { ensureSystemUser } from "@/lib/system-user";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
@@ -91,7 +92,12 @@ export async function runLongtermInputDrafts(now: Date, onlyMonths?: Date[]): Pr
       const out: Record<string, unknown> = {};
       const prevMonth = monthsToProcess(now)[0]!;
       let touched = 0;
+      const historical = await historicalMonthKeys(); // HIST-1：歷史月份唔生成草稿
       for (const month of onlyMonths ?? monthsToProcess(now)) {
+        if (historical.has(month.getTime())) {
+          out[month.toISOString().slice(0, 7)] = { skipped: "historical" };
+          continue;
+        }
         const r = await processMonth(month, sysId, today, month.getTime() === prevMonth.getTime());
         out[r.draft.month] = { ...r.draft, bonus_eligible: r.bonus, cover: r.cover };
         touched += r.draft.created + r.draft.updated + r.draft.voided + (r.cover ? r.cover.created + r.cover.updated + r.cover.voided : 0);

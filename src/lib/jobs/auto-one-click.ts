@@ -9,6 +9,7 @@
 // 完成／失敗／halt 都通知老闆＋會計（body 只有數字／月份／原因一句）。
 import { prisma } from "@/lib/db";
 import { isMonthLocked } from "@/lib/month-lock";
+import { isHistoricalMonth } from "@/lib/month-close/historical";
 import { writeAudit } from "@/lib/audit";
 import { createNotification } from "@/lib/notify/create";
 import { ONE_CLICK_ADVISORY_LOCK_KEY, ONE_CLICK_STALE_MS, runOneClickMonthClose } from "@/lib/month-close/one-click";
@@ -25,7 +26,7 @@ export const AUTO_ONE_CLICK_KEY = "auto_one_click";
 /** 最新上載要靜置幾耐先自動跑（等齊所有檔）。 */
 const UPLOAD_SETTLE_MS = 10 * 60 * 1000;
 
-type SkipReason = "locked" | "reopened_no_new_upload" | "settling" | "no_new_upload" | "already_triggered" | "run_in_progress" | "busy";
+type SkipReason = "historical" | "locked" | "reopened_no_new_upload" | "settling" | "no_new_upload" | "already_triggered" | "run_in_progress" | "busy";
 
 function label(month: Date): string {
   return month.toISOString().slice(0, 7);
@@ -60,6 +61,10 @@ async function runAutoOneClickInner(now: Date): Promise<JobResult> {
 
   for (const { month } of parsedMonths) {
     const m = label(month);
+    if (await isHistoricalMonth(month)) {
+      skipped[m] = "historical"; // HIST-1：歷史月份只上載更表計假期結餘，唔自動跑一鍵結算
+      continue;
+    }
     if (await isMonthLocked(month)) {
       skipped[m] = "locked";
       continue;

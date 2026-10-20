@@ -1396,6 +1396,8 @@ model MonthClose {
   lockedAt          DateTime? @map("locked_at")
   lockedBy          String?   @map("locked_by")
   rosterVersionNote String?   @map("roster_version_note")
+  // HIST-1：歷史月份（2026-07 前，只上載更表＋對數＋落更，用嚟由更表計假期結餘）——唔跑月結／糧／介紹費／鎖月，排程 job 跳過
+  historical Boolean @default(false)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

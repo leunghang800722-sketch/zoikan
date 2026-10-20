@@ -10,7 +10,7 @@ import { paginationParams, readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { MonthCloseCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { BadRequest } from "@/lib/api/errors";
+import { BadRequest, Conflict } from "@/lib/api/errors";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -57,7 +57,20 @@ export async function POST(req: Request) {
     const parsedDate = new Date(input.month);
     if (Number.isNaN(parsedDate.getTime())) throw BadRequest("month 格式唔啱（YYYY-MM-DD 或 YYYY-MM）");
     const month = monthStart(parsedDate);
-    const created = await prisma.monthClose.create({ data: { month, rosterVersionNote: input.roster_version_note ?? null, createdBy: session.userId } });
+    // HIST-1：historical=true 標記歷史月份（只上載更表＋對數＋落更；唔跑月結／糧／介紹費／鎖月，排程 job 跳過）。
+    // 該月已有 month_closes 行：未鎖、冇任何一鍵結算 run、冇長工糧 run → 就地標記；否則 409（唔可以將已做過月結嘅月份標做歷史）。
+    if (input.historical) {
+      const existing = await prisma.monthClose.findUnique({ where: { month } });
+      if (existing) {
+        const runs = await prisma.monthCloseRun.count({ where: { month } });
+        const payruns = await prisma.longtermPayrollRun.count({ where: { month } });
+        if (existing.lockedAt || runs > 0 || payruns > 0) throw Conflict("呢個月已經鎖定或者做過月結／長工糧，唔可以標做歷史月份");
+        const upd = await prisma.monthClose.update({ where: { id: existing.id }, data: { historical: true } });
+        await writeAudit({ actorUserId: session.userId, tableName: "month_closes", rowId: upd.id, action: "update", before: existing, after: upd, ip: getClientIp(req) });
+        return ok(await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(upd)), 200);
+      }
+    }
+    const created = await prisma.monthClose.create({ data: { month, rosterVersionNote: input.roster_version_note ?? null, historical: input.historical ?? false, createdBy: session.userId } });
     await writeAudit({ actorUserId: session.userId, tableName: "month_closes", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
     return ok(await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(created)), 201);
   });

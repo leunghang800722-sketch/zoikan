@@ -675,6 +675,8 @@ export const MonthCloseCreateSchema = z
   .object({
     month: z.string().min(4), // "YYYY-MM" 或 "YYYY-MM-DD"，monthStart() 再處理
     roster_version_note: z.string().optional(),
+    /** HIST-1：true＝歷史月份（只上載更表＋對數＋落更，唔跑月結／糧／介紹費／鎖月） */
+    historical: z.boolean().optional(),
   })
   .strict();
 

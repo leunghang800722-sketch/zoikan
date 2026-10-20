@@ -2924,3 +2924,8 @@ WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W
 
 **對拍腳本** `npm run db:longterm-card-dates-diff -- --out data/longterm-card-dates-diff.json`（只讀；`--out` 必須喺 `data/` 或 `out/` 之下，唔入 git）：逐個長工分類 consistent／card_no_dates／mismatch／rehire_suspected／no_mg_card，另有兩個獨立清單 `start_after_effective`（選中鏈起點遲過生效日 10/1）同 `mirror_would_change`（鏡像會改人卡 hire／leave 嘅人，列前後日期＋提示碼）；JSON 只有 guardId 同日期；console 只印計數。
 
+## HIST-1：歷史月份（month_closes.historical）
+
+- `POST /api/month-closes` body additive `historical?: boolean`；`true`＝標記歷史月份（只上載更表＋對數＋落更；唔跑月結／糧／介紹費／鎖月，排程跳過）。該月已有未鎖、冇一鍵結算 run、冇長工糧 run 嘅行 → 就地標記回 200；已鎖或做過月結／糧 → 409。回應與 `GET /api/month-closes` 的 DTO 多 `historical`（additive）。
+- 歷史月份下列端點回 409 `historical_month`：`POST /api/month-close/one-click`、`POST /api/month-closes/:id/lock`、`POST /api/month-closes/:id/generate`、`GET /api/reports/month-health`、`GET /api/diagnostics/month`、長工糧計算。`GET /api/roster-uploads/pending-summary` 冇帶 month 嘅總覽唔計歷史月份。
+- 運維腳本 `scripts/db/leave-opening-from-rosters.ts`（見 ops.md「HIST-1」）。

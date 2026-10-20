@@ -15,6 +15,7 @@ import { Forbidden, BadRequest } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { prisma } from "@/lib/db";
 import { identityIndexStatus } from "@/lib/guards/identity-indexes";
+import { assertNotHistoricalMonth } from "@/lib/month-close/historical";
 import { buildMonthDiagnostics } from "@/lib/reports/month-diagnostics";
 
 const monthParamSchema = z.string().regex(/^\d{4}-\d{2}$/, "月份格式要係 YYYY-MM");
@@ -30,6 +31,7 @@ export async function GET(req: Request) {
     const month = parseMonthParam(parsedMonth.data);
     if (!month) throw BadRequest("month 要帶值（YYYY-MM）");
 
+    await assertNotHistoricalMonth(month, "月份診斷"); // HIST-1
     const diagnostics = await buildMonthDiagnostics(session, month);
     // WP-STAFF-IMPORT：身份證／電話唯一 index 狀態（淨係數字）。
     return ok(brandSafeResponse({ ...diagnostics, identity: await identityIndexStatus(prisma) }));
