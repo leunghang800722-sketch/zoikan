@@ -14,6 +14,8 @@ import { createNotification } from "@/lib/notify/create";
 import { SL_MIN_CONSECUTIVE, diffDaysInclusive, sl45Payment, slAccrued, slSegmentVerdict, toUtcDate } from "./compute";
 import { pickBySourcePriority } from "./attendance-priority";
 import { findConfirmedLeaveOverlap, OVERLAP_MSG } from "./drafts";
+import { loadStaffSchemes } from "@/lib/guards/staff-schemes";
+import { resolveLongtermPeriod, type PeriodCard } from "./employment-period";
 import type { Prisma } from "@prisma/client";
 
 const SL_DRAFT_SOURCE = "roster_leave:SL";
@@ -75,13 +77,19 @@ export async function listSlPending(month: Date): Promise<SlPendingResult> {
   const m = iso(start).slice(0, 7);
   const drafts = await prisma.longtermPayrollInput.findMany({
     where: { month: start, kind: "leave", status: "draft", draftSource: SL_DRAFT_SOURCE, voidedAt: null },
-    include: { guard: { select: { nameZh: true, staffNo: true, staffNoMw: true, hireDate: true } } },
+    include: { guard: { select: { nameZh: true, staffNo: true, staffNoMw: true, hireDate: true, leaveDate: true } } },
     orderBy: [{ guardId: "asc" }, { dateFrom: "asc" }],
   });
   const base = { month: m, locked: await isMonthLocked(start) };
   if (drafts.length === 0) return { ...base, segments: [], segment_count: 0, guard_count: 0 };
 
   const guardIds = [...new Set(drafts.map((d) => d.guardId))];
+  // EMP-P3：入職日（病假結餘 accrued 起點）2026-10 起改讀長工體系卡鏈，同 aggregate 一致（resolveLongtermPeriod）
+  const staffSchemes = await loadStaffSchemes();
+  const ltCodes = new Set([...staffSchemes.values()].filter((x) => x.isLongterm).map((x) => x.code));
+  const cardRows = ltCodes.size ? await prisma.guardStaffNumber.findMany({ where: { guardId: { in: guardIds }, scheme: { in: [...ltCodes] } }, select: { id: true, guardId: true, scheme: true, status: true, validFrom: true, validTo: true, endReason: true, predecessorId: true } }) : [];
+  const cardsByGuard = new Map<string, PeriodCard[]>();
+  for (const c of cardRows) (cardsByGuard.get(c.guardId) ?? cardsByGuard.set(c.guardId, []).get(c.guardId)!).push(c);
   const [rosterSl, balances, avgWages, confirmed] = await Promise.all([
     // P18 驗收 M1：先跟來源優先次序（連 shift 紀錄比較）再篩 SL，同 aggregate／草稿生成一致。
     prisma.shiftRecord
@@ -130,7 +138,7 @@ export async function listSlPending(month: Date): Promise<SlPendingResult> {
       usedByGuard.set(d.guardId, used);
     }
     const used = usedByGuard.get(d.guardId)!;
-    const hire = d.guard.hireDate;
+    const hire = resolveLongtermPeriod({ id: d.guardId, hireDate: d.guard.hireDate, leaveDate: d.guard.leaveDate }, cardsByGuard.get(d.guardId) ?? [], start, ltCodes).start;
     const accrued = hire ? slAccrued(toUtcDate(hire), toUtcDate(from)) : 0;
     const balance = round2(accrued - used);
     const within = balance + 1e-9 >= rosterDays;
