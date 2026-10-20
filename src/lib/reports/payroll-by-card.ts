@@ -45,7 +45,12 @@ interface RawGroup {
   fee: Prisma.Decimal | null;
 }
 
-/** 每 (結算單位 × 保安員 × 工號卡) 一行。 */
+/**
+ * 每 (結算單位 × 保安員 × 工號卡) 一行。
+ *   - EMP-P2.3 M1：結算單位 kind=external（settlementType=none，客戶自己嘅人，唔入糧）嘅更次剔出，唔計人數、唔出行（睇 `countExternalShifts`）。
+ *   - EMP-P2.3 S1：LINK 盤（sites.guards_paid_by_client）更次即使有舊 snapshot 都唔計入 wage／fee（SQL FILTER NOT guards_paid_by_client），
+ *     但仍計入 shifts／linkShifts（備註「LINK 盤更數 N（唔計價）」）。
+ */
 export function buildPayrollByCard(month: Date): Promise<CardPayrollRow[]> {
   return memoized(`payrollcard:${monthRange(month).start.toISOString()}`, () => buildPayrollByCardUncached(month));
 }
@@ -59,14 +64,16 @@ async function buildPayrollByCardUncached(month: Date): Promise<CardPayrollRow[]
            COALESCE(sr.staff_scheme, a.staff_scheme) AS scheme,
            COUNT(*) AS shifts,
            COUNT(*) FILTER (WHERE st.guards_paid_by_client) AS link_shifts,
-           SUM(sr.guard_wage_snapshot) AS wage,
-           SUM(sr.broker_fee_snapshot) AS fee
+           SUM(sr.guard_wage_snapshot) FILTER (WHERE NOT COALESCE(st.guards_paid_by_client, false)) AS wage,
+           SUM(sr.broker_fee_snapshot) FILTER (WHERE NOT COALESCE(st.guards_paid_by_client, false)) AS fee
       FROM shift_records sr
       LEFT JOIN shift_record_staff_attributions a ON a.shift_record_id = sr.id
       LEFT JOIN sites st ON st.id = sr.site_id
+      LEFT JOIN brokers sb ON sb.id = sr.settlement_broker_id
      WHERE sr.record_type IN ('shift', 'ot')
        AND sr.work_date >= ${start.toISOString().slice(0, 10)}::date AND sr.work_date <= ${end.toISOString().slice(0, 10)}::date
        AND sr.status <> 'cancelled'
+       AND (sb.kind IS NULL OR sb.kind <> 'external')
      GROUP BY 1, 2, 3, 4
      ORDER BY 2, 3, 1`);
   const cardIds = [...new Set(groups.map((g) => g.card_id).filter((v): v is string => !!v))];
@@ -118,4 +125,16 @@ export function schemeSubtotalsByBroker(rows: readonly CardPayrollRow[]): Map<st
   const out = new Map<string, SchemeSubtotal[]>();
   for (const [bk, m] of byBroker) out.set(bk, [...m.values()].sort((a, b) => (a.scheme ?? "￿").localeCompare(b.scheme ?? "￿")));
   return out;
+}
+
+/** EMP-P2.3 M1：客戶自己人（結算單位 kind=external）更數——獨立計數，唔入逐人糧單／by_card 聚合。 */
+export async function countExternalShifts(month: Date): Promise<number> {
+  const { start, end } = monthRange(month);
+  const r = await prisma.$queryRaw<{ n: bigint | number }[]>(Prisma.sql`
+    SELECT COUNT(*) AS n
+      FROM shift_records sr
+      JOIN brokers sb ON sb.id = sr.settlement_broker_id
+     WHERE sb.kind = 'external' AND sr.record_type IN ('shift', 'ot') AND sr.status <> 'cancelled'
+       AND sr.work_date >= ${start.toISOString().slice(0, 10)}::date AND sr.work_date <= ${end.toISOString().slice(0, 10)}::date`);
+  return Number(r[0]?.n ?? 0);
 }

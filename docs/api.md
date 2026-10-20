@@ -2924,3 +2924,5 @@ WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W
 
 **對拍腳本** `npm run db:longterm-card-dates-diff -- --out data/longterm-card-dates-diff.json`（只讀；`--out` 必須喺 `data/` 或 `out/` 之下，唔入 git）：逐個長工分類 consistent／card_no_dates／mismatch／rehire_suspected／no_mg_card，另有兩個獨立清單 `start_after_effective`（選中鏈起點遲過生效日 10/1）同 `mirror_would_change`（鏡像會改人卡 hire／leave 嘅人，列前後日期＋提示碼）；JSON 只有 guardId 同日期；console 只印計數。
 
+
+**EMP-P2.3**：`GET /api/reports/payroll?view=person` 回應 additive `external_shifts`（客戶自己人＝結算單位 kind=external 嘅更數，已剔出逐人糧單同 by_card 聚合，唔計人數、唔出行）。LINK 盤（`guards_paid_by_client`）更次舊 snapshot 唔計入 `wage`／`fee`／`total`（`link_shifts` 照計更數）。

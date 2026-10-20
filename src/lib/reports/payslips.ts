@@ -17,10 +17,12 @@ import { loadStaffSchemes, schemeInfoOf, type StaffSchemeInfo } from "@/lib/guar
 export const LONGTERM_NOTE = "見長工糧表";
 export const CHANNEL_DIRECT = "在勤直接";
 export const CHANNEL_UNASSIGNED = "未歸屬";
+export const CHANNEL_EXTERNAL = "不適用（客戶自己人）";
 
 /** EMP-P2.2：由結算單位推導出糧途徑（純函數）。 */
 export function payChannelOf(broker: { code: string; kind: string; settlementType: string } | null): string {
   if (!broker) return CHANNEL_UNASSIGNED;
+  if (broker.kind === "external") return CHANNEL_EXTERNAL; // 客戶自己人：唔係在勤出糧（正常已剔出聚合，呢度係防呆）
   if (broker.settlementType === "cash" && broker.kind !== "internal_cash") return `經雞頭（${broker.code}）`;
   return CHANNEL_DIRECT; // autopay／salary／公司兵 Y／長工 B07／其他
 }

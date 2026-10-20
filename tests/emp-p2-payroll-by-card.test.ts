@@ -5,7 +5,7 @@ import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { mkBroker, mkGuard } from "./lib/one-click-auto";
-import { buildPayrollByCard, cardKey, schemeSubtotalsByBroker } from "@/lib/reports/payroll-by-card";
+import { buildPayrollByCard, cardKey, countExternalShifts, schemeSubtotalsByBroker } from "@/lib/reports/payroll-by-card";
 import { buildPayslips, LONGTERM_NOTE } from "@/lib/reports/payslips";
 import { buildPayrollTotals, writePayrollBuffer } from "@/lib/reports/payroll";
 import { GET as payrollGet } from "@/app/api/reports/payroll/route";
@@ -101,11 +101,13 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     await rec(fx.guardA.id, { cardId: cardU.id, scheme: "U", wage: 300, fee: 30 });
     for (let i = 0; i < 2; i++) {
       day += 1;
-      await prisma.shiftRecord.create({ data: { workDate: d(day), siteId: link.id, shiftTypeId: lst.id, guardId: fx.guardA.id, settlementBrokerId: fx.brokerA.id, operationalBrokerId: fx.brokerA.id, recordType: "shift", staffNumberId: cardU.id, staffScheme: "U", createdBy: "t" } });
+      await prisma.shiftRecord.create({ data: { workDate: d(day), siteId: link.id, shiftTypeId: lst.id, guardId: fx.guardA.id, settlementBrokerId: fx.brokerA.id, operationalBrokerId: fx.brokerA.id, recordType: "shift", staffNumberId: cardU.id, staffScheme: "U", guardWageSnapshot: 500, brokerFeeSnapshot: 50, createdBy: "t" } }); // 舊 snapshot 都唔計（S1）
     }
     const p = (await buildPayslips(AUG)).find((s) => s.guardId === fx.guardA.id)!;
     const u = p.lines.find((l) => l.scheme === "U")!;
-    expect(u).toMatchObject({ shifts: 3, linkShifts: 2, wage: 300, amount: 300 });
+    expect(u).toMatchObject({ shifts: 3, linkShifts: 2, wage: 300, fee: 30, amount: 300 });
+    expect(p.total).toBe(300); // LINK 更帶 snapshot 500 → total 不含
+    expect(p.feeTotal).toBe(30);
     expect(u.note).toContain("LINK 盤更數 2（唔計價）");
     const boss = await sessionCookieForUser(fx.userIds["老闆"]);
     const j = (await (await get(boss, "month=2026-08&view=person")).json()) as { payslips: { lines: { pay_channel: string; link_shifts: number }[] }[] };
@@ -114,6 +116,29 @@ describe("EMP-P2 糧按工號卡分組＋逐人糧單", () => {
     await wb.xlsx.load((await writePayrollBuffer(AUG)) as unknown as ArrayBuffer);
     const sheet = wb.getWorksheet("逐人糧單")!;
     expect(String(sheet.getRow(2).values)).toContain("出糧途徑");
+  });
+
+  it("EMP-P2.3 M1：客戶自己人（結算單位 kind=external）更次剔出逐人糧單同 by_card 聚合；獨立計數 external_shifts；pay_channel 唔會寫「在勤直接」", async () => {
+    const ext = await mkBroker("T-EXT", "external");
+    const g2 = await mkGuard({ name: "測試戊" });
+    const c2 = await prisma.guardStaffNumber.create({ data: { guardId: g2.id, scheme: "U", number: "U90904", status: "current" } });
+    await rec(fx.guardA.id, { cardId: cardU.id, scheme: "U", wage: 200, fee: 20 });
+    await rec(g2.id, { cardId: c2.id, scheme: "U", brokerId: ext.id, wage: 100, fee: 10 });
+    await rec(fx.guardA.id, { cardId: cardU.id, scheme: "U", brokerId: ext.id, wage: 300, fee: 30 });
+    const rows = await buildPayrollByCard(AUG);
+    expect(rows.every((r) => r.settlementBrokerId !== ext.id)).toBe(true);
+    expect(rows.find((r) => r.guardId === g2.id)).toBeUndefined();
+    const slips = await buildPayslips(AUG);
+    expect(slips.map((x) => x.guardId)).toEqual([fx.guardA.id]); // g2 只有外部更 → 唔出份
+    const u = slips[0]!.lines.find((l) => l.scheme === "U")!;
+    expect(u).toMatchObject({ shifts: 1, wage: 200, fee: 20 });
+    expect(u.payChannel).toBe("經雞頭（TEST-BA）");
+    expect(slips[0]!.lines.every((l) => l.payChannel !== "在勤直接")).toBe(true);
+    expect(await countExternalShifts(AUG)).toBe(2);
+    const boss = await sessionCookieForUser(fx.userIds["老闆"]);
+    const j = (await (await get(boss, "month=2026-08&view=person")).json()) as { external_shifts: number; payslips: unknown[] };
+    expect(j.external_shifts).toBe(2);
+    expect(j.payslips).toHaveLength(1);
   });
 
   it("M2（Opus 個案）：U 3 更每更工資 500＋MP 2 更每更 620 → U 行 1500、MP 行 1240、散更 total 2740；雞頭費欄 120／60 唔入 total", async () => {

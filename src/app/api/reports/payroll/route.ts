@@ -9,6 +9,7 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel } from "@/lib/reports/money";
 import { buildPayrollTotals, buildPayrollSourceSummary, writePayrollBuffer, DEFAULT_REPORT_MONTH } from "@/lib/reports/payroll";
 import { buildPayslips } from "@/lib/reports/payslips";
+import { countExternalShifts } from "@/lib/reports/payroll-by-card";
 import { isBrokerRole } from "@/lib/broker-isolation";
 import { Forbidden } from "@/lib/api/errors";
 // WP-PRICE §3：頁頂「N 更未定價，金額未計入」Notice 要用嘅 additive 欄。
@@ -26,7 +27,8 @@ export async function GET(req: Request) {
     if (url.searchParams.get("view") === "person") {
       if (isBrokerRole(session)) throw Forbidden("逐人糧單橫跨所有雞頭，雞頭唔可以睇");
       const payslips = await buildPayslips(month);
-      return ok(brandSafeResponse({ month: monthLabel(month), payslips }));
+      // EMP-P2.3：客戶自己人（external 結算單位）更次唔入逐人糧單，獨立計數 external_shifts（備註：客戶自己人 N 更，唔適用）
+      return ok(brandSafeResponse({ month: monthLabel(month), payslips, external_shifts: await countExternalShifts(month) }));
     }
 
     if (isExport) {

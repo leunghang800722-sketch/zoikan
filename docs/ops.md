@@ -526,3 +526,5 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - P3.2：Maxwell 離職名單只睇「最後一日」早過卡 valid_from／人卡 hire／合約鏈起點先當上一段（唔結束卡）；導入入職日差幾日唔阻結束卡（只出 `[import_hire_date_differs]` 提示）。鏡像改咗人卡日期會喺工號卡操作後即時顯示 hint（`hire_date_mirrored`／`leave_date_mirrored`／`leave_date_overwritten_by_card`）；**未鎖月份重算會跟新人卡值，已鎖月不變（接受）**。上線前對拍腳本睇 `resigned_without_valid_to`，補晒 valid_to 先令再入職判斷準確。
 - 警告：長工糧 `warnings` 會出 `[rehire_suspected]`（任何月份）、`[card_guard_date_mismatch]`／`[rehire_detected]`（10 月起）。
 
+
+- EMP-P2.3：逐人糧單／by_card 聚合**剔出**客戶自己嘅人（結算單位 kind=external，settlementType=none，唔入糧）——唔計人數、唔出行；獨立計數 `GET /api/reports/payroll?view=person` 回應 `external_shifts`（客戶自己人 N 更，唔適用）。LINK 盤（`sites.guards_paid_by_client`）更次即使有舊 snapshot 都唔入 wage／fee／total（SQL `FILTER (WHERE NOT guards_paid_by_client)`），仍計更數並加備註「LINK 盤更數 N（唔計價）」。
