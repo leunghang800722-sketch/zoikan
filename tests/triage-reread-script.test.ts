@@ -127,10 +127,10 @@ describe("揀頁／工號索引", () => {
 describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
   it("run：22 人入 17 人需重讀（TE-11.2／11.3 加 7 個入職表分級個案；TE-12 加 1 個打字名單無硬證據個案）、2 人冇文件；64 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
     const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
-    expect(r.summary).toMatchObject({ persons_in_package: 22, persons_needing_reread: 17, persons_no_docs: 2, persons_processed: 15, persons_failed: 0, persons_with_proposals: 15, proposals_total: 64, form_differs: 1, form_conflict: 3, card_unverified: 1, form_unproven: 1, typed_list_differs: 5, typed_list_differs_medium: 3 });
-    expect(r.summary.proposals_by_field).toEqual({ nameZh: 15, nameEn: 15, dateOfBirth: 15, phone: 4, address: 15 });
-    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 59, arbiter: 5 }); // OCR-6：電話三讀一致 confirmed 帶 arbiter 標記 → basis arbiter（+4 條電話建議由 two_reads 轉過嚟）
-    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 12 }); // TE-12：typed_list（身份證頁）同 arbiter_agree_a 唔再計入唔建議； TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
+    expect(r.summary).toMatchObject({ persons_in_package: 22, persons_needing_reread: 17, persons_no_docs: 2, persons_processed: 15, persons_failed: 0, persons_with_proposals: 15, proposals_total: 60, form_differs: 1, form_conflict: 3, card_unverified: 1, form_unproven: 1, typed_list_differs: 5, typed_list_differs_medium: 3 });
+    expect(r.summary.proposals_by_field).toEqual({ nameZh: 15, nameEn: 15, dateOfBirth: 15, address: 15 }); // OCR-6.1：電話要獨立來源佐證，重讀腳本冇獨立電話來源 → 電話唔再出自動建議
+    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 59, arbiter: 1 }); // OCR-6.1：4 條電話建議不再出（review）
+    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 16 }); // TE-12：typed_list（身份證頁）同 arbiter_agree_a 唔再計入唔建議； TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
     expect(r.summary.ocr_calls).toBeGreaterThan(0);
     expect(proposalsBodySchema.safeParse({ version: 1, summary: r.summary, proposals: r.proposals }).success).toBe(true);
     // TE-12：逐人診斷（唔記值）：每個要覆核嘅欄有 status／reason；冇文件／打字名單 flag／降 medium 都睇得到
@@ -153,7 +153,7 @@ describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
     const one = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: 1, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
     expect(one.summary.persons_processed).toBe(1);
     const key = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: "dry-person-3", concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
-    expect(key.summary).toMatchObject({ persons_processed: 1, proposals_total: 5 });
+    expect(key.summary).toMatchObject({ persons_processed: 1, proposals_total: 4 });
   });
   it("addOutcome／emptySummary 純計數", () => {
     const s = emptySummary(NOW);

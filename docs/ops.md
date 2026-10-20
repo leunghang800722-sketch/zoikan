@@ -250,6 +250,11 @@ OCR-5.6 起，有 `DEEPSEEK_API_KEY` 時另跑 DeepSeek 段（三種文件各 1 
 - 前端 reason 文案：`phone_digit_count`、`phone_needs_three_way`。API 回應形狀不變（additive reason 值）。
 - 評估：`scripts/staff-import/eval-ocr.ts` 報表只存結果類別，唔存三讀原值，所以改動前後要各用真 API 跑一次同一 manifest 比 `phone` 欄 `confirmed 但錯`／`review` 數（`--dry` 合成 fixture 只驗流程）。
 
+**OCR-6.1 電話盲讀仲裁＋獨立來源佐證（2026-10-20）**：真 API 評估（102 人，phone n=36）顯示三讀一致規則冇減少 confirmed_wrong（7 → 7）——7 個係三讀一致咁讀錯（仲裁見到候選值會錨定，同讀 A 同一個 model），所以：
+- **盲讀仲裁**（只對 phone）：`read.ts` 仲裁 phone 時 prompt **唔帶**兩讀候選值（user text 只講 BLIND、要求獨立讀 8 位數；system prompt 講明盲讀、唔好由其他欄推斷）；其他欄候選照舊。仍要三讀一致先可能 confirmed。`ReadOptions.phoneBlind`（預設 true；eval `--no-phone-blind` 可還原舊行為做前後對照）。
+- **獨立來源佐證**：電話 confirmed 要 OCR 三讀一致值同**獨立來源**（打字名單 crosscheck 電話／已存 `guards.tel`／`guard_phones`）正規化後相同。冇獨立來源 → `review`，reason `phone_no_independent_source`（預填 OCR 值）；獨立來源唔同 → `review`，reason `phone_differs_from_list`（候選兩個，OCR 值預填）。即電話同 TE-12 證件欄一樣要「兩個獨立來源」。API：`POST /api/guards/ocr/read` 的 stage b／舊單次 body 可帶 additive `independent_phones: string[]`（≤5 個、每個 ≤40 字）；冇帶＝電話只會 review。TR 重讀腳本（`19-triage-reread`）冇獨立電話來源，所以電話唔再出自動建議（全部 review）。
+- **eval**（`scripts/staff-import/eval-ocr.ts`）：manifest case 可選 `list: { phone }`（獨立來源）同 `truth_source: { phone: 'list'|'form' }`；報表 `by_field.phone.breakdown` 逐類計 confirmed_wrong：`unanimous_wrong`（三讀一致但錯）／`arbiter_anchored`（仲裁同其中一讀一致、另一讀唔同）／`truth_from_list_differs`（真值嚟自名單而手寫 OCR 值唔同）／`other`；只比較正規化值，**唔寫值**。flags：`--phone-blind`（預設）／`--no-phone-blind`。console 另印 phone 逐類計數。
+
 **`GUARD_OCR_ALS`**（Zeabur env，預設 `1`＝開，老闆 2026-10-15 決定）：證件辨識（住址證明、入職表）嘅地址欄，喺兩讀完成後（仲裁之前）向香港政府 ALS（Address Lookup Service，`https://www.als.gov.hk/lookup`，免費、免 key）查一次標準地址，作為額外候選（chip 上有細字「政府地址庫」），**唔會自動 confirmed**。
 - **送出去嘅內容**：只有 地區／街道／門牌／屋邨／座／大廈 組成嘅查詢字串；**樓層、室號（15樓、A室、Flat A、15/F、Room 1203、G/F、舖、單位…）一律先剔走先送**（`hk-address.alsQueryFromParts`，送出前再斷言一次；大廈名本身含「樓」字嘅部件亦唔送）；永遠唔送姓名、電話或其他欄位。查詢資訊太少（冇街道／屋邨／大廈）就唔查。ALS 回嚟嘅標準地址由本地拼返樓層室號，樓層室號從來冇出過公司。
 - **呼叫規則**：每份文件最多 1 次、每次辨識請求最多 2 份文件（住址證明＋入職表）、逾時 3 秒；429／5xx／網絡錯誤靜靜略過（不影響辨識）；Score < 60 或冇結果就冇候選。

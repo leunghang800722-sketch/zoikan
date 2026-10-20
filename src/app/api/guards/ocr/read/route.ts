@@ -29,9 +29,12 @@ const dataUrl = z
 const docTypes = z.enum(OCR_DOC_TYPES);
 
 // 舊單次流程（冇 stage）：不變
+// OCR-6.1（additive）：獨立來源電話（打字名單／已存電話），入職表電話 confirmed 要三讀一致且同其中一個相同；冇傳＝電話只會 review（phone_no_independent_source）。
+const independentPhones = z.array(z.string().max(40)).max(5).optional();
 const bodySchema = z
   .object({
     documents: z.array(z.object({ type: docTypes, full: dataUrl, tiles: z.array(dataUrl).min(1).max(OCR_MAX_TILES) }).strict()).min(1).max(OCR_MAX_DOCS),
+    independent_phones: independentPhones,
   })
   .strict();
 
@@ -64,6 +67,7 @@ const bodyBSchema = z
       .max(OCR_MAX_DOCS),
     // WP-OCR-1（additive）：同 stage a 一樣；有效先計交叉核對
     refs_token: z.string().max(200_000).optional(),
+    independent_phones: independentPhones,
   })
   .strict();
 
@@ -294,6 +298,8 @@ async function handleStageB(req: Request, session: Session, raw: unknown): Promi
           d.type,
           { a_fields_raw: payload.a, provider: payload.provider, model: payload.model, fallback_reason: payload.fb },
           { kind: d.images_b.kind, images: d.images_b.images, ...(d.images_b.field_of ? { fieldOf: d.images_b.field_of } : {}), ...(d.full ? { full: d.full } : {}) },
+          new Date(),
+          { independentPhones: parsed.data.independent_phones ?? null },
         );
       }),
     );
@@ -337,7 +343,7 @@ async function handleLegacy(req: Request, session: Session, raw: unknown): Promi
     const imagesCount = docs.reduce((n, d) => n + 1 + d.tiles.length, 0);
     let results: DocumentReadResult[];
     try {
-      results = await Promise.all(docs.map((d) => readDocument(client, d.type, { full: d.full, tiles: d.tiles })));
+      results = await Promise.all(docs.map((d) => readDocument(client, d.type, { full: d.full, tiles: d.tiles }, new Date(), { independentPhones: parsed.data.independent_phones ?? null })));
     } catch (e) {
       const ms = Date.now() - t0;
       if (e instanceof OcrUnavailableError) {

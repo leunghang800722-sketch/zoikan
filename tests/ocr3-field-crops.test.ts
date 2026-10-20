@@ -264,7 +264,7 @@ describe("readStageA／readStageB", () => {
     const a = await readStageA(clients, "onboarding_form", IMG);
     calls.length = 0;
     const crops = [IMG + "P", IMG + "A"];
-    const r = await readStageB(clients, "onboarding_form", a, { kind: "field_crops", images: crops, fieldOf: ["phone", "address"], full: IMG });
+    const r = await readStageB(clients, "onboarding_form", a, { kind: "field_crops", images: crops, fieldOf: ["phone", "address"], full: IMG }, new Date(), { independentPhones: ["9000 1111"] });
     expect(calls).toHaveLength(2); // 讀 B＋電話永遠仲裁（OCR-6）
     expect(calls[0]!.images).toEqual(crops);
     expect(calls[0]!.userText).toBe(buildUserTextFieldCrops("onboarding_form", ["phone", "address"]));
@@ -289,7 +289,11 @@ describe("readStageA／readStageB", () => {
     const r = await readStageB(clients, "onboarding_form", a, { kind: "field_crops", images: [IMG + "P", IMG + "A"], fieldOf: ["phone", "address"], full: IMG + "F" });
     const arb = calls.find((c) => c.system.includes("tie-breaker"))!;
     expect(arb.images).toEqual([IMG + "F", IMG + "P"]); // 全圖＋電話裁圖（地址冇分歧）
-    expect(arb.userText).toBe(buildArbiterUserTextCrops("onboarding_form", { phone: ["90001111", "90001112"] }, ["phone"]));
+    // OCR-6.1：電話盲讀仲裁——prompt 唔帶兩讀候選值
+    expect(arb.userText).toBe(buildArbiterUserTextCrops("onboarding_form", { phone: ["90001111", "90001112"] }, ["phone"], {}, ["phone"]));
+    expect(arb.userText).not.toContain("90001111");
+    expect(arb.userText).not.toContain("90001112");
+    expect(arb.userText).toContain("BLIND");
     expect(r.fields.phone).toMatchObject({ status: "review", value: "90001111", arbiter: "agree_a", reason: "phone_needs_three_way" }); // OCR-6：2/3 一致唔再 confirmed
     expect(r.arbiter).toEqual({ called: true, fields: 1 });
     expect(r.usage.calls).toBe(2); // B＋仲裁（不含 A）
@@ -665,7 +669,7 @@ describe("POST /api/guards/ocr/read：stage a／stage b", () => {
   it("stage a → stage b（欄位級裁圖）：同舊格式 fields＋images_b_kind／field_boxes_used；confirmed 兩讀一致", async () => {
     const calls: VisionRequest[] = [];
     const { j } = await stageA(formAnswers(), calls);
-    const res = await post(bBody(j.documents[0].continuation, crops));
+    const res = await post({ ...bBody(j.documents[0].continuation, crops), independent_phones: ["9000 1111"] });
     expect(res.status).toBe(200);
     const jb = await res.json();
     const d = jb.documents[0];
@@ -741,7 +745,7 @@ describe("POST /api/guards/ocr/read：stage a／stage b", () => {
   });
   it("舊單次流程（冇 stage）不變：tiles 必填、回 fields；新增 images_b_kind=tiles", async () => {
     setVisionClientForTests(fake("claude", formAnswers(), []));
-    const res = await post({ documents: [{ type: "onboarding_form", full: IMG, tiles: [IMG, IMG, IMG, IMG] }] });
+    const res = await post({ documents: [{ type: "onboarding_form", full: IMG, tiles: [IMG, IMG, IMG, IMG] }], independent_phones: ["90001111"] });
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(j.documents[0].fields.phone.status).toBe("confirmed");

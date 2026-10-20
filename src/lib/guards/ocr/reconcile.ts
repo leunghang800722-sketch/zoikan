@@ -20,7 +20,7 @@ export interface ExtraCandidate {
   als_score?: number;
 }
 
-export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Date = new Date(), arbiter?: ReadInput, extras?: readonly ExtraCandidate[]): FieldResult {
+export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Date = new Date(), arbiter?: ReadInput, extras?: readonly ExtraCandidate[], independent?: readonly string[] | null): FieldResult {
   const ra = asRead(a);
   const rb = asRead(b);
   const rr = arbiter === undefined ? null : asRead(arbiter);
@@ -84,7 +84,14 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
     if ([na, nb, ...(nr ? [nr] : [])].some((x) => digits(x) !== 8)) return reviewRanked("phone_digit_count");
     if (na.canon === nb.canon) {
       if (!na.valid) return reviewRanked(na.reason ?? "invalid_format", na.display); // 8 位但格式不合（例如非 2–9 開頭）
-      if (nr && nr.canon === na.canon && nr.valid) return { status: "confirmed", value: nr.display, candidates: [], candidates_ranked: [], arbiter: "agree_a" };
+      if (nr && nr.canon === na.canon && nr.valid) {
+        // OCR-6.1：三讀一致仲未夠——手寫三讀（同一個模型家族）可以一齊讀錯，confirmed 要再有獨立來源（打字名單／已存電話）正規化後相同
+        const indep = [...new Set((independent ?? []).map((v) => normalizeField("phone", v, now)).filter((x) => x.valid).map((x) => x.canon))];
+        if (indep.includes(nr.canon)) return { status: "confirmed", value: nr.display, candidates: [], candidates_ranked: [], arbiter: "agree_a" };
+        for (const v of indep) pool.push({ value: v, source: "list" });
+        const ranked = rankFieldCandidates(key, pool, now);
+        return { status: "review", value: nr.display, candidates: [nr.display, ...indep], candidates_ranked: ranked, arbiter: "agree_a", reason: indep.length ? "phone_differs_from_list" : "phone_no_independent_source" };
+      }
       return reviewRanked("phone_needs_three_way", na.display);
     }
     if (nr && tag !== "independent") {

@@ -40,9 +40,21 @@ type UsageByProvider = Record<OcrProviderName, { promptTokens: number; completio
 
 type ImagesBKind = "tiles" | "field_crops";
 
+/** OCR-6.1：讀取選項（全部可選；冇傳＝預設行為）。 */
+export interface ReadOptions {
+  /** 獨立來源電話（打字名單／已存 guards.tel／guard_phones）；電話 confirmed 要三讀一致**且**同其中一個正規化後相同 */
+  independentPhones?: readonly string[] | null;
+  /** 電話仲裁用盲讀（prompt 唔帶兩讀候選值）；預設 true */
+  phoneBlind?: boolean;
+  /** eval 用：結果帶電話三讀正規化值（`phone_reads`）供診斷分類；**唔係 API 回應欄位**（route 唔會輸出） */
+  collectReads?: boolean;
+}
+
 export interface DocumentReadResult {
   type: OcrDocType;
   fields: Partial<Record<OcrFieldKey, FieldResult>>;
+  /** OCR-6.1：只喺 `collectReads` 時有——電話 a／b／仲裁正規化值（eval 診斷；包含值，API 唔輸出） */
+  phone_reads?: { a: string | null; b: string | null; arbiter: string | null };
   /** 兩次讀各自嘅 JSON 有冇解析成功（唔含值） */
   parse_ok: { a: boolean; b: boolean };
   usage: ReadUsage;
@@ -231,6 +243,7 @@ interface FinishCtx {
   imagesB: ImagesB;
   /** 計入 usage 嘅條目（legacy＝A＋B；stage B＝只有 B） */
   priorUsage: UsageEntry[];
+  opts?: ReadOptions;
 }
 
 /** 共用收尾：讀 B 解析、第三讀仲裁、reconcile、彙整用量。 */
@@ -260,6 +273,8 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   if (clients.arbiter && imagesB.full && disputed.length > 0) {
     const cands: Partial<Record<OcrFieldKey, string[]>> = {};
     for (const f of disputed) cands[f] = candidateValues(pa?.[f], pb?.[f]);
+    // OCR-6.1：電話盲讀仲裁——prompt 唔帶兩讀候選值（避免錨定）；其他欄照舊
+    const blind: OcrFieldKey[] = c.opts?.phoneBlind === false ? [] : disputed.filter((f) => f === "phone");
     // WP-OCR-2：ALS 建議另列（唔當兩讀候選）
     const alsSug: Partial<Record<OcrFieldKey, string>> = alsExtra && disputed.includes("address") ? { address: alsExtra.value } : {};
     let reqArb: VisionRequest;
@@ -267,9 +282,9 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
       const fieldOf = imagesB.fieldOf ?? [];
       const idx = fieldOf.flatMap((f, i) => (f && disputed.includes(f) ? [i] : []));
       const cropFields = idx.map((i) => fieldOf[i]!);
-      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserTextCrops(type, cands, cropFields, alsSug), images: [imagesB.full, ...idx.map((i) => imagesB.images[i]!)], fields: disputed };
+      reqArb = { system: buildArbiterSystemPrompt(type, disputed, blind), userText: buildArbiterUserTextCrops(type, cands, cropFields, alsSug, blind), images: [imagesB.full, ...idx.map((i) => imagesB.images[i]!)], fields: disputed };
     } else {
-      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserText(type, cands, imagesB.images.length, alsSug), images: [imagesB.full, ...imagesB.images], fields: disputed };
+      reqArb = { system: buildArbiterSystemPrompt(type, disputed, blind), userText: buildArbiterUserText(type, cands, imagesB.images.length, alsSug, blind), images: [imagesB.full, ...imagesB.images], fields: disputed };
     }
     try {
       const t = await completeWithTruncRetry(clients.arbiter, reqArb);
@@ -283,7 +298,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   }
 
   const out: Partial<Record<OcrFieldKey, FieldResult>> = {};
-  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined, f === "address" && alsExtra ? [alsExtra] : undefined);
+  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined, f === "address" && alsExtra ? [alsExtra] : undefined, f === "phone" ? (c.opts?.independentPhones ?? null) : undefined);
   const byProvider: UsageByProvider = { claude: { promptTokens: 0, completionTokens: 0, calls: 0 }, deepseek: { promptTokens: 0, completionTokens: 0, calls: 0 } };
   const used: UsageEntry[] = [...c.priorUsage];
   if (c.rbFirst) used.push({ provider: providerOf(clients.b), promptTokens: c.rbFirst.promptTokens, completionTokens: c.rbFirst.completionTokens, truncated: !!c.rbFirst.truncated });
@@ -296,9 +311,16 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
     t.completionTokens += u.completionTokens;
     t.calls += 1;
   }
+  const phoneReads = c.opts?.collectReads && fields.includes("phone")
+    ? (() => {
+        const norm = (r: { value?: string | null } | null | undefined): string | null => (r && !isUnclear(r.value ?? null) ? normalizeField("phone", r.value!, now).canon : null);
+        return { a: norm(pa?.phone), b: norm(pb?.phone), arbiter: pArb && disputed.includes("phone") ? norm(pArb.phone) : null };
+      })()
+    : null;
   return {
     type,
     fields: out,
+    ...(phoneReads ? { phone_reads: phoneReads } : {}),
     parse_ok: { a: pa !== null, b: pb !== null },
     usage: {
       promptTokens: used.reduce((n, u) => n + u.promptTokens, 0),
@@ -323,14 +345,14 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
  * WP-OCR-3 讀 B（兩段式第二段）：收讀 A 結果（stage A）＋放大圖（2×2 格或欄位級裁圖）→ 讀 B＋reconcile＋仲裁。
  * 回傳嘅 usage／usage_by_provider 只計讀 B＋仲裁（讀 A 用量喺 stage A 已報）。
  */
-export async function readStageB(clientOrClients: VisionClient | ReadClients, type: OcrDocType, stageA: Pick<StageAResult, "a_fields_raw" | "provider" | "model" | "fallback_reason">, imagesB: ImagesB, now: Date = new Date()): Promise<DocumentReadResult> {
+export async function readStageB(clientOrClients: VisionClient | ReadClients, type: OcrDocType, stageA: Pick<StageAResult, "a_fields_raw" | "provider" | "model" | "fallback_reason">, imagesB: ImagesB, now: Date = new Date(), opts?: ReadOptions): Promise<DocumentReadResult> {
   const clients: ReadClients = "complete" in clientOrClients ? { a: clientOrClients, b: clientOrClients } : clientOrClients;
   const tb = await completeWithTruncRetry(clients.b, requestB(type, imagesB));
-  return finishRead({ clients, type, now, pa: stageA.a_fields_raw, providerA: stageA.provider, modelA: stageA.model, fallbackReason: stageA.fallback_reason, rb: tb.resp, rbFirst: tb.extra, rbRetried: tb.retried, imagesB, priorUsage: [] });
+  return finishRead({ clients, type, now, pa: stageA.a_fields_raw, providerA: stageA.provider, modelA: stageA.model, fallbackReason: stageA.fallback_reason, rb: tb.resp, rbFirst: tb.extra, rbRetried: tb.retried, imagesB, priorUsage: [], ...(opts ? { opts } : {}) });
 }
 
 /** 舊單次流程：讀 A（全圖）同讀 B（2×2 格）同時發出，行為同 OCR-4 一樣。 */
-export async function readDocument(clientOrClients: VisionClient | ReadClients, type: OcrDocType, images: DocumentImages, now: Date = new Date()): Promise<DocumentReadResult> {
+export async function readDocument(clientOrClients: VisionClient | ReadClients, type: OcrDocType, images: DocumentImages, now: Date = new Date(), opts?: ReadOptions): Promise<DocumentReadResult> {
   const clients: ReadClients = "complete" in clientOrClients ? { a: clientOrClients, b: clientOrClients } : clientOrClients;
   const fields = OCR_DOC_FIELDS[type];
   const imagesB: ImagesB = { kind: "tiles", images: images.tiles, full: images.full };
@@ -351,6 +373,7 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
     rbRetried: tb.retried,
     imagesB,
     priorUsage: [{ provider: providerOf(ra.usedA), promptTokens: ra.resp.promptTokens, completionTokens: ra.resp.completionTokens, truncated: !!ra.resp.truncated }],
+    ...(opts ? { opts } : {}),
   });
 }
 

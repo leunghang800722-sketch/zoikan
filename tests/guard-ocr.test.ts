@@ -70,7 +70,7 @@ describe("正規化／格式驗證／reconcile（純函數）", () => {
     expect(reconcile("name_zh", SYN_NAME, ` ${SYN_NAME} `)).toMatchObject({ status: "confirmed", value: SYN_NAME });
     expect(reconcile("hkid", "A123456(3)", "a123456 (3)")).toMatchObject({ status: "confirmed", value: "A123456(3)" });
     expect(reconcile("dob", "15-03-1988", "1988-03-15")).toMatchObject({ status: "confirmed", value: "1988-03-15" });
-    expect(reconcile("phone", "6123 4567", "+852 6123-4567", new Date(), "61234567")).toMatchObject({ status: "confirmed", value: "61234567" }); // OCR-6：電話要三讀一致
+    expect(reconcile("phone", "6123 4567", "+852 6123-4567", new Date(), "61234567", undefined, ["6123 4567"])).toMatchObject({ status: "confirmed", value: "61234567" }); // OCR-6／6.1：電話要三讀一致＋獨立來源
     expect(reconcile("phone", "6123 4567", "+852 6123-4567")).toMatchObject({ status: "review", value: "61234567", reason: "phone_needs_three_way" });
     expect(reconcile("name_en", "CHAN, Tai Man", "Chan Tai Man")).toMatchObject({ status: "confirmed", value: "CHAN TAI MAN" });
     expect(reconcile("sex", "M", "male")).toMatchObject({ status: "confirmed", value: "M" });

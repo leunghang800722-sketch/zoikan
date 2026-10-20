@@ -6,7 +6,8 @@
         { "type": "id_card", "image": "id-card.png" },
         { "type": "onboarding_form", "image": "form.png" }
       ],
-      "truth": { "name_zh": "測試甲", "name_en": "TEST ALPHA", "hkid": "Z900001(2)", "dob": "1990-01-15", "sex": "M", "phone": "90001111", "address": "新界火炭示範街99號虛構大廈15樓A室", "bank_account": "000000000" }
+      "truth": { "name_zh": "測試甲", "name_en": "TEST ALPHA", "hkid": "Z900001(2)", "dob": "1990-01-15", "sex": "M", "phone": "90001111", "address": "新界火炭示範街99號虛構大廈15樓A室", "bank_account": "000000000" },
+      "list": { "phone": "90001111" }
     },
     {
       "id": "syn-02-alternative-has-truth",

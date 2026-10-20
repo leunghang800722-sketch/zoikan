@@ -40,6 +40,10 @@ export const manifestSchema = z
           id: z.string().min(1).max(80),
           docs: z.array(z.object({ type: z.enum(OCR_DOC_TYPES), image: z.string().min(1), page: z.number().int().min(1).optional() }).strict()).min(1).max(3),
           truth: z.object(Object.fromEntries(TRUTH_FIELDS.map((k) => [k, z.string().optional()])) as Record<TruthField, z.ZodOptional<z.ZodString>>).strict(),
+          /** OCR-6.1：獨立來源電話（打字名單／已存電話）——入職表電話 confirmed 要三讀一致且同佢相同；冇寫＝冇獨立來源（電話只會 review） */
+          list: z.object({ phone: z.string().optional() }).strict().optional(),
+          /** OCR-6.1：truth 值嘅來源（診斷用）：phone＝'list' 表示真值嚟自名單而唔係表上手寫 */
+          truth_source: z.object({ phone: z.enum(['list', 'form']).optional() }).strict().optional(),
           /** 只喺 --dry 用：每種文件嘅 fake 回應覆蓋（冇寫＝按 truth 完美回應） */
           fake: z.object({ id_card: fakeSpec.optional(), address_proof: fakeSpec.optional(), onboarding_form: fakeSpec.optional() }).strict().optional(),
         })
@@ -72,6 +76,26 @@ export interface FieldEval {
   candidateCount: number;
   /** WP-OCR-2：review 欄嘅 truth 只喺 ALS 候選（冇任何讀數支持）先出現 */
   truthFromAls?: boolean;
+  /** OCR-6.1：電話 confirmed_wrong 逐類（診斷；唔帶值） */
+  phoneWrongKind?: PhoneWrongKind;
+}
+
+export type PhoneWrongKind = 'unanimous_wrong' | 'arbiter_anchored' | 'truth_from_list_differs' | 'other';
+const PHONE_WRONG_KINDS: readonly PhoneWrongKind[] = ['unanimous_wrong', 'arbiter_anchored', 'truth_from_list_differs', 'other'];
+
+/**
+ * OCR-6.1：電話 confirmed_wrong 分類（純函數，只比較正規化值，唔輸出值）：
+ *   truth_from_list_differs＝真值嚟自名單（truth_source.phone='list'）而 OCR 手寫值唔同；
+ *   unanimous_wrong＝a、b、仲裁（有就計）三讀一致但係錯；
+ *   arbiter_anchored＝仲裁同其中一讀一致、另一讀唔同（a==arbiter!=b 或 b==arbiter!=a）；其餘 other。
+ */
+export function classifyPhoneWrong(reads: { a: string | null; b: string | null; arbiter: string | null } | undefined, truthCanon: string, ocrCanon: string, truthSource: 'list' | 'form' | undefined): PhoneWrongKind {
+  if (truthSource === 'list' && ocrCanon !== truthCanon) return 'truth_from_list_differs';
+  if (!reads) return 'other';
+  const { a, b, arbiter } = reads;
+  if (a !== null && a === b && (arbiter === null || arbiter === a)) return 'unanimous_wrong';
+  if (arbiter !== null && ((a === arbiter && a !== b) || (b === arbiter && b !== a))) return 'arbiter_anchored';
+  return 'other';
 }
 
 /**
@@ -213,7 +237,7 @@ export interface EvalReport {
   overall: TallyView;
   /** WP-OCR-1：入職表交叉核對欄（name_zh／hkid／dob）嘅獨立統計，不計入 overall／by_field */
   cross_fields: TallyView;
-  by_field: Record<string, TallyView>;
+  by_field: Record<string, TallyView & { breakdown?: Record<PhoneWrongKind, number> }>;
   by_doc_field: Record<string, TallyView>;
   usage: UsageSum;
   /** WP-OCR-3：流程＋欄位級裁圖計數（淨計數） */
@@ -241,6 +265,7 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
   // WP-OCR-1：入職表 name_zh／hkid／dob 係交叉核對欄，唔計入 overall／by_field（令樣本數同 OCR-5 基線可比），另出 cross_fields
   const isCrossField = (e: FieldEval) => e.doc === 'onboarding_form' && (OCR_CROSS_FIELDS as readonly string[]).includes(e.field);
   const byField = new Map<string, Tally>();
+  const phoneBreakdown: Record<PhoneWrongKind, number> = { unanimous_wrong: 0, arbiter_anchored: 0, truth_from_list_differs: 0, other: 0 };
   const byDocField = new Map<string, Tally>();
   const usage = emptyUsage();
   const skipped = new Set<string>();
@@ -254,6 +279,7 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
           continue;
         }
         addTo(overall, e);
+        if (e.field === 'phone' && e.phoneWrongKind) phoneBreakdown[e.phoneWrongKind] += 1;
         addTo(byField.get(e.field) ?? byField.set(e.field, emptyTally()).get(e.field)!, e);
       }
     }
@@ -278,7 +304,12 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
     cases: { total: outcomes.length, ok: outcomes.length - failed, failed },
     overall: view(overall),
     cross_fields: view(crossFields),
-    by_field: viewAll(byField),
+    by_field: (() => {
+      const v = viewAll(byField) as EvalReport['by_field'];
+      // OCR-6.1：by_field.phone.breakdown——confirmed_wrong 逐類計數（淨計數）
+      if (v.phone) v.phone = { ...v.phone, breakdown: phoneBreakdown };
+      return v;
+    })(),
     by_doc_field: viewAll(byDocField),
     usage,
     flow: meta.flow ?? 'two-stage',
@@ -310,7 +341,10 @@ export function summaryLines(r: EvalReport): string[] {
     `ALS 政府地址庫：${r.als_enabled ? '開' : '關'}｜查過文件 ${r.als_called_docs}｜出候選文件 ${r.als_candidate_docs}｜失敗 ${r.als_failed}｜review_contains_truth 入面真值來自 ALS 候選 ${r.als_truth_from_candidate}`,
     `呼叫 ${r.usage.calls}（仲裁 ${r.usage.arbiter_calls} 份文件）｜tokens in ${r.usage.prompt_tokens} / out ${r.usage.completion_tokens}｜claude ${r.usage.by_provider.claude.calls} 次、deepseek ${r.usage.by_provider.deepseek.calls} 次`,
   ];
-  for (const [k, v] of Object.entries(r.by_field)) lines.push(`  ${k}: n=${v.n} exact ${v.pct.exact}% review_has_truth ${v.pct.review_contains_truth}% wrong ${v.pct.wrong}% missing ${v.pct.missing}%`);
+  for (const [k, v] of Object.entries(r.by_field)) {
+    lines.push(`  ${k}: n=${v.n} exact ${v.pct.exact}% review_has_truth ${v.pct.review_contains_truth}% wrong ${v.pct.wrong}% missing ${v.pct.missing}%`);
+    if (k === 'phone' && v.breakdown) lines.push(`    phone confirmed_wrong ${v.confirmed_wrong}：${PHONE_WRONG_KINDS.map((x) => `${x} ${v.breakdown![x]}`).join('｜')}`);
+  }
   for (const n of r.notes) lines.push(`註：${n}`);
   return lines;
 }
@@ -338,6 +372,8 @@ export interface EvalDeps {
   refs?: boolean;
   /** WP-OCR-2：false（--no-als）＝唔查 ALS（亦唔會有 als 候選） */
   als?: boolean;
+  /** OCR-6.1：電話仲裁盲讀（預設 true＝同 app 一樣）；false（--no-phone-blind）＝舊行為（仲裁見到兩讀候選值），俾前後對照 */
+  phoneBlind?: boolean;
   now?: Date;
 }
 
@@ -364,14 +400,15 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
     // WP-OCR-2：--no-als＝剔走 clients.als（live／dry 一樣；唔需要、亦唔會設 GUARD_OCR_ALS）
     const clients: ReadClients = deps.als === false ? { ...clients0, als: undefined } : clients0;
     let r: DocumentReadResult;
+    const readOpts = { independentPhones: c.list?.phone ? [c.list.phone] : [], phoneBlind: deps.phoneBlind !== false, collectReads: true };
     if (!twoStage) {
-      r = await readDocument(clients, d.type, images, now);
+      r = await readDocument(clients, d.type, images, now, readOpts);
     } else {
       const isForm = !!OCR_CROP_FIELDS[d.type];
       const refs: Refs | null = isForm && deps.refs !== false ? confirmedRefsFromDocs(printedResults) : null;
       const a = await readStageA(clients, d.type, images.full, refs);
       const crops = images.cropFields ? await images.cropFields(d.type, a.field_boxes) : null;
-      r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now);
+      r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now, readOpts);
       addStageAUsage(usage, a);
       if (r.images_b_kind === 'field_crops') fieldCropsDocs += 1;
       else if (OCR_CROP_FIELDS[d.type]) fallbackTilesDocs += 1;
@@ -395,6 +432,9 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
       const res = r.fields[f];
       if (!truth || !res) continue;
       const fe = classifyField(f, truth, res, d.type, now);
+      if (f === 'phone' && fe.outcome === 'wrong' && fe.status === 'confirmed') {
+        fe.phoneWrongKind = classifyPhoneWrong(r.phone_reads, normalizeField('phone', truth, now).canon, normalizeField('phone', res.value, now).canon, c.truth_source?.phone);
+      }
       if (fe.truthFromAls) alsN.truth += 1;
       fields.push(fe);
     }
