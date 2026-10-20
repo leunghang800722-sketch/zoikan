@@ -2887,3 +2887,16 @@ WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W
 **顯示／匯出**：更表編輯器同 `roster-export.ts` 跟盤 scheme 顯示工號（`createSiteStaffNoResolver`：未設定／U＝`guards.staff_no`；MP 等＝現用卡，冇現用就最近取消，冇該 scheme 卡就留空，唔借 U 號充數）；`gate:export` 7 月盤全部未設 → 0 差異。編輯器人有多張合資格卡時工號格可手揀（payload `staff_number_id`，只對本次送出嘅格生效）。
 **更表上載**：「檔案工號同系統工號唔一致」警告改為同該 guard **所有**卡比較（`staffNoCardHit()`，任何一張對中就唔警告；對中已取消卡保留「用已取消舊號配對」警告）。
 **回填**：`npm run db:backfill-shift-staff-numbers`（`scripts/db/backfill-shift-staff-numbers.ts`），見 ops.md「EMP-P1 回填」。已鎖月歸屬寫 `shift_record_staff_attributions` 側表（PK＝`shift_record_id`；`staff_number_id`／`staff_scheme`／`source`），`shift_records` 本身一欄都唔寫。
+
+## EMP-P2：糧按工號卡分組＋逐人糧單（2026-10-20 老闆拍板）
+
+**工號體系設定表 `staff_schemes`**（migration `20261026000000_emp_p2_staff_schemes`，純加表＋種子 `ON CONFLICT DO NOTHING`）：`code` PK（U／MP／MG／MW）、`label_zh`、`payer_code`／`payer_label_zh`（出糧方代號／顯示名：U＝wilson、MP／MG／MW＝maxwell）、`pay_method`（cash／autopay／salary／null＝跟雞頭）、`is_frontline`、`is_longterm`、`sort`。`GET /api/admin/staff-schemes`、`PATCH /api/admin/staff-schemes/:code`（只可改 `label_zh`／`payer_code`／`payer_label_zh`／`pay_method`；code 固定唔可加減；老闆專用；寫 `audit_log` table_name=staff_schemes）；設定頁 `/settings/staff-schemes`（盤設定頁有連結）。`rate_cards` 唔加 scheme（同一盤唔會同時有 U 同 MP）。`src/lib/guards/staff-schemes.ts` `loadStaffSchemes()` 讀表，缺行用出廠預設補。
+
+**糧明細聚合以工號卡為最細單位**（`src/lib/reports/payroll-by-card.ts`）：聚合 key 永遠含工號卡 id＝`guardId|staffNumberId`（冇歸屬＝`guardId|none`＝「未標工號」，唔准併入 U），唔准先按人合計再拆；卡歸屬＝`shift_records.staff_number_id`，已鎖月更次（P1 回填只寫側表）fallback `shift_record_staff_attributions`。金額仍然係 `guard_wage_snapshot`／`broker_fee_snapshot` 嘅 SUM（唔掂計糧邏輯）。`GET /api/reports/payroll` 的 `totals[]` 每項 additive `by_scheme: [{scheme(null＝未標工號), shifts, wage, fee, amount}]`；`totals` 總數（`buildPayrollTotals` 原有 groupBy）唔變。Excel：「糧明細總表(按雞頭)」不變；每雞頭 sheet 改為每人每卡一行（欄：Staff No.／姓名／體系／更數／金額；工號欄印該卡自己嘅號，未標工號行工號欄印 `guards.staff_no`、體系欄標「未標工號」）；來源摘要／逐更來源明細不變；新增最後一個 sheet「逐人糧單」（每人一組：標題行＋每卡一行＋小計行＋空行）。
+
+**逐人糧單**：`GET /api/reports/payroll?month=&view=person`（`糧明細:view`；雞頭角色硬性 403，因為橫跨所有雞頭）→ `{month, payslips:[{guard_id, guard_name, staff_no, total, lines:[{staff_number_id, scheme, scheme_label, number, payer_code, payer_label, pay_method, settlement_broker_codes, settlement_broker_code, shifts, wage, fee, amount, note?}]}]}`。一人一份，同一人同月有 MP 更同 U 更 → 兩行分開（行序按 `staff_schemes.sort`：U→MP→MG→…→未標工號），`total`＝各行之和（唔准撈埋）。長工體系（`is_longterm`，出廠 MG）行：P3 前金額由 `longterm_payroll_lines.gross`（該月未作廢最新 run，confirmed 優先）取，`note`＝「見長工糧表」，攞唔到就 0＋note；有長工糧 line 但冇 MG 更次嘅長工亦補一行（shifts=0）。頁面 `reports/payroll` 加「按人（逐人糧單）」視圖。
+
+**長工頂位規則**（`src/lib/longterm-payroll/shift-classify.ts`）：`LONGTERM_SCATTER_EFFECTIVE_FROM = 2026-09-01`（固定常數；7／8 月已鎖，行舊邏輯，`gate:ltpay-aug` 數字不變）。生效日起睇更次 `staff_scheme`：長工體系（MG）＝自己崗位；前線散更體系（U／MP）＝`scatter`——唔當長工返工日，亦唔計頂位津貼（`loadCoverShifts` 只認 `cover`）；冇 scheme／其他體系照舊跟 settlement（B07 或 null＝自己崗位；其他雞頭＝頂位）。
+
+**月結診斷**（`buildMonthHealth`）新增兩項：`shifts_no_staff_number`（warn；本月未標工號更次數，扣除鎖月側表已有歸屬；明細按盤；fixLink `/sites`）、`site_no_staff_scheme`（info；本月有出更而未設 `sites.staff_scheme` 嘅盤數；fixLink `/sites`）。
+

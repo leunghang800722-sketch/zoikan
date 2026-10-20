@@ -68,6 +68,7 @@ import { Conflict } from "@/lib/api/errors";
 import { monthRange, monthStart as toMonthStart, monthLabel, n, round2 } from "@/lib/reports/money";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
 import { classifyLongtermShift } from "./shift-classify";
+import { loadStaffSchemes } from "@/lib/guards/staff-schemes";
 import { computeEoAdw, resolveAlDailyRate, eoPeriodMonths, type AlDailyRateBasis, type EoAdwResult } from "./adw";
 import { loadAdwMonthData } from "./adw-history";
 import { HK_STATUTORY_HOLIDAYS_2026 } from "./hk-holidays";
@@ -336,8 +337,9 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
 
   const shiftRecords = await client.shiftRecord.findMany({
     where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, ...excludeUnapprovedWhatsapp() },
-    select: { guardId: true, workDate: true, recordType: true, leaveCode: true, otHours: true, settlementBrokerId: true, source: true, siteId: true },
+    select: { guardId: true, workDate: true, recordType: true, leaveCode: true, otHours: true, settlementBrokerId: true, source: true, siteId: true, staffScheme: true },
   });
+  const staffSchemes = await loadStaffSchemes(client as never); // EMP-P2：頂位規則（2026-09-01 起）睇更次 staff_scheme
   const shiftsByGuard = new Map<string, typeof shiftRecords>();
   for (const r of shiftRecords) {
     const arr = shiftsByGuard.get(r.guardId) ?? [];
@@ -446,17 +448,20 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     const srs = pickBySourcePriority(srsAll).picked;
     const ownPostDates = new Set<string>();
     let rescueCount = 0;
+    let scatterCount = 0;
     let otHours = 0;
     const otByDate = new Map<string, number>();
     const leaveDatesByCode = new Map<string, Set<string>>();
     for (const r of srs) {
       const dISO = iso(r.workDate);
       if (r.recordType === "shift") {
-        const kind = classifyLongtermShift(r.settlementBrokerId, internalLongtermBrokerId);
+        const kind = classifyLongtermShift(r.settlementBrokerId, internalLongtermBrokerId, { staffScheme: r.staffScheme, workDate: r.workDate, schemes: staffSchemes });
         if (kind === "own") {
           ownPostDates.add(dISO);
         } else if (kind === "cover") {
           rescueCount += 1; // §14 規則 2：幫雞頭頂散更，唔當長工返工日
+        } else if (kind === "scatter") {
+          scatterCount += 1; // EMP-P2：U／MP 卡散更——散更糧已出，唔當長工返工日，亦唔計頂位津貼
         } else {
           ownPostDates.add(dISO);
           notes.push(`${dISO} 正更冇 settlement_broker_id，保守當自己崗位計返工日（要人手覆核）`);
@@ -475,6 +480,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     if (isVisa) {
       notes.push(`★ 簽證形式長工（§14 規則 12）：人工照計、照 autopay＋MPF；呢筆（Autopay＋MPF 僱主）每月喺贊助雞頭結算扣返公司（系統外現金扣減）${rescueCount ? `；佢喺雞頭盤嘅 ${rescueCount} 更由雞頭自己對數出糧，唔當長工返工日` : ""}`);
     } else if (rescueCount > 0) notes.push(`幫雞頭頂散更 ${rescueCount} 更：已由雞頭現金結算，唔當長工返工日、唔喺呢層扣/計錢`);
+    if (scatterCount > 0) notes.push(`U／MP 卡散更 ${scatterCount} 更：散更糧已由出糧方出，唔當長工返工日、唔計頂位津貼`);
     const conflictNote = attendanceConflictNote(srsAll);
     if (conflictNote) notes.push(conflictNote);
     const workDays = ownPostDates.size;

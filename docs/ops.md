@@ -499,3 +499,10 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - Gate 跑法備註（worktree）：`gate:locked-months` 要 `data/`、`tools/importer/out`、`tools/importer/venv` 三個 gitignored 資源（symlink 返主 repo）；缺 venv 會令 `gate:reports (b3)` SKIP 同長工分攤總額由 897652.35 變 899945（環境差異，唔係代碼）。
 - EMP-P1.1 補充：(1) 長工歸屬只認結算單位＝`internal_longterm`（B07）；未結算（`settlement_broker_id` null）嘅更次唔掛 MG 卡，待一鍵結算補結算單位時順便補。長工 MG 卡後備（current）只限張卡冇日期，或 workDate 落喺佢 `valid_from`～`valid_to` 內，否則 `unresolved`（入職前嘅更次唔會掛去之後先發嘅卡，亦唔會永久寫入鎖月側表）。(2) 回填每批 UPDATE 都帶 `NOT EXISTS (month_closes … locked_at IS NOT NULL)`，跑緊期間有人鎖月，後面批次 0 寫入。(3) `no_staff_number_count` 只計「盤已設 `staff_scheme` 或 B07 長工」而推唔到嘅格；盤未設 scheme 嘅格唔計。
 
+## EMP-P2 糧按工號卡分組（2026-10-20）
+
+- 糧單以「工號卡」為最細單位：同一人同月有 MP 更同 U 更，出糧單合併做同一份，但分開兩行列明（逐人糧單）。要睇準，更次要有工號卡歸屬：先去「盤」設定頁設好各盤 `staff_scheme`、補齊人嘅 U／MP／MG 卡，再跑回填（`npm run db:backfill-shift-staff-numbers`，見 EMP-P1 回填）；未標工號嘅更次會歸「未標工號」一行，月結診斷有「未標工號更次」同「盤未設工號體系」兩條直達卡。
+- 出糧方按體系：設定頁「工號體系」（`/settings/staff-schemes`，老闆）改 U／MP／MG／MW 嘅顯示名、出糧方、出糧方式；唔寫死。
+- 長工頂位規則（老闆 2026-10-20 拍板）：長工用 U／MP 卡開散更唔計頂位津貼（散更糧已出）。2026-09-01（`LONGTERM_SCATTER_EFFECTIVE_FROM`）起生效，看更次 `staff_scheme`；7／8 月鎖月行舊邏輯。9 月起更次要有 `staff_scheme`（盤已設 scheme 或回填）規則先會生效；冇 scheme 嘅更次照舊跟 settlement。
+- Gate 備註：每雞頭 sheet 行數會變（每人每卡一行），`糧明細總表(按雞頭)`／`buildPayrollTotals` 數字不變（`perf:snapshot` 的 payroll 欄位逐項相同）。
+
