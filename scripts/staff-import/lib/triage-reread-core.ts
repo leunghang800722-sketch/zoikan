@@ -274,7 +274,13 @@ export interface DocCache {
 }
 
 /** TR-2.2：讀數管線版本（改 prompt／model／讀取流程時要手動遞增，令舊快取失效） */
-export const OCR_PIPELINE_VERSION = 'ocr-2026-10-tr2.1';
+export const OCR_PIPELINE_VERSION = 'ocr-2026-10-tr2.2-ocr61'; // OCR-6.1：電話盲讀仲裁＋獨立來源佐證（reconcile 結果變咗，舊快取失效）
+
+/** OCR-6.2：名單電話指紋（排序去重後 sha256 前 8 位）；冇＝空字串（key 同舊版一致） */
+function phonesHashSuffix(phones: readonly string[] | null | undefined): string {
+  const v = [...new Set((phones ?? []).map((x) => x.replace(/\D/g, '')).filter(Boolean))].sort();
+  return v.length ? `|ind:${createHash('sha256').update(v.join(',')).digest('hex').slice(0, 8)}` : '';
+}
 
 /** refs 指紋：key 排序後 JSON 嘅 sha256 前 16 位；冇 refs＝'none' */
 export function refsHashOf(refs: Refs | null): string {
@@ -294,7 +300,7 @@ export interface RereadDeps {
 }
 
 /** 同 client 流程一樣次序讀一個人嘅 ≤3 份文件，回 mergeDocFields 嘅最終欄＋交叉核對。 */
-export async function readPerson(docs: readonly DocPage[], deps: RereadDeps): Promise<{ picks: Partial<Record<OcrFieldKey, Pick_>>; calls: number; cacheHits: number; /** TE-11.2：入職表讀數（只供卡 vs 入職表分級，唔寫任何地方） */ formReads: Partial<Record<OcrFieldKey, string>> }> {
+export async function readPerson(docs: readonly DocPage[], deps: RereadDeps, /** OCR-6.2：打字名單電話（獨立來源）；冇＝電話只會 review */ independentPhones?: readonly string[] | null): Promise<{ picks: Partial<Record<OcrFieldKey, Pick_>>; calls: number; cacheHits: number; /** TE-11.2：入職表讀數（只供卡 vs 入職表分級，唔寫任何地方） */ formReads: Partial<Record<OcrFieldKey, string>> }> {
   const now = deps.now ?? new Date();
   const ordered = [...docs.filter((d) => !OCR_CROP_FIELDS[d.type]), ...docs.filter((d) => OCR_CROP_FIELDS[d.type])];
   const printed: DocumentReadResult[] = [];
@@ -304,17 +310,19 @@ export async function readPerson(docs: readonly DocPage[], deps: RereadDeps): Pr
   for (const d of ordered) {
     const isForm = !!OCR_CROP_FIELDS[d.type];
     const refs: Refs | null = isForm ? confirmedRefsFromDocs(printed) : null;
-    let r: DocumentReadResult | null = deps.cache ? await deps.cache.get(d, refsHashOf(refs)) : null;
+    // 入職表讀數嘅電話 reconcile 受獨立來源影響 → 快取 key 帶名單電話指紋
+    const cacheKey = refsHashOf(refs) + (isForm ? phonesHashSuffix(independentPhones) : '');
+    let r: DocumentReadResult | null = deps.cache ? await deps.cache.get(d, cacheKey) : null;
     if (r) cacheHits += 1;
     else {
       const images = await deps.prepare(d);
       const clients = deps.clientsFor(d.type);
       const a = await readStageA(clients, d.type, images.full, refs);
       const crops = images.cropFields ? await images.cropFields(d.type, a.field_boxes) : null;
-      r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now);
+      r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now, isForm ? { independentPhones: independentPhones ?? [] } : undefined);
       calls += a.usage.calls + r.usage.calls;
       // 先存（未加 cross）：cross 每次按 refs 重算
-      if (deps.cache) await deps.cache.set(d, r, refsHashOf(refs));
+      if (deps.cache) await deps.cache.set(d, r, cacheKey);
     }
     if (isForm && refs && Object.keys(refs).length > 0) {
       const x = crossForOnboarding(refs, r.fields, now);

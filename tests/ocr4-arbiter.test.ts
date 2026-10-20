@@ -59,8 +59,10 @@ describe("第三讀仲裁：觸發條件", () => {
     const arb = t.arbCalls()[0]!;
     expect(arb.fields).toEqual(["phone"]);
     expect(arb.images).toHaveLength(5);
-    expect(arb.userText).toContain("90001111");
-    expect(arb.userText).toContain("90001112");
+    // OCR-6.1：電話盲讀仲裁——prompt 唔帶兩讀候選值（避免錨定），只要求獨立讀
+    expect(arb.userText).not.toContain("90001111");
+    expect(arb.userText).not.toContain("90001112");
+    expect(arb.userText).toContain("BLIND");
     expect(arb.userText).not.toContain("新界火炭");
   });
   it("OCR-4.4 觸發矩陣：A high/B high 唔觸發；A high/B medium、A medium/B high、A low/B low 觸發", async () => {
@@ -88,7 +90,7 @@ describe("第三讀仲裁：觸發條件", () => {
       expect(t.arbCalls()[0]!.fields).toEqual(["phone"]);
       expect(r.fields.phone).toMatchObject({ status: "review", value: "90001111", arbiter: "independent", reason: "phone_needs_three_way" });
       const t3 = trio({ a: { phone: obj("90001111", c) }, b: { phone: obj("90001111", c) }, arbiter: { phone: obj("90001111", "high") } });
-      const r3 = await readDocument(t3.clients, "onboarding_form", IMGS);
+      const r3 = await readDocument(t3.clients, "onboarding_form", IMGS, new Date(), { independentPhones: ["9000 1111"] });
       expect(t3.arbCalls()).toHaveLength(1);
       expect(r3.fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
     }
@@ -322,11 +324,12 @@ describe("POST /api/guards/ocr/read：新舊格式回應 additive", () => {
 describe("OCR-6：read.ts 電話強制仲裁", () => {
   it("兩讀一致都 high、只有電話 → 仲裁只問 phone；三讀一致 confirmed；仲裁 prompt 候選淨一個值", async () => {
     const t = trio({ a: { phone: obj("90001111", "high") }, b: { phone: obj("90001111", "high") }, arbiter: { phone: obj("90001111", "high") } });
-    const r = await readDocument(t.clients, "onboarding_form", IMGS);
+    const r = await readDocument(t.clients, "onboarding_form", IMGS, new Date(), { independentPhones: ["90001111"] });
     expect(t.arbCalls()).toHaveLength(1);
     expect(t.arbCalls()[0]!.fields).toEqual(["phone"]);
     expect(r.arbiter).toEqual({ called: true, fields: 1 });
     expect(r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111" });
+    expect(t.arbCalls()[0]!.userText).not.toContain("90001111"); // 盲讀：連兩讀一致嘅候選都唔帶
   });
   it("冇仲裁 client（例如純 DeepSeek 模式）→ 電話唔會 confirmed", async () => {
     const t = trio({ a: { phone: obj("90001111", "high") }, b: { phone: obj("90001111", "high") } });

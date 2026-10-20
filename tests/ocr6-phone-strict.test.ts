@@ -6,7 +6,7 @@ const NOW = new Date("2026-10-20T00:00:00Z");
 
 describe("reconcile phone（OCR-6）", () => {
   it("1. 三讀一致且 valid → confirmed（正規化後逐字相同，容許空格／+852）", () => {
-    expect(reconcile("phone", "9000 1111", "+852 9000-1111", NOW, "90001111")).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a", candidates: [] });
+    expect(reconcile("phone", "9000 1111", "+852 9000-1111", NOW, "90001111", undefined, ["+852 9000 1111"])).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a", candidates: [] }); // OCR-6.1：再加獨立來源
   });
   it("2. 兩讀相同但冇仲裁／仲裁 unclear／仲裁讀到另一個值 → review phone_needs_three_way，預填兩讀值", () => {
     expect(reconcile("phone", "90001111", "90001111", NOW)).toMatchObject({ status: "review", value: "90001111", reason: "phone_needs_three_way" });

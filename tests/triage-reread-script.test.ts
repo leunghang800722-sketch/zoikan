@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, applyTypedListEvidence, OCR_PIPELINE_VERSION, refsHashOf, type DocCache, type DocPage, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
-import { fileDocCache, parseArgs, resolveSourcePage, run, main } from "../scripts/staff-import/19-triage-reread";
+import { fileDocCache, loadListPhones, parseArgs, resolveSourcePage, run, main } from "../scripts/staff-import/19-triage-reread";
 import { ArgError } from "../scripts/staff-import/lib/eval-ocr-core";
 import { proposalsBodySchema } from "@/lib/triage/proposals";
 
@@ -126,11 +126,11 @@ describe("揀頁／工號索引", () => {
 
 describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
   it("run：22 人入 17 人需重讀（TE-11.2／11.3 加 7 個入職表分級個案；TE-12 加 1 個打字名單無硬證據個案）、2 人冇文件；64 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
-    const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
-    expect(r.summary).toMatchObject({ persons_in_package: 22, persons_needing_reread: 17, persons_no_docs: 2, persons_processed: 15, persons_failed: 0, persons_with_proposals: 15, proposals_total: 64, form_differs: 1, form_conflict: 3, card_unverified: 1, form_unproven: 1, typed_list_differs: 5, typed_list_differs_medium: 3 });
-    expect(r.summary.proposals_by_field).toEqual({ nameZh: 15, nameEn: 15, dateOfBirth: 15, phone: 4, address: 15 });
-    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 59, arbiter: 5 }); // OCR-6：電話三讀一致 confirmed 帶 arbiter 標記 → basis arbiter（+4 條電話建議由 two_reads 轉過嚟）
-    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 12 }); // TE-12：typed_list（身份證頁）同 arbiter_agree_a 唔再計入唔建議； TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
+    const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null, listPhones: null }, NOW);
+    expect(r.summary).toMatchObject({ persons_in_package: 22, persons_needing_reread: 17, persons_no_docs: 2, persons_processed: 15, persons_failed: 0, persons_with_proposals: 15, proposals_total: 60, form_differs: 1, form_conflict: 3, card_unverified: 1, form_unproven: 1, typed_list_differs: 5, typed_list_differs_medium: 3 });
+    expect(r.summary.proposals_by_field).toEqual({ nameZh: 15, nameEn: 15, dateOfBirth: 15, address: 15 }); // OCR-6.1：電話要獨立來源佐證，重讀腳本冇獨立電話來源 → 電話唔再出自動建議
+    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 59, arbiter: 1 }); // OCR-6.1：4 條電話建議不再出（review）
+    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 16 }); // TE-12：typed_list（身份證頁）同 arbiter_agree_a 唔再計入唔建議； TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
     expect(r.summary.ocr_calls).toBeGreaterThan(0);
     expect(proposalsBodySchema.safeParse({ version: 1, summary: r.summary, proposals: r.proposals }).success).toBe(true);
     // TE-12：逐人診斷（唔記值）：每個要覆核嘅欄有 status／reason；冇文件／打字名單 flag／降 medium 都睇得到
@@ -150,10 +150,10 @@ describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
     const lines = summaryLines(r.summary).join("\n");
     expect(lines).not.toMatch(/測試|Z90000|9000111|火炭/);
     // --limit／--only-key
-    const one = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: 1, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
+    const one = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: 1, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null, listPhones: null }, NOW);
     expect(one.summary.persons_processed).toBe(1);
-    const key = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: "dry-person-3", concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
-    expect(key.summary).toMatchObject({ persons_processed: 1, proposals_total: 5 });
+    const key = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: "dry-person-3", concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null, listPhones: null }, NOW);
+    expect(key.summary).toMatchObject({ persons_processed: 1, proposals_total: 4 });
   });
   it("addOutcome／emptySummary 純計數", () => {
     const s = emptySummary(NOW);
@@ -163,7 +163,7 @@ describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
 });
 
 describe("TR-2 讀數快取", () => {
-  const A = { package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null };
+  const A = { package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null, listPhones: null };
   const memCache = () => {
     const m = new Map<string, unknown>();
     const stats = { gets: 0, hits: 0, sets: 0 };
@@ -269,7 +269,7 @@ describe("參數／路徑", () => {
 
 describe("TE-11.2 整頁身份證 vs 入職表分級（錯人卡防線）", () => {
   it("--dry：輕微差異 high＋form_differs；完全唔相似／入職表出生日期唔同 medium＋form_conflict；入職表冇名冇名單 medium＋card_unverified；有名單 high", async () => {
-    const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
+    const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null, listPhones: null }, NOW);
     const sig = (n: number) => [...new Set(r.proposals.filter((p) => p.person_key === `dry-person-${n}` && p.doc === "id_card").map((p) => `${p.confidence}:${(p.flags ?? []).join("+")}`))];
     expect(sig(12)).toEqual(["high:form_differs"]);
     expect(sig(13)).toEqual(["medium:form_conflict"]);
@@ -310,3 +310,47 @@ describe("TE-11.2 整頁身份證 vs 入職表分級（錯人卡防線）", () =
   });
 });
 
+
+describe("OCR-6.2 --list-phones（打字名單電話＝獨立來源）", () => {
+  const A = { package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: "dry-person-3", concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null, listPhones: null as string | null };
+  const withFile = async (body: unknown, fn: (f: string) => Promise<void>) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ocr62-"));
+    try {
+      const f = path.join(dir, "phones.json");
+      await writeFile(f, JSON.stringify(body));
+      await fn(f);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+  it("parseArgs --list-phones；冇傳＝電話唔出建議（照舊 review）", async () => {
+    expect(parseArgs(["--list-phones", "p.json"]).listPhones).toBe("p.json");
+    expect(parseArgs([]).listPhones).toBeNull();
+    const none = await run(A, NOW);
+    expect(none.proposals.some((x) => x.field === "phone")).toBe(false);
+  });
+  it("名單電話同讀數一致（兩種 JSON 格式）→ 電話出建議；名單電話唔同 → 唔出（review）", async () => {
+    await withFile({ "dry-person-3": ["9000 1113"] }, async (f) => {
+      const r = await run({ ...A, listPhones: f }, NOW);
+      expect(r.proposals.some((x) => x.field === "phone")).toBe(true);
+    });
+    await withFile({ persons: [{ person_key: "dry-person-3", phones: ["90001113"] }] }, async (f) => {
+      const r = await run({ ...A, listPhones: f }, NOW);
+      expect(r.proposals.some((x) => x.field === "phone")).toBe(true);
+    });
+    await withFile({ "dry-person-3": ["90009999"] }, async (f) => {
+      const r = await run({ ...A, listPhones: f }, NOW);
+      expect(r.proposals.some((x) => x.field === "phone")).toBe(false);
+    });
+  });
+  it("loadListPhones 格式驗證：多過 5 個／唔係字串／根唔啱 → ArgError，訊息冇值", async () => {
+    for (const bad of [{ k: ["1", "2", "3", "4", "5", "6"] }, { k: [123] }, [1, 2], { persons: [{ phones: ["9"] }] }]) {
+      await withFile(bad, async (f) => {
+        const e = await loadListPhones(f).catch((x: unknown) => x);
+        expect(e).toBeInstanceOf(Error);
+        expect(String((e as Error).message)).toMatch(/--list-phones 格式唔啱/);
+        expect(String((e as Error).message)).not.toMatch(/123/);
+      });
+    }
+  });
+});

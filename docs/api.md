@@ -2933,3 +2933,6 @@ WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W
 - 歷史月份下列端點回 409 `historical_month`：`POST /api/month-close/one-click`、`POST /api/month-closes/:id/lock`、`POST /api/month-closes/:id/generate`、`GET /api/reports/month-health`、`GET /api/diagnostics/month`、長工糧計算。`GET /api/roster-uploads/pending-summary` 冇帶 month 嘅總覽唔計歷史月份。
 - 運維腳本 `scripts/db/leave-opening-from-rosters.ts`（見 ops.md「HIST-1」）。
 - HIST-1.1：`POST /api/month-closes { historical:true }` 只限早過 2026-07-01（`HIST_MAX_MONTH`），建新／就地標記皆需未鎖、冇一鍵結算 run、冇未作廢長工糧 run（409），並喺一鍵結算 advisory lock 內進行；`PATCH /api/month-closes/:id { historical:false }` 取消標記（老闆，audit）。`compute.ts` `slAccrued` 自 2026-10-01 起用條例口徑（首 12 個月每月 2 日、之後每月 4 日、上限 120）。
+
+- OCR-6.1：`POST /api/guards/ocr/read`（stage b 同舊單次 body）additive `independent_phones?: string[]`（≤5 個、每個 ≤40 字）——獨立來源電話（打字名單／已存電話）；入職表電話欄 confirmed 要 OCR 三讀一致且同其中一個正規化後相同。冇帶或唔同 → `review`，`reason`：`phone_no_independent_source`／`phone_differs_from_list`。電話仲裁讀數盲讀（prompt 唔帶兩讀候選值）。
+- OCR-6.2：stage b 帶有效 `refs_token`（身份證 HKID）時，伺服器自動用配對到嘅已有保安員 `tel`＋`guard_phones` 補入獨立來源（與 client 傳嘅合併）；`phone_differs_from_list` 回應只留同 OCR 值同號碼嘅候選，唔洩露已存電話。

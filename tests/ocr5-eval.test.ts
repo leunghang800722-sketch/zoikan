@@ -96,7 +96,7 @@ describe("manifest／報表／路徑", () => {
 });
 
 describe("evalCaseWithRetry：失敗重試 1 次", () => {
-  const c: EvalCase = { id: "t1", docs: [{ type: "onboarding_form", image: "form.png" }], truth: { phone: "90001111" } };
+  const c: EvalCase = { id: "t1", docs: [{ type: "onboarding_form", image: "form.png" }], truth: { phone: "90001111" }, list: { phone: "90001111" } };
   const base = (over: Partial<EvalDeps> = {}): EvalDeps => ({
     clientsFor: fakeClientsFor,
     prepare: async () => ({ full: IMG, tiles: [IMG, IMG, IMG, IMG] }),

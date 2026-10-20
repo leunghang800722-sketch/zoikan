@@ -128,7 +128,7 @@ describe("reconcile（WP-OCR-4）：候選池、舊格式相容、仲裁規則",
   it("新 object 格式一致 → confirmed；confidence 低都照 confirmed（規則不變）", () => {
     expect(reconcile("name_zh", { value: "測試 甲", confidence: "low", reason: "blurry" }, { value: "測試甲", confidence: "medium" })).toMatchObject({ status: "confirmed", value: "測試甲" });
     // OCR-6：電話要三讀一致，少一讀就 review
-    expect(reconcile("phone", { value: "9000 1111", confidence: "low", reason: "blurry" }, { value: "90001111", confidence: "medium" }, NOW, "90001111")).toMatchObject({ status: "confirmed", value: "90001111" });
+    expect(reconcile("phone", { value: "9000 1111", confidence: "low", reason: "blurry" }, { value: "90001111", confidence: "medium" }, NOW, "90001111", undefined, ["9000 1111"])).toMatchObject({ status: "confirmed", value: "90001111" });
   });
   it("兩讀唔同：value＝最高分候選（HKID check digit 啱嗰個，即使係讀 B）", () => {
     const r = reconcile("hkid", "Z900001(3)", goodId, NOW);
