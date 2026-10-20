@@ -608,7 +608,9 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 ### S-batch-1021：背景 job 體驗／細項
 
-- **盤體系補推導／重推 job（`job_runs.job_key = site_scheme_backfill`）**：失敗 summary 而家係 `{ error, error_code, message }`——`error_code`＝`err.name`，`message`＝`err.name: 訊息` 前 120 字，數字串一律換 `#`（唔留電話／證件號／金額）。UI 輪詢最多 10 分鐘；仍 running 顯示「可能已中斷，可重新套用」（補推導只填空位，重做安全）。scheduler `sweepStaleRuns`：呢類 job running 超過 **15 分鐘**即標 `error / stale_running`（其他 job 仍 1 小時）。
-- **補推導 unresolved 連結**：`/month-close#health-shifts_no_staff_number`——直達月結健康「未標工號」卡（MonthHealthCard 按 hash 切去該項嘅級別 tab 並捲到卡）。
+- **盤體系補推導／重推 job（`job_runs.job_key = site_scheme_backfill`）**：失敗 summary 而家係 `{ error, error_code, message }`——`error_code`＝`err.name`，`message`＝`error_code`（S-batch-2：錯誤訊息文字一律唔存，避免夾人名／電話）。UI 輪詢最多 10 分鐘；仍 running 顯示「可能已中斷，可重新套用」（補推導只填空位，重做安全）。scheduler `sweepStaleRuns`：呢類 job running 超過 **15 分鐘**即標 `error / stale_running`（其他 job 仍 1 小時）。
+- **補推導 unresolved 連結**：`/month-close?month=YYYY-MM#health-shifts_no_staff_number`（月份＝job summary `unresolved_by_month` 推唔到最多嗰個月，冇就當月）——直達月結健康「未標工號」卡（MonthHealthCard 按 hash 切去該項嘅級別 tab 並捲到卡）。
 - **HKID 配對 index**：migration `20261031010000_guards_hkid_canon_index` 加 `guards_hkid_canon_idx` ON `upper(regexp_replace(hkid,'[^A-Za-z0-9]','','g'))`（`storedPhonesForHkid` 用同一表達式；普通 `CREATE INDEX IF NOT EXISTS`，CONCURRENTLY 唔可以喺 migration 交易內）。
 - **OCR 電話 reason 口徑依賴導入預覽權限**：stage b 嘅 `phone_differs_from_list`／`phone_no_independent_source` 會透露「該 HKID 喺系統有冇保安員」（OCR-6.3 殘餘 oracle）；目前只有「安員批量導入:create」可用。**收緊導入預覽權限時要統一 reason**（例如兩者都回 `phone_no_independent_source`），免得權限同口徑唔一致。
+
+- **S-batch-2**：gross-margin `sites[].missingSalaryGuardRefs` 改穩定排序（code-point 升序）。

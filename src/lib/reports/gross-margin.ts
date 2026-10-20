@@ -618,7 +618,7 @@ async function buildGrossMarginUncached(month: Date, opts?: { thresholdPct?: num
 
     const referralFee = referralFeeBySite.get(siteId) ?? 0;
     const longtermSalaryAllocated = salaryAllocBySite.get(siteId) ?? 0;
-    const missingSalaryGuardRefs = [...(missingSalaryBySite.get(siteId) ?? [])];
+    const missingSalaryGuardRefs = [...(missingSalaryBySite.get(siteId) ?? [])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // S-batch-2：穩定排序（code-point，唔受 Set 插入次序／locale 影響）
 
     const extraSpecialRevenue = round2((specialBySite.get(siteId) ?? []).reduce((a, r) => a + r.revenue, 0));
     // N1 修正：cost 唔再淨係計嗰 6 種「其他」kind（extraSpecialCost）——

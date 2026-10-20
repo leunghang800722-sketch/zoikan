@@ -16,10 +16,13 @@ export interface SiteBackfillResult {
   written_direct: number;
   written_side_table: number;
   unresolved: number;
+  /** S-batch-2：推唔到嘅更次按月份分佈（YYYY-MM，count 多→少，同數較近月份先）——UI 連結帶推唔到最多嗰個月 */
+  unresolved_by_month: Array<{ month: string; count: number }>;
 }
 
 export async function backfillSiteStaffNumbers(siteIds: readonly string[]): Promise<SiteBackfillResult> {
-  const res: SiteBackfillResult = { scanned: 0, backfilled: 0, written_direct: 0, written_side_table: 0, unresolved: 0 };
+  const res: SiteBackfillResult = { scanned: 0, backfilled: 0, written_direct: 0, written_side_table: 0, unresolved: 0, unresolved_by_month: [] };
+  const byMonth = new Map<string, number>();
   if (siteIds.length === 0) return res;
   const closes = await prisma.monthClose.findMany({ select: { month: true, lockedAt: true } });
   const lockedMonths = new Set(closes.filter((c) => !!c.lockedAt).map((c) => monthKey(c.month)));
@@ -45,6 +48,7 @@ export async function backfillSiteStaffNumbers(siteIds: readonly string[]): Prom
       const o = outcomes.get(r.id)!;
       if (!o.card || o.method === "ambiguous" || o.method === "unresolved" || o.method === "payload") {
         res.unresolved += 1;
+        byMonth.set(monthKey(r.workDate), (byMonth.get(monthKey(r.workDate)) ?? 0) + 1);
         continue;
       }
       const locked = lockedMonths.has(monthKey(r.workDate));
@@ -69,6 +73,7 @@ export async function backfillSiteStaffNumbers(siteIds: readonly string[]): Prom
     }
   }
   res.backfilled = res.written_direct + res.written_side_table;
+  res.unresolved_by_month = [...byMonth].map(([month, count]) => ({ month, count })).sort((a, b) => b.count - a.count || b.month.localeCompare(a.month));
   return res;
 }
 

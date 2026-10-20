@@ -7,15 +7,14 @@ import { guardStatusLabel } from "@/components/reconcile/derive";
 import { storedPhonesForHkid } from "@/lib/guards/ocr/stored-phones";
 
 describe("job 失敗 summary：error_code＋短訊息，唔含 PII", () => {
-  it("err.name 做 error_code；message 最多 120 字；數字串（電話／證件號）一律換 #", () => {
+  it("S-batch-2：只存 error_code（err.name）；錯誤訊息文字（人名／電話／證件號）一律唔存", () => {
     const e = Object.assign(new Error("duplicate key phone 90001111 hkid Z9000012 " + "x".repeat(300)), { name: "PrismaClientKnownRequestError" });
     const s = errorSummary(e) as { error: string; error_code: string; message: string };
     expect(s.error_code).toBe("PrismaClientKnownRequestError");
     expect(s.error).toBe("PrismaClientKnownRequestError"); // 舊欄保留
-    expect(s.message.length).toBeLessThanOrEqual(120);
-    expect(s.message).not.toMatch(/\d/);
-    expect(s.message).toContain("phone #");
-    expect(errorSummary("boom")).toMatchObject({ error_code: "error", message: "error: " });
+    expect(s.message).toBe("PrismaClientKnownRequestError");
+    expect(JSON.stringify(s)).not.toMatch(/90001111|Z9000012|duplicate/);
+    expect(errorSummary("boom")).toMatchObject({ error_code: "error", message: "error" });
   });
 });
 

@@ -10,7 +10,7 @@ export function createGuardLookupTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "guard_lookup",
     description:
-      "用姓名或工號搵保安員資料：姓名、工號、人卡 id、僱傭類型、月薪、入職日／離職日、牌照／平安卡到期、緊急聯絡人姓名、別名、黑名單查核日期，以及工號卡（體系／號碼／狀態／有效期／結束原因）同長工合約段（有「長工糧:view」先有）。唔會回身份證、出生日期、住址、銀行資料同任何電話（呢個系統嘅 AI 助手一律唔接觸）。要「保安員:view」。",
+      "用姓名或工號搵保安員資料：姓名、工號、人卡 id、僱傭類型、月薪、入職日／離職日、牌照／平安卡到期、緊急聯絡人姓名、別名、黑名單查核日期、狀態 status（三值：active 在職／left 已離職／inactive 作廢），以及工號卡（體系／號碼／狀態／有效期／結束原因）同長工合約段（有「長工糧:view」先有）。唔會回身份證、出生日期、住址、銀行資料同任何電話（呢個系統嘅 AI 助手一律唔接觸）。要「保安員:view」。",
     inputSchema: z.object({ query: z.string().describe("姓名（中/英）、別名或工號關鍵字") }).strict(),
     run: async ({ query }) => {
       const denied = await requireModuleOrDenied(ctx, "安員");

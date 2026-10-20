@@ -118,7 +118,7 @@ describe("GET/POST /api/sites/staff-scheme-prefill", () => {
     expect(res.status).toBe(202);
     const r = (await res.json()) as { job_id: string; status: string; summary: { backfilled: number; written_direct: number; written_side_table: number; unresolved: number } };
     expect(r.status).toBe("ok"); // 測試冇 Next request context → 同步行完
-    expect(r.summary).toMatchObject({ backfilled: 2, written_direct: 1, written_side_table: 1, unresolved: 1 });
+    expect(r.summary).toMatchObject({ backfilled: 2, written_direct: 1, written_side_table: 1, unresolved: 1, unresolved_by_month: [{ month: "2026-08", count: 1 }] }); // S-batch-2：推唔到按月份分佈
     const job = (await (await get(cookie, `?job=${r.job_id}`)).json()) as { job: { status: string; summary: { unresolved: number } } };
     expect(job.job).toMatchObject({ status: "ok", summary: { unresolved: 1 } });
     expect((await get(cookie, "?job=nope")).status).toBe(404);
