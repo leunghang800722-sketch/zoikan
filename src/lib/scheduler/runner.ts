@@ -46,10 +46,17 @@ export async function ensureJobRows(defs: JobDef[], now: Date = new Date()): Pro
   }
 }
 
-/** 令機死／重啟留低嘅 running 紀錄（>1 小時）變 error，免得 /settings/jobs 永遠顯示「跑緊」。 */
+/** 背景（非排程）job 嘅 stale 門檻比一般 job 短（S-batch-1021）：盤體系補推導 15 分鐘。 */
+const SHORT_STALE_JOB_KEYS: Record<string, number> = { site_scheme_backfill: 15 * 60_000 };
+
+/** 令機死／重啟留低嘅 running 紀錄（一般 >1 小時；site_scheme_backfill >15 分鐘）變 error，免得 /settings/jobs 永遠顯示「跑緊」。 */
 export async function sweepStaleRuns(now: Date = new Date()): Promise<number> {
-  const r = await prisma.jobRun.updateMany({ where: { status: "running", startedAt: { lt: new Date(now.getTime() - 3600_000) } }, data: { status: "error", finishedAt: now, summary: { error: "stale_running" } } });
-  return r.count;
+  const keys = Object.keys(SHORT_STALE_JOB_KEYS);
+  const data = { status: "error" as const, finishedAt: now, summary: { error: "stale_running" } };
+  let n = 0;
+  for (const k of keys) n += (await prisma.jobRun.updateMany({ where: { status: "running", jobKey: k, startedAt: { lt: new Date(now.getTime() - SHORT_STALE_JOB_KEYS[k]!) } }, data })).count;
+  n += (await prisma.jobRun.updateMany({ where: { status: "running", jobKey: { notIn: keys }, startedAt: { lt: new Date(now.getTime() - 3600_000) } }, data })).count;
+  return n;
 }
 
 export async function runJob(def: JobDef | undefined, opts: { trigger: "schedule" | "manual"; now?: Date }): Promise<RunOutcome> {

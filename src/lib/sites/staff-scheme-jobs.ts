@@ -2,7 +2,7 @@
 // 做法（揀最簡單可靠）：同步部分（寫 staff_scheme）喺 request 內完成；歸屬補推導用 Next `after()` 喺 response 之後行，進度／結果記喺現有 `job_runs`
 // （jobKey `site_scheme_backfill`，trigger manual，summary 淨計數）；caller 回 202＋job_id，頁面輪詢 `GET …/staff-scheme-prefill?job=<id>`。
 // 冇 Next request context（vitest 直接 call route）→ `after()` 會 throw，fallback 同步行完再返（status 已經係 ok）。
-// 卡死復原：scheduler runner 已有「running 超過 1 小時 → error stale_running」。
+// 卡死復原：scheduler runner `sweepStaleRuns`——一般 job running 超過 1 小時、`site_scheme_backfill` 超過 15 分鐘 → error stale_running；UI 輪詢 10 分鐘仍 running 顯示「可能已中斷，可重新套用」。
 import { after } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -12,6 +12,13 @@ import { backfillSiteStaffNumbers, reinferSiteStaffNumbers } from "@/lib/shift-r
 const SITE_SCHEME_JOB_KEY = "site_scheme_backfill";
 
 type JobSpec = { mode: "backfill"; siteIds: string[] } | { mode: "reinfer"; siteId: string };
+
+/** job 失敗 summary：唔含 PII——error_code＝err.name；message＝err.name＋前 120 字，數字串一律換 #（電話／證件號／金額唔留）。 */
+export function errorSummary(e: unknown): Prisma.InputJsonValue {
+  const name = e instanceof Error && e.name ? e.name : "error";
+  const msg = e instanceof Error ? e.message : "";
+  return { error: name, error_code: name, message: `${name}: ${msg}`.slice(0, 120).replace(/\d+/g, "#") };
+}
 
 async function runJob(jobId: string, spec: JobSpec, actorUserId: string | null): Promise<void> {
   try {
@@ -24,7 +31,7 @@ async function runJob(jobId: string, spec: JobSpec, actorUserId: string | null):
       await prisma.jobRun.update({ where: { id: jobId }, data: { status: "ok", finishedAt: new Date(), summary: { mode: "reinfer", sites: 1, ...r } as Prisma.InputJsonValue } });
     }
   } catch (e) {
-    await prisma.jobRun.update({ where: { id: jobId }, data: { status: "error", finishedAt: new Date(), summary: { error: e instanceof Error ? e.name : "error" } } });
+    await prisma.jobRun.update({ where: { id: jobId }, data: { status: "error", finishedAt: new Date(), summary: errorSummary(e) } });
   }
 }
 

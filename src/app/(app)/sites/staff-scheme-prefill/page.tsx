@@ -39,7 +39,13 @@ interface JobSummary {
   backfilled?: number;
   unresolved?: number;
   error?: string;
+  error_code?: string;
+  message?: string;
 }
+
+// S-batch-1021：輪詢超過 10 分鐘仲 running → 提示可能已中斷（scheduler stale 門檻 15 分鐘會再標 error）
+const JOB_POLL_MAX_MS = 10 * 60 * 1000;
+const STALE_JOB_NOTICE = "背景補歸屬等咗超過 10 分鐘仲未完，可能已中斷——盤體系已設定，可以重新套用（只填空位，重做安全）";
 
 export default function StaffSchemePrefillPage() {
   const [rows, setRows] = useState<Proposal[] | null>(null);
@@ -81,7 +87,8 @@ export default function StaffSchemePrefillPage() {
   }
 
   async function pollJob(jobId: string, applied: number) {
-    for (let i = 0; i < 150 && alive.current; i++) {
+    const deadline = Date.now() + JOB_POLL_MAX_MS;
+    while (alive.current && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 2000));
       const r = await apiGet<{ job: { status: string; summary: JobSummary } }>(`/api/sites/staff-scheme-prefill?job=${encodeURIComponent(jobId)}`);
       if (!r.ok) continue;
@@ -90,10 +97,12 @@ export default function StaffSchemePrefillPage() {
         return;
       }
       if (r.data.job.status === "error") {
-        setError("背景補歸屬失敗（盤體系已設定）——可以稍後喺月結健康「未標工號」卡用回填工具補");
+        const sm = r.data.job.summary ?? {};
+        setError(`背景補歸屬失敗（盤體系已設定）${sm.error_code ? `〔${sm.error_code}〕` : ""}——可以稍後喺月結健康「未標工號」卡用回填工具補，或重新套用`);
         return;
       }
     }
+    if (alive.current) setNotice(STALE_JOB_NOTICE);
   }
 
   async function applyTicked() {
@@ -141,7 +150,7 @@ export default function StaffSchemePrefillPage() {
       <Banner kind="success" message={notice} />
       {notice && notice.includes("推唔到") && (
         <div className="text-zk-sm text-zk-muted" data-testid="prefill-unresolved-hint">
-          推唔到嘅更次會喺 <Link href="/month-close" className="text-zk-primary">月結健康「未標工號」卡 ›</Link> 繼續跟進（補返該人嘅工號卡後再回填）。
+          推唔到嘅更次會喺 <Link href="/month-close#health-shifts_no_staff_number" className="text-zk-primary" data-testid="prefill-unresolved-link">月結健康「未標工號」卡 ›</Link> 繼續跟進（補返該人嘅工號卡後再回填）。
         </div>
       )}
       {rows === null ? (
