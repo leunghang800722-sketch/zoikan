@@ -19,7 +19,7 @@ export function noCropText(kind: string | undefined): string {
 }
 
 /** TE-13.2：非身份文件頁種類（ghost 只可以得呢啲）同顯示名 */
-const NON_IDENTITY_KIND_LABEL: Record<string, string> = { bank: "銀行", blank: "空白", sia_permit: "牌照", safety_card: "平安咭", printed: "印刷" };
+const NON_IDENTITY_KIND_LABEL: Record<string, string> = { bank: "銀行", blank: "空白", sia_permit: "牌照", safety_card: "平安咭" };
 export const isNonIdentityKinds = (pagesByKind: Record<string, number> | undefined): boolean => {
   const ks = Object.entries(pagesByKind ?? {}).filter(([, n]) => n > 0).map(([k]) => k);
   return ks.length > 0 && ks.every((k) => k in NON_IDENTITY_KIND_LABEL);

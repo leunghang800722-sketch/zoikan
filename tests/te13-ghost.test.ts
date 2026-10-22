@@ -60,6 +60,8 @@ describe("findGhostPersons／packageConflicts（TE-13.2：Opus 五個 probe）",
     const L = withList(["U91001"], HK);
     expect(findGhostPersons([r(), ghost("g2", ["U91001"], { ...L, docInfo: { pageCount: 3, pagesByKind: { application_form: 3 } } })], { suspect: true }).size).toBe(0);
     expect(findGhostPersons([r(), ghost("g3", ["U91001"], { ...L, docInfo: { pageCount: 4, pagesByKind: { id_card: 1, application_form: 3 } } })], { suspect: true }).size).toBe(0);
+    expect(findGhostPersons([r(), ghost("g5", ["U91001"], { ...L, docInfo: { pageCount: 1, pagesByKind: { printed: 1 } } })], { suspect: true }).size).toBe(0); // TE-13.3：printed 頁（可能係印刷證件副本）唔當 ghost
+    expect(findGhostPersons([r(), ghost("g6", ["U91001"], { ...L, docInfo: { pageCount: 2, pagesByKind: { bank: 1, printed: 1 } } })], { suspect: true }).size).toBe(0);
     expect(findGhostPersons([r(), ghost("g4", ["U91001"], { ...L, docInfo: undefined })], { suspect: true }).size).toBe(0); // 冇文件資訊＝唔當 ghost
   });
   it("probe 4：名單 HKID 係另一人 → 唔併（連 suspect 都唔係）", () => {
