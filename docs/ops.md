@@ -614,3 +614,9 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **OCR 電話 reason 口徑依賴導入預覽權限**：stage b 嘅 `phone_differs_from_list`／`phone_no_independent_source` 會透露「該 HKID 喺系統有冇保安員」（OCR-6.3 殘餘 oracle）；目前只有「安員批量導入:create」可用。**收緊導入預覽權限時要統一 reason**（例如兩者都回 `phone_no_independent_source`），免得權限同口徑唔一致。
 
 - **S-batch-2**：gross-margin `sites[].missingSalaryGuardRefs` 改穩定排序（code-point 升序）。
+
+### TE-13：「同一工號／電話出現喺多個人」題卡
+
+- `evidence.shared_with[]`（generator 由 `noOwners`／`telOwners` 反查，只放狀態同工號：`person_key`／姓名／`hkid_status`／`has_docs`／`doc_count`／`staff_numbers`／`tel_status`，**唔放 HKID／電話值**）。`view.ts` 輸出 `evidence.shared_with` + `shared_staff_numbers`：姓名冇「保安員個人資料:view」＝null＋`name_hidden`；`question_id` 由同 session 同 kind、`personKey` 相同嘅題反查。舊題（冇 `shared_with`）題卡照舊。
+- 題卡頂部白話「工號 U01xxx 同時出現喺 N 個人身上，請揀邊個先係真正用呢個工號」，列出每個人（本人標「（呢條題嘅人）」），「去嗰條題」只喺嗰條題已載入隊列時出。選項：「工號／電話係呢個人嘅（其他人唔用）」＝keep；「…唔係呢個人嘅（由呢個人剔走）」＝drop_shared。
+- 空人後備放寬：所有個人欄 missing 就顯示「導入包只讀到呢位嘅工號（嚟自打字名單／更表），冇任何文件」＋原因＋檔案資訊（唔再逐行「—（未讀到）」）；爭議類 kind 嘅「冇裁圖」改「呢類題目唔需要裁圖」。

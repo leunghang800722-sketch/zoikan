@@ -5,6 +5,8 @@
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
 import { reasonLabel } from "@/lib/triage/reason-labels";
 import { hanCount, hkidInputState } from "@/lib/guards/hkid-pure";
+import { SharedPersonsCard, StaffNoOnlyPerson, type SharedWithView } from "@/components/triage/SharedPersonsCard";
+import { isSharedKind } from "@/lib/triage/shared-card";
 import { EvidenceImages, EvidenceSection, OriginalPages, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
@@ -77,6 +79,9 @@ interface Question {
     candidates: Candidate[];
     review_fields: { field: string; label: string; check: string }[];
     ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
+    /** TE-13：共用工號／電話嘅其他人（server 按 pii 遮罩姓名；只有狀態同工號） */
+    shared_staff_numbers?: string[];
+    shared_with?: SharedWithView[];
     unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
   };
 }
@@ -195,7 +200,7 @@ function ExtLines({ ext }: { ext: ExtView | null }) {
   );
 }
 
-function PersonCard({ q }: { q: Question }) {
+function PersonCard({ q, canGoto, onGoto }: { q: Question; canGoto?: (id: string) => boolean; onGoto?: (id: string) => void }) {
   const p = q.evidence.person;
   const u = q.evidence.unassigned;
   if (u) {
@@ -211,14 +216,25 @@ function PersonCard({ q }: { q: Question }) {
     );
   }
   if (!p) return null;
-  const empty = [p.name_zh, p.name_en, p.hkid, p.date_of_birth, p.phone, p.address].every((f) => f.status === "missing" && !f.value) && p.staff_numbers.length === 0 && !p.ext;
+  const shared =
+    isSharedKind(q.kind) && q.evidence.shared_with && q.evidence.shared_with.length > 0 ? (
+      <SharedPersonsCard
+        kind={q.kind}
+        sharedStaffNumbers={q.evidence.shared_staff_numbers ?? []}
+        self={{ name_zh: p.name_zh.value, name_en: p.name_en.value, hkid_status: p.hkid.status, doc_count: p.doc_info?.page_count ?? 0, staff_numbers: p.staff_numbers }}
+        others={q.evidence.shared_with}
+        canGoto={canGoto}
+        onGoto={onGoto}
+      />
+    ) : null;
+  // TE-13：所有個人欄 missing 就用空人後備（即使有工號／ext）——唔再逐行「—（未讀到）」
+  const empty = [p.name_zh, p.name_en, p.hkid, p.date_of_birth, p.phone, p.address].every((f) => f.status === "missing" && !f.value);
   if (empty) {
     const di = p.doc_info;
     return (
-      <div className="space-y-1 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="triage-person-empty">
-        <div className="text-zk-sm font-semibold text-zk-muted">導入包內嘅資料</div>
-        <div className="text-zk-base font-semibold text-zk-warning">導入包冇讀到呢位嘅任何資料</div>
-        {q.evidence.reasons.length > 0 && <div className="text-zk-sm text-zk-muted">原因：{[...new Set(q.evidence.reasons.map(reasonLabel))].join("、")}</div>}
+      <>
+      {shared}
+      <StaffNoOnlyPerson staffNumbers={p.staff_numbers} reasons={[...new Set(q.evidence.reasons.map(reasonLabel))]}>
         {di && (
           <div className="text-zk-sm text-zk-muted" data-testid="triage-doc-info">
             來源文件：共 {di.page_count} 頁
@@ -233,11 +249,15 @@ function PersonCard({ q }: { q: Question }) {
           </div>
         )}
         <div className="text-zk-sm text-zk-muted">下一步：請補交身份證副本／入職表再導入，或者人手輸入。</div>
+        <ExtLines ext={p.ext} />
         <OriginalPages imgs={q.evidence_images ?? []} hidden={q.evidence_pages_hidden ?? 0} />
-      </div>
+      </StaffNoOnlyPerson>
+      </>
     );
   }
   return (
+    <>
+    {shared}
     <div className="space-y-1 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="triage-person">
       <div className="text-zk-sm font-semibold text-zk-muted">導入包內嘅資料</div>
       <FieldRow label="中文姓名" f={p.name_zh} />
@@ -255,6 +275,7 @@ function PersonCard({ q }: { q: Question }) {
       <ExtLines ext={p.ext} />
       {!q.evidence.pii_visible && <div className="text-zk-xs text-zk-faint">你冇「保安員個人資料」權限，身份證／電話／地址已遮罩，出生日期唔顯示。</div>}
     </div>
+    </>
   );
 }
 
@@ -376,6 +397,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const [since, setSince] = useState({ imp: 0, sup: 0 }); // 自上次攞 counts 之後答咗／跳過幾多
   const [done, setDone] = useState({ imp: 0, sup: 0 });
   const [suppStarted, setSuppStarted] = useState(false);
+  const [focusId, setFocusId] = useState<string | null>(null); // TE-13：共用題卡「去嗰條題」
   const [choice, setChoice] = useState<string>("");
   const [text, setText] = useState("");
   const [fields, setFields] = useState<Record<string, FieldAns>>({});
@@ -405,7 +427,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const restarted = status !== "open";
   const impRemaining = cnt ? Math.max(0, cnt.important_open + cnt.restricted_open + (restarted ? cnt.skipped : 0) - since.imp) : 0;
   const supRemaining = cnt ? Math.max(0, cnt.supplementary_open - since.sup) : 0;
-  const liveQ = imp[0] ?? (suppStarted ? (sup[0] ?? null) : null);
+  const liveQ = (focusId ? imp.find((x) => x.id === focusId) : undefined) ?? imp[0] ?? (suppStarted ? (sup[0] ?? null) : null);
   // P13.2 回看：已答（只讀，改答案留下一輪）／跳過（可以重新答）
   const viewing = view !== null ? (trail[view] ?? null) : null;
   const readOnly = !!viewing && viewing.kind === "answered";
@@ -749,8 +771,8 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                   要有保安員銀行資料權限嘅同事處理。你可以按「返回列表」，由老闆或有權限嘅同事跟進。
                 </div>
               )}
-              <PersonCard q={shownQ} />
-              {(shownQ.kind !== "field_review" || !choice) && <EvidenceSection images={NAME_ON_DEMAND_KINDS.has(shownQ.kind) ? shownQ.evidence_images?.filter((im) => im.field !== "name_zh" && im.field !== "name_en") : shownQ.evidence_images} />}
+              <PersonCard q={shownQ} canGoto={(id) => imp.some((x) => x.id === id)} onGoto={(id) => setFocusId(id)} />
+              {(shownQ.kind !== "field_review" || !choice) && <EvidenceSection kind={shownQ.kind} images={NAME_ON_DEMAND_KINDS.has(shownQ.kind) ? shownQ.evidence_images?.filter((im) => im.field !== "name_zh" && im.field !== "name_en") : shownQ.evidence_images} />}
               {shownQ.evidence.candidates.map((c, i) => (
                 <CandidateCard key={c.guard_id} c={c} idx={i} />
               ))}

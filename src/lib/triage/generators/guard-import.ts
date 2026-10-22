@@ -7,7 +7,8 @@ import { serverPersonKey, bankAccountRef } from "@/lib/guards/import/person-key"
 import { bankComplete, digits, extKeyGroup, isBankKey, isEmergencyKey, normPayee, type ExtItem } from "@/lib/guards/import/ext";
 import { hkidCheckDigitValid, canonicalHkid } from "@/lib/guards/identity";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
-import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type QuestionKind, type QuestionOption, type ReviewField } from "../types";
+import { normTel8 } from "@/lib/guards/import/text";
+import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type SharedWithEntry, type QuestionKind, type QuestionOption, type ReviewField } from "../types";
 
 export interface QuestionDraft {
   kind: QuestionKind;
@@ -114,7 +115,10 @@ function optionsFor(kind: QuestionKind, p: PackagePerson, candidateIds: string[]
       break;
     case "staffno_shared_by_persons":
     case "dup_tel_across_persons":
-      opts.push({ id: "keep", label: "呢個人用呢啲工號／電話（我確認冇問題）" }, { id: "drop_shared", label: "呢個人唔用有爭議嘅工號／電話" });
+      {
+        const what = kind === "dup_tel_across_persons" ? "電話" : "工號";
+        opts.push({ id: "keep", label: `${what}係呢個人嘅（其他人唔用）` }, { id: "drop_shared", label: `${what}唔係呢個人嘅（由呢個人剔走）` });
+      }
       break;
     case "package_conflict":
       opts.push({ id: "keep", label: "用呢條記錄（我確認冇問題）" });
@@ -272,6 +276,30 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
     if (!noOwners.has(k)) noOwners.set(k, new Set());
     noOwners.get(k)!.add(p.key);
   }
+  const telOwners = new Map<string, Set<string>>();
+  for (const p of pkg.persons) {
+    const t = normTel8(fieldValue(p.phone));
+    if (!t) continue;
+    if (!telOwners.has(t)) telOwners.set(t, new Set());
+    telOwners.get(t)!.add(p.key);
+  }
+  const byKey = new Map(pkg.persons.map((p) => [p.key, p]));
+  // TE-13：共用嘅「其他人」——只放狀態／工號，唔放 HKID／電話值
+  const sharedWithOf = (p: PackagePerson, kind: QuestionKind): SharedWithEntry[] => {
+    const keys = new Set<string>();
+    if (kind === "staffno_shared_by_persons") for (const n of p.staffNumbers) for (const k of noOwners.get(normalizeStaffNumber(n.number)) ?? []) keys.add(k);
+    else {
+      const t = normTel8(fieldValue(p.phone));
+      if (t) for (const k of telOwners.get(t) ?? []) keys.add(k);
+    }
+    keys.delete(p.key);
+    return [...keys].flatMap((k) => {
+      const o = byKey.get(k);
+      if (!o) return [];
+      const pages = o.docInfo?.pageCount ?? 0;
+      return [{ person_key: serverPersonKey(o), name_zh: fieldValue(o.nameZh), name_en: fieldValue(o.nameEn), hkid_status: o.hkid.status, has_docs: pages > 0, doc_count: pages, staff_numbers: o.staffNumbers.map((n) => n.number), tel_status: o.phone.status }];
+    });
+  };
   const order = new Map(pkg.persons.map((p, i) => [p.key, i]));
   const seen = new Set<string>();
   const drafts: QuestionDraft[] = [];
@@ -300,6 +328,7 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
         ? {
             shared_staff_numbers: p.staffNumbers.map((n) => normalizeStaffNumber(n.number)).filter((k) => (noOwners.get(k)?.size ?? 0) > 1),
             shared_tel: gr.includes("dup_tel_across_persons"),
+            ...(kind === "staffno_shared_by_persons" || kind === "dup_tel_across_persons" ? { shared_with: sharedWithOf(p, kind) } : {}),
           }
         : {}),
       ...(reviewFields ? { review_fields: reviewFields, guard_id: e.guardId } : {}),
