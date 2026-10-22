@@ -8,14 +8,17 @@ import { cardTruth } from './auto-close-audit';
 import type { PersonDiag, PkgPerson, ProposalFieldName, RereadProposal } from './triage-reread-core';
 
 export interface OpenQuestion {
+  /** 題目 id（可選；有就帶落輸出，方便老闆對返 production 同類題） */
+  id?: string;
   person_key: string;
   staff_numbers: string[];
   kind: string;
   review_fields?: string[];
 }
 
-export type GapCategory = 'auto_answerable' | 'proposal_not_auto' | 'wrong_field' | 'no_proposal' | 'no_docs' | 'person_unmatched' | 'kind_unsupported';
+export type GapCategory = 'drop_shared_stuck' | 'auto_answerable' | 'proposal_not_auto' | 'wrong_field' | 'no_proposal' | 'no_docs' | 'person_unmatched' | 'kind_unsupported';
 export interface GapRow {
+  id?: string;
   person_key: string;
   kind: string;
   category: GapCategory;
@@ -23,6 +26,8 @@ export interface GapRow {
   reason: string;
 }
 
+/** TE-13.1：共用工號／電話題，而包內個人冇 confirmed 有效身份證 → 舊流程 drop_shared／keep 都卡死（新流程 drop_shared 會 dropped） */
+const SHARED_KINDS = ['dup_tel_across_persons', 'staffno_shared_by_persons'];
 const SUPPORTED = ['name_not_confirmed', 'hkid_not_confirmed', 'field_review'];
 const FIELD_ALIAS: Record<string, ProposalFieldName> = { nameZh: 'nameZh', name_zh: 'nameZh', nameEn: 'nameEn', name_en: 'nameEn', hkid: 'hkid', dateOfBirth: 'dateOfBirth', dob: 'dateOfBirth', date_of_birth: 'dateOfBirth', phone: 'phone', address: 'address' };
 const normNo = (s: string) => s.normalize('NFKC').toUpperCase().replace(/\s+/g, '');
@@ -58,7 +63,18 @@ export function auditOpenGap(questions: readonly OpenQuestion[], persons: readon
 
   const rows: GapRow[] = [];
   for (const q of questions) {
-    const row = (category: GapCategory, reason: string): void => void rows.push({ person_key: q.person_key, kind: q.kind, category, reason });
+    const row = (category: GapCategory, reason: string): void => void rows.push({ ...(q.id ? { id: q.id } : {}), person_key: q.person_key, kind: q.kind, category, reason });
+    if (SHARED_KINDS.includes(q.kind)) {
+      const ks = new Set<string>();
+      for (const n of q.staff_numbers) for (const k of byNo.get(normNo(n)) ?? []) ks.add(k);
+      if (pkgBy.has(q.person_key)) ks.add(q.person_key);
+      const pk = [...ks].map((k) => pkgBy.get(k)).find(Boolean);
+      const h = pk ? canonicalHkid(pk.hkid.value) : null;
+      if (pk && !(pk.hkid.status === 'confirmed' && h && hkidCheckDigitValid(h))) {
+        row('drop_shared_stuck', pk.hkid.value ? 'hkid_not_confirmed' : 'hkid_missing');
+        continue;
+      }
+    }
     const need = requiredFields(q);
     if (!SUPPORTED.includes(q.kind)) {
       row('kind_unsupported', q.kind);

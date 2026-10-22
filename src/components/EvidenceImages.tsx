@@ -2,6 +2,7 @@
 // TE-1：分流題卡 inline 顯示原文件欄位裁圖（docs/plans/triage-evidence-crops-plan.md §2.3／§7）。
 //  - 用普通 <img>（唔用 next/image，免得圖落磁碟快取，M9）；src 係需要 session cookie 嘅 no-store API。
 //  - 優先來源（priority 1）先顯示；第二張摺埋「亦見入職表手寫」；點圖放大（overlay，Esc／點擊關閉）。
+import { noCropText } from "@/lib/triage/shared-card";
 import { useEffect, useState } from "react";
 import { apiPost } from "@/lib/ui/api-client";
 
@@ -103,13 +104,13 @@ export function EvidenceImages({ imgs: allImgs, fieldLabel }: { imgs: readonly E
 }
 
 /** 按欄分組顯示（非 field_review 題用）。 */
-export function EvidenceSection({ images }: { images: readonly EvidenceImageDto[] | undefined }) {
+export function EvidenceSection({ images, kind }: { images: readonly EvidenceImageDto[] | undefined; kind?: string }) {
   const cropImages = images?.filter((i) => i.field !== "page"); // TE-7：整頁原稿喺 fallback 區另外摺埋顯示
   images = cropImages;
   if (!images || images.length === 0)
     return (
       <div className="text-zk-xs text-zk-faint" data-testid="evidence-empty">
-        冇裁圖（文件讀唔到）
+        {noCropText(kind)}
       </div>
     );
   const fields = [...new Set(images.map((i) => i.field))];

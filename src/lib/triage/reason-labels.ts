@@ -96,6 +96,7 @@ export const REASON_LABEL: Record<string, string> = {
   no_cross_reference: "冇其他文件可交叉核對",
   no_form_page: "冇入職表",
   no_id_page: "冇身份證副本頁",
+  dropped_ghost: "由文件（例如銀行戶口）產生嘅空記錄，已自動併入同工號嘅真人",
   pe_multi_hard_match: "Payroll Editor 有多個硬配對",
   pe_multiple_accounts: "Payroll Editor 有多個戶口",
   permit_no_candidates_discarded_not_matching_hkid: "牌照號候選同身份證對唔上，已捨棄",

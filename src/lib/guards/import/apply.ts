@@ -20,7 +20,7 @@ import { canonicalHkid, hkidCheckDigitValid, assertTelAvailable } from "@/lib/gu
 import { createGuardPhone, createGuardAddress, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns, normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { buildDbIndex, decideMatch, type Action, type DbGuard, type DbIndex, type RosterEvidence } from "./match";
-import { addressSourceOf, fieldValue, hashPackage, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
+import { addressSourceOf, fieldValue, findGhostPersons, hashPackage, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
 import { parseBirthDate, maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
 import {
   type ExtOutcomeRow,
@@ -345,7 +345,11 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
 
 function evaluateAll(pkg: ImportPackage, ctx: DbCtx, decisions?: Readonly<Record<string, PersonDecisions>>, piiView = true): Evaluation[] {
   const conflicts = packageConflicts(pkg.persons);
-  return pkg.persons.map((p) => evaluate(p, ctx, conflicts.get(p.key) ?? [], decisions?.[p.key], undefined, piiView));
+  const ghosts = findGhostPersons(pkg.persons); // TE-13：已自動併入真人嘅空記錄——標 dropped_ghost（分診唔出題、apply 唔寫）
+  return pkg.persons.map((p) => {
+    const e = evaluate(p, ctx, conflicts.get(p.key) ?? [], decisions?.[p.key], undefined, piiView);
+    return ghosts.has(p.key) ? { ...e, reasons: [...e.reasons, "dropped_ghost"] } : e;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -896,7 +900,8 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
 export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promise<ApplyResult> {
   const only = opts.personKeys ? new Set(opts.personKeys) : null;
   const decisionKeys = opts.decisions ? new Set(Object.keys(opts.decisions)) : null;
-  const persons = pkg.persons.filter((p) => (!only || only.has(p.key)) && (!decisionKeys || decisionKeys.has(p.key)));
+  const ghosts = findGhostPersons(pkg.persons);
+  const persons = pkg.persons.filter((p) => !ghosts.has(p.key) && (!only || only.has(p.key)) && (!decisionKeys || decisionKeys.has(p.key)));
   const groupReasons = packageConflicts(pkg.persons);
   const acc: ApplyResult = {
     persons_total: persons.length,

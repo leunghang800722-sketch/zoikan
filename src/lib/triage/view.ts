@@ -161,7 +161,12 @@ export interface QuestionView {
     review_fields: { field: string; label: string; check: string }[];
     /** TE-7：來源檔案線索（file_name 可能含人名，冇「保安員個人資料:view」＝null） */
     doc_ref: { file_name: string | null; page_count: number; pages_by_kind: Record<string, number> } | null;
+    /** TE-13：自動併入嘅空記錄說明（只有工號，冇 PII） */
+    note: string | null;
     ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
+    /** TE-13：staffno_shared／dup_tel 題——共用嘅工號（工號唔係 PII）＋共用嘅其他人（姓名冇「保安員個人資料:view」＝null；只有狀態同工號，冇 HKID／電話值） */
+    shared_staff_numbers: string[];
+    shared_with: Array<{ person_key: string; name_zh: string | null; name_en: string | null; name_hidden?: boolean; hkid_status: string; has_docs: boolean; doc_count: number; staff_numbers: string[]; tel_status: string; question_id: string | null }>;
     /** bank_identity_unknown：戶口（遮罩；全號淨係有銀行資料 view 先回） */
     unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
   };
@@ -179,6 +184,13 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
   const ev = rows.map((r) => r.evidenceJson as unknown as QuestionEvidence);
   const guardIds = [...new Set(ev.flatMap((e) => [...e.candidate_guard_ids, ...(e.guard_id ? [e.guard_id] : [])]))];
   const cards = await loadCandidateCards(guardIds, c);
+  // TE-13：共用嘅其他人 → 同 session 同 kind 嘅題 id（「去嗰條題」連結）
+  const sharedKeys = [...new Set(ev.flatMap((e) => (e.shared_with ?? []).map((s) => s.person_key)))];
+  const sharedKinds = ["staffno_shared_by_persons", "dup_tel_across_persons"];
+  const siblingQs = sharedKeys.length
+    ? await prisma.triageQuestion.findMany({ where: { sessionId: { in: [...new Set(rows.map((r) => r.sessionId))] }, personKey: { in: sharedKeys }, kind: { in: sharedKinds } }, select: { id: true, sessionId: true, personKey: true, kind: true } })
+    : [];
+  const sibling = new Map(siblingQs.map((q) => [`${q.sessionId}|${q.personKey}|${q.kind}`, q.id]));
   return rows.map((r, i) => {
     const e = ev[i]!;
     const ans = r.answerJson as { option?: string; guard_id?: string; source?: string } | null;
@@ -193,7 +205,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         status: r.status,
         options: [],
         restricted: true,
-        evidence: { pii_visible: c.pii, pii_update: c.piiUpdate, guard_update: c.guardUpdate, bank_view: c.bankView, bank_update: false, person: null, reasons: [], candidates: [], review_fields: [], doc_ref: null, ext_review: [], unassigned: null },
+        evidence: { pii_visible: c.pii, pii_update: c.piiUpdate, guard_update: c.guardUpdate, bank_view: c.bankView, bank_update: false, person: null, reasons: [], candidates: [], review_fields: [], doc_ref: null, note: null, ext_review: [], shared_staff_numbers: [], shared_with: [], unassigned: null },
         answer: ans?.option ? { option: ans.option } : null,
         answered_by: r.answeredBy,
         answered_at: r.answeredAt,
@@ -231,9 +243,23 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         person: personView(e.person, c),
         reasons: c.pii ? e.reasons : e.reasons.filter((x) => !NAME_REASONS.has(x)),
         candidates,
+        note: e.note ?? null,
         doc_ref: e.doc_ref ? { file_name: c.pii ? e.doc_ref.file_name : null, page_count: e.doc_ref.page_count, pages_by_kind: e.doc_ref.pages_by_kind } : null,
         // 逐欄 check 反映現有 DB 值嘅比較結果：冇「保安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),
+        shared_staff_numbers: e.shared_staff_numbers ?? [],
+        shared_with: (e.shared_with ?? []).map((s) => ({
+          person_key: s.person_key,
+          name_zh: c.pii ? s.name_zh : null,
+          name_en: c.pii ? s.name_en : null,
+          ...(c.pii ? {} : { name_hidden: true as const }),
+          hkid_status: s.hkid_status,
+          has_docs: s.has_docs,
+          doc_count: s.doc_count,
+          staff_numbers: s.staff_numbers,
+          tel_status: s.tel_status,
+          question_id: sibling.get(`${r.sessionId}|${s.person_key}|${r.kind}`) ?? null,
+        })),
         ext_review: (e.ext_review ?? []).map((f) => {
           const hide = isBankKey(f.key) ? !c.bankView : isEmergencyKey(f.key) ? !c.pii : false;
           // held 原因 code（generic，冇值）：longterm_hire_date／identity／bank
@@ -452,7 +478,7 @@ export async function loadHkidOwnerCard(guardId: string, c: ViewerCaps): Promise
 export const BLOCK_TEXT: Record<string, string> = {
   create_no_name: "呢位保安員冇姓名，要一併輸入先可以建立",
   name_not_confirmed: "姓名未確認，要輸入／確認中文姓名先可以建立",
-  create_hkid_not_confirmed: "身份證號未確認，唔可以建立：請揀「輸入身份證號」並輸入合法號碼",
+  create_hkid_not_confirmed: "要先輸入身份證號先可以建人：請揀「輸入身份證號」並輸入合法號碼",
   hkid_not_confirmed_no_other_key: "身份證號未確認，又冇工號／電話可以對上現有保安員：請輸入身份證號",
   guard_has_other_hkid_unconfirmed: "同名現有保安員已有另一個身份證號：請核對身份證號，或者揀「連去現有保安員」",
   extract_fail: "證件讀取失敗：請輸入身份證號",
@@ -460,8 +486,8 @@ export const BLOCK_TEXT: Record<string, string> = {
   name_only_candidate: "淨係姓名對到現有保安員，冇硬證據：請揀「連去」嗰位，或者輸入身份證號",
   name_multi_candidate: "有幾個同名嘅現有保安員：請揀其中一位連去",
   same_name_different_dob: "同名現有保安員，但出生日期唔同：請核對後揀「連去」或者「新開」",
-  staffno_shared_by_persons: "同一個工號出現喺導入包內多個人：請揀「唔寫有爭議嘅工號／電話」",
-  dup_tel_across_persons: "同一個電話出現喺導入包內多個人：請揀「唔寫有爭議嘅工號／電話」",
+  staffno_shared_by_persons: "同一個工號出現喺導入包內多個人：請揀邊個先係真正用呢個工號",
+  dup_tel_across_persons: "同一個電話出現喺導入包內多個人：請揀邊個先係真正用呢個電話",
   group_name_differs: "同一個身份證喺唔同檔案嘅姓名唔一致：請核對姓名",
   duplicate_hkid_in_package: "導入包內有重複身份證：請核對後處理",
   duplicate_key_in_package: "導入包內有重複記錄：請核對後處理",

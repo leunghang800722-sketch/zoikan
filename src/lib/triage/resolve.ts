@@ -19,12 +19,15 @@ export interface ResolvedWrite {
   forced?: Record<string, ForcedMatch>;
   autoKeepPendingName: boolean;
 }
-export type Resolved = { mode: "skip" } | ResolvedWrite;
+/** TE-13.1：dropped＝答案接受（剔走爭議工號／電話）但呢筆記錄冇身份資料、冇 link 目標 → 唔寫任何嘢、唔建人 */
+export type Resolved = { mode: "skip" } | { mode: "dropped" } | ResolvedWrite;
 
 interface QuestionLike {
   kind: QuestionKind;
   evidence: QuestionEvidence;
   options: QuestionOption[];
+  /** 題目建立時已對到嘅現有保安員（link 目標）；冇＝新人 */
+  targetGuardId?: string | null;
 }
 
 const CONFLICT_KINDS = new Set<QuestionKind>(["staffno_shared_by_persons", "dup_tel_across_persons", "group_name_differs", "package_conflict"]);
@@ -59,6 +62,7 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
   const dec: PersonDecisions = {};
   let forced: ForcedMatch | undefined;
   let autoKeepPendingName = false;
+  let dropOnly = false;
 
   // 包內衝突類：人手確認咗，清走包內衝突標記（跨人衝突喺單人包入面本來就唔會再偵測到）
   if (CONFLICT_KINDS.has(q.kind)) person.conflicts = [];
@@ -105,6 +109,9 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       const shared = new Set((q.evidence.shared_staff_numbers ?? []).map(normalizeStaffNumber));
       person.staffNumbers = person.staffNumbers.filter((n) => !shared.has(normalizeStaffNumber(n.number)));
       if (q.evidence.shared_tel) person.phone = { value: null, status: "missing" };
+      // TE-13.1：冇 confirmed 有效身份證、又冇 link 目標 → 淨係剔走爭議工號／電話，唔建人（create 路徑一定要 HKID）
+      const hk = person.hkid.status === "confirmed" ? canonicalHkid(fieldValue(person.hkid)) : null;
+      if (!(hk && hkidCheckDigitValid(hk)) && !q.targetGuardId) dropOnly = true;
       break;
     }
     case "apply_fields": {
@@ -209,6 +216,7 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
     }
   }
 
+  if (dropOnly) return { mode: "dropped" };
   return {
     mode: "write",
     pkg: { version: 3, generatedAt: "triage", persons: [person] },

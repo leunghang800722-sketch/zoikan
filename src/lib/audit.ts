@@ -106,6 +106,7 @@ export type AuditAction =
   | "triage_answer"
   // TR-1：OCR 重讀建議答案導入（整批摘要，淨計數）
   | "triage_proposals_import"
+  | "triage_ghost_close"
   | "triage_reassign"
   // P7.1：老闆手動立即跑排程 job（after 淨係 run id＋狀態）；用戶改通知電郵（after 淨係 { changed: true }，唔存電郵）。
   | "job_run_now"

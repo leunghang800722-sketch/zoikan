@@ -2,12 +2,14 @@
 // 輸入：導入包＋apply 完成後重新評估嘅結果（剩低 needs_review／conflict 同 link 但仍有 review 欄嘅人）。
 // 一個人最多一條題目（group_key＝導入人 key）→ 冪等、已解決嘅唔會再出。
 import type { Evaluation } from "@/lib/guards/import/apply";
-import { fieldValue, packageConflicts, unassignedBankOf, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
+import { fieldValue, findGhostPersons, packageConflicts, unassignedBankOf, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
 import { serverPersonKey, bankAccountRef } from "@/lib/guards/import/person-key";
 import { bankComplete, digits, extKeyGroup, isBankKey, isEmergencyKey, normPayee, type ExtItem } from "@/lib/guards/import/ext";
 import { hkidCheckDigitValid, canonicalHkid } from "@/lib/guards/identity";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
-import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type QuestionKind, type QuestionOption, type ReviewField } from "../types";
+import { normTel8 } from "@/lib/guards/import/text";
+import { ghostDocText } from "../shared-card";
+import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type SharedWithEntry, type QuestionKind, type QuestionOption, type ReviewField } from "../types";
 
 export interface QuestionDraft {
   kind: QuestionKind;
@@ -114,7 +116,12 @@ function optionsFor(kind: QuestionKind, p: PackagePerson, candidateIds: string[]
       break;
     case "staffno_shared_by_persons":
     case "dup_tel_across_persons":
-      opts.push({ id: "keep", label: "呢個人用呢啲工號／電話（我確認冇問題）" }, { id: "drop_shared", label: "呢個人唔用有爭議嘅工號／電話" });
+      {
+        const what = kind === "dup_tel_across_persons" ? "電話" : "工號";
+        opts.push({ id: "keep", label: `${what}係呢個人嘅（其他人唔用）` }, { id: "drop_shared", label: `${what}唔係呢個人嘅（由呢個人剔走）` });
+        // TE-13.1：冇 confirmed 有效身份證 → keep 建唔到人，要先輸入身份證號
+        if (!hkidConfirmedValid(p)) opts.push({ id: "enter_hkid", label: "輸入身份證號（先可以建人）", input: "hkid" });
+      }
       break;
     case "package_conflict":
       opts.push({ id: "keep", label: "用呢條記錄（我確認冇問題）" });
@@ -272,11 +279,62 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
     if (!noOwners.has(k)) noOwners.set(k, new Set());
     noOwners.get(k)!.add(p.key);
   }
+  const telOwners = new Map<string, Set<string>>();
+  for (const p of pkg.persons) {
+    const t = normTel8(fieldValue(p.phone));
+    if (!t) continue;
+    if (!telOwners.has(t)) telOwners.set(t, new Set());
+    telOwners.get(t)!.add(p.key);
+  }
+  const byKey = new Map(pkg.persons.map((p) => [p.key, p]));
+  // TE-13：ghost（空記錄）自動併入真人——唔出題；ghost 嘅文件頁數併入真人 docInfo，evidence 記 note
+  const ghosts = findGhostPersons(pkg.persons);
+  const suspects = new Set([...findGhostPersons(pkg.persons, { suspect: true }).keys()].filter((k) => !ghosts.has(k))); // TE-13.2：疑似但冇名單佐證
+  const sumKinds = (gs: readonly PackagePerson[]): Record<string, number> => {
+    const o: Record<string, number> = {};
+    for (const g of gs) for (const [k, n] of Object.entries(g.docInfo?.pagesByKind ?? {})) o[k] = (o[k] ?? 0) + n;
+    return o;
+  };
+  const ghostsOf = new Map<string, { staffNumbers: string[]; ghost: PackagePerson }[]>();
+  for (const [gk, info] of ghosts) {
+    const g = byKey.get(gk);
+    if (g) ghostsOf.set(info.mergedInto, [...(ghostsOf.get(info.mergedInto) ?? []), { staffNumbers: info.staffNumbers, ghost: g }]);
+  }
+  const mergeDocInfo = (p: PackagePerson): PackagePerson["docInfo"] => {
+    const gs = ghostsOf.get(p.key);
+    if (!gs) return p.docInfo;
+    const pagesByKind: Record<string, number> = { ...(p.docInfo?.pagesByKind ?? {}) };
+    let pageCount = p.docInfo?.pageCount ?? 0;
+    const exts = new Set(p.docInfo?.fileExts ?? []);
+    for (const { ghost } of gs) {
+      pageCount += ghost.docInfo?.pageCount ?? 0;
+      for (const [k, n] of Object.entries(ghost.docInfo?.pagesByKind ?? {})) pagesByKind[k] = (pagesByKind[k] ?? 0) + n;
+      for (const x of ghost.docInfo?.fileExts ?? []) exts.add(x);
+    }
+    return { pageCount, pagesByKind, ...(exts.size ? { fileExts: [...exts].slice(0, 5) } : {}) };
+  };
+  // TE-13：共用嘅「其他人」——只放狀態／工號，唔放 HKID／電話值
+  const sharedWithOf = (p: PackagePerson, kind: QuestionKind): SharedWithEntry[] => {
+    const keys = new Set<string>();
+    if (kind === "staffno_shared_by_persons") for (const n of p.staffNumbers) for (const k of noOwners.get(normalizeStaffNumber(n.number)) ?? []) keys.add(k);
+    else {
+      const t = normTel8(fieldValue(p.phone));
+      if (t) for (const k of telOwners.get(t) ?? []) keys.add(k);
+    }
+    keys.delete(p.key);
+    return [...keys].flatMap((k) => {
+      const o = byKey.get(k);
+      if (!o) return [];
+      const pages = o.docInfo?.pageCount ?? 0;
+      return [{ person_key: serverPersonKey(o), name_zh: fieldValue(o.nameZh), name_en: fieldValue(o.nameEn), hkid_status: o.hkid.status, has_docs: pages > 0, doc_count: pages, staff_numbers: o.staffNumbers.map((n) => n.number), tel_status: o.phone.status }];
+    });
+  };
   const order = new Map(pkg.persons.map((p, i) => [p.key, i]));
   const seen = new Set<string>();
   const drafts: QuestionDraft[] = [];
   for (const e of evals) {
     const p = e.person;
+    if (ghosts.has(p.key)) continue; // TE-13：dropped_ghost
     const sk = serverPersonKey(p);
     if (seen.has(p.key) || seen.has(`sk:${sk}`)) continue; // duplicate_key_in_package／同一個人兩行：只問一次
     seen.add(p.key);
@@ -293,13 +351,21 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
     const candidateIds = [...new Set([...(e.guardId ? [e.guardId] : []), ...e.candidates])].slice(0, MAX_CANDIDATES);
     const evidence: QuestionEvidence = {
       v: 1,
-      person: { ...p, key: sk },
-      reasons: [...new Set([...e.reasons, ...gr])],
+      person: { ...p, key: sk, ...(ghostsOf.has(p.key) ? { docInfo: mergeDocInfo(p) } : {}) },
+      reasons: [...new Set([...e.reasons.filter((r) => r !== "dropped_ghost"), ...gr])],
+      ...(ghostsOf.has(p.key)
+        ? {
+            note: `由 ${ghostDocText(sumKinds(ghostsOf.get(p.key)!.map((x) => x.ghost)), 0)}產生嘅空記錄，已自動併入 ${[...new Set(ghostsOf.get(p.key)!.flatMap((x) => x.staffNumbers))].join("、")}`,
+          }
+        : suspects.has(p.key)
+          ? { note: `疑似空記錄（只有 ${ghostDocText(p.docInfo?.pagesByKind, p.docInfo?.pageCount ?? 0)}）：冇打字名單身份證佐證，未自動併入，請核對` }
+          : {}),
       candidate_guard_ids: kind === "field_review" ? [] : candidateIds,
       ...(kind === "staffno_shared_by_persons" || kind === "dup_tel_across_persons" || kind === "group_name_differs" || kind === "package_conflict"
         ? {
             shared_staff_numbers: p.staffNumbers.map((n) => normalizeStaffNumber(n.number)).filter((k) => (noOwners.get(k)?.size ?? 0) > 1),
             shared_tel: gr.includes("dup_tel_across_persons"),
+            ...(kind === "staffno_shared_by_persons" || kind === "dup_tel_across_persons" ? { shared_with: sharedWithOf(p, kind) } : {}),
           }
         : {}),
       ...(reviewFields ? { review_fields: reviewFields, guard_id: e.guardId } : {}),

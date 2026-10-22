@@ -140,6 +140,18 @@ export const REVIEW_FIELD_LABEL: Record<ReviewField, string> = {
   address: "地址",
 };
 
+export interface SharedWithEntry {
+  /** 伺服器 person key（serverPersonKey，同題目 personKey 一致） */
+  person_key: string;
+  name_zh: string | null;
+  name_en: string | null;
+  hkid_status: string;
+  has_docs: boolean;
+  doc_count: number;
+  staff_numbers: string[];
+  tel_status: string;
+}
+
 /** 存喺 triage_questions.evidence_json（DB 內，受權限保護；含 PII）。 */
 export interface QuestionEvidence {
   v: 1;
@@ -149,6 +161,8 @@ export interface QuestionEvidence {
   /** staffno_shared／dup_tel 用：包內被別人共用嘅工號、電話係咪共用 */
   shared_staff_numbers?: string[];
   shared_tel?: boolean;
+  /** TE-13：同一工號／電話嘅「其他人」（只放狀態同工號，唔放 HKID／電話值）；view 按 pii 遮罩姓名，加 question_id（同 session 同 kind 嘅題） */
+  shared_with?: SharedWithEntry[];
   /** field_review 用：要覆核嘅欄＋同現有值比較結果 */
   review_fields?: { field: ReviewField; check: string }[];
   /** 連去嘅現有保安員（field_review） */
@@ -157,6 +171,8 @@ export interface QuestionEvidence {
   ext_review?: { key: string; check: string; status: string; held?: string }[];
   /** bank_identity_unknown：Payroll Editor 對唔到人嘅戶口（含完整戶口號——同 guards 表同級，只存 DB，API 層按銀行資料權限遮罩） */
   unassigned?: { key: string; bankCode: string; accountNo: string; payeeName: string };
+  /** TE-13：已自動併入呢個人嘅空記錄（ghost）說明——唔含 PII，只有工號 */
+  note?: string;
   /** TE-7：來源檔案線索（證據圖上載時由本機腳本帶入；只補唔覆蓋） */
   doc_ref?: { file_name: string; page_count: number; pages_by_kind: Record<string, number> };
 }
