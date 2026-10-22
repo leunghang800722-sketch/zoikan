@@ -8,6 +8,7 @@ import { bankComplete, digits, extKeyGroup, isBankKey, isEmergencyKey, normPayee
 import { hkidCheckDigitValid, canonicalHkid } from "@/lib/guards/identity";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normTel8 } from "@/lib/guards/import/text";
+import { ghostDocText } from "../shared-card";
 import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type SharedWithEntry, type QuestionKind, type QuestionOption, type ReviewField } from "../types";
 
 export interface QuestionDraft {
@@ -288,6 +289,12 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
   const byKey = new Map(pkg.persons.map((p) => [p.key, p]));
   // TE-13：ghost（空記錄）自動併入真人——唔出題；ghost 嘅文件頁數併入真人 docInfo，evidence 記 note
   const ghosts = findGhostPersons(pkg.persons);
+  const suspects = new Set([...findGhostPersons(pkg.persons, { suspect: true }).keys()].filter((k) => !ghosts.has(k))); // TE-13.2：疑似但冇名單佐證
+  const sumKinds = (gs: readonly PackagePerson[]): Record<string, number> => {
+    const o: Record<string, number> = {};
+    for (const g of gs) for (const [k, n] of Object.entries(g.docInfo?.pagesByKind ?? {})) o[k] = (o[k] ?? 0) + n;
+    return o;
+  };
   const ghostsOf = new Map<string, { staffNumbers: string[]; ghost: PackagePerson }[]>();
   for (const [gk, info] of ghosts) {
     const g = byKey.get(gk);
@@ -346,7 +353,13 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
       v: 1,
       person: { ...p, key: sk, ...(ghostsOf.has(p.key) ? { docInfo: mergeDocInfo(p) } : {}) },
       reasons: [...new Set([...e.reasons.filter((r) => r !== "dropped_ghost"), ...gr])],
-      ...(ghostsOf.has(p.key) ? { note: `由銀行戶口文件產生嘅空記錄，已自動併入 ${[...new Set(ghostsOf.get(p.key)!.flatMap((x) => x.staffNumbers))].join("、")}` } : {}),
+      ...(ghostsOf.has(p.key)
+        ? {
+            note: `由 ${ghostDocText(sumKinds(ghostsOf.get(p.key)!.map((x) => x.ghost)), 0)}產生嘅空記錄，已自動併入 ${[...new Set(ghostsOf.get(p.key)!.flatMap((x) => x.staffNumbers))].join("、")}`,
+          }
+        : suspects.has(p.key)
+          ? { note: `疑似空記錄（只有 ${ghostDocText(p.docInfo?.pagesByKind, p.docInfo?.pageCount ?? 0)}）：冇打字名單身份證佐證，未自動併入，請核對` }
+          : {}),
       candidate_guard_ids: kind === "field_review" ? [] : candidateIds,
       ...(kind === "staffno_shared_by_persons" || kind === "dup_tel_across_persons" || kind === "group_name_differs" || kind === "package_conflict"
         ? {

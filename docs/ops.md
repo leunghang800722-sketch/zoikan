@@ -634,3 +634,11 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 修正：`resolveAnswer` 新 outcome `mode: "dropped"`——`drop_shared` 而人冇 confirmed 有效身份證**而且題目冇 link 目標（targetGuardId）** → 答案接受、唔寫任何嘢（唔建人）、題目 `answered`（`apply_result_json.outcome = "dropped"`）、audit `triage_answer`（option＝drop_shared、outcome＝dropped、writes＝false）；預覽 `can_confirm=true`，summary「已剔走爭議工號／電話；呢筆記錄冇身份資料，唔會建人」，唔觸發 `needs_decision`。有 confirmed 身份證（或有 link 目標）照舊行 create／link。
 - `keep` 對冇身份證嘅人保持擋，`reason_text`＝「要先輸入身份證號先可以建人…」；兩種 kind 對冇 confirmed 身份證嘅人加 `enter_hkid` 輸入選項（`input: "hkid"`）。已存在嘅舊題 options 唔含 `enter_hkid`，重新 apply 同一個包（作廢舊題重出）先會有。
 - 唯讀自檢：`24-open-gap-audit` 新增 class `drop_shared_stuck`（共用題而包內個人冇 confirmed 有效身份證；reason `hkid_missing`／`hkid_not_confirmed`）。未答題匯出每條可加 `id`，輸出行會帶返 `id`，`summary.by_category.drop_shared_stuck` 即題數。
+
+### TE-13.2：ghost 規則收緊（Opus 驗收）
+
+- **(a)** ghost 嘅 `docInfo.pagesByKind` 必須有資料而且**只有非身份文件**（bank／blank／sia_permit／safety_card／printed）；有 id_card／application_form（入職表）／address_proof 即唔係 ghost（真新人工號錯配）；冇 docInfo 亦唔當 ghost。
+- **(b)** **冇名單 HKID 佐證一律唔自動併入**：ghost 每個工號都要有 `listHkids`（ghost 或真人其中一邊帶）而且同真人 HKID 一致；舊包／舊題 evidence 冇 `listHkids` → 唔併，照出共用題，ghost 嗰條 evidence `note`＝「疑似空記錄（只有 N 頁銀行文件）：冇打字名單身份證佐證，未自動併入，請核對」（題卡顯示）。名單 HKID 係另一人 → 完全唔係 ghost。
+- **(c)** 併入說明按實際 pagesByKind 寫，例：「由 2 頁銀行文件產生嘅空記錄，已自動併入 U01095」。
+- 舊題收題由 proposals import **拆出**：`POST /api/triage/sessions/:id/ghost-close`——**預設 dry run**（只回 `question_ids`／`count`），`?dry_run=0` 先真收（標 `superseded`）；每條被收嘅題逐條 audit `triage_ghost_close`（`question_id`、`person_key`、`rule=ghost_staffno_shared_v2`）。proposals import 唔再收題（`ghost_questions_closed` 已移除）。同一套 (a)(b) 限制：舊題 evidence 冇 `listHkids` 就唔收。
+- 舊題（options 冇 `enter_hkid`）揀 keep：reason_text＝「請揀『唔係呢個人嘅（剔走）』，或者喺人卡補身份證後重新導入」。

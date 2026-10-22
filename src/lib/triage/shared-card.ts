@@ -17,3 +17,16 @@ export const hkidStatusLabel = (s: string): string => HKID_STATUS_LABEL[s] ?? "�
 export function noCropText(kind: string | undefined): string {
   return kind && isSharedKind(kind) ? "呢類題目唔需要裁圖" : "冇裁圖（文件讀唔到）";
 }
+
+/** TE-13.2：非身份文件頁種類（ghost 只可以得呢啲）同顯示名 */
+const NON_IDENTITY_KIND_LABEL: Record<string, string> = { bank: "銀行", blank: "空白", sia_permit: "牌照", safety_card: "平安咭", printed: "印刷" };
+export const isNonIdentityKinds = (pagesByKind: Record<string, number> | undefined): boolean => {
+  const ks = Object.entries(pagesByKind ?? {}).filter(([, n]) => n > 0).map(([k]) => k);
+  return ks.length > 0 && ks.every((k) => k in NON_IDENTITY_KIND_LABEL);
+};
+/** 「2 頁銀行文件」「3 頁銀行、牌照文件」——按實際 pagesByKind 寫，唔寫死 */
+export function ghostDocText(pagesByKind: Record<string, number> | undefined, pageCount: number): string {
+  const labels = Object.entries(pagesByKind ?? {}).filter(([, n]) => n > 0).map(([k]) => NON_IDENTITY_KIND_LABEL[k] ?? k);
+  const total = Object.values(pagesByKind ?? {}).reduce((a, n) => a + n, 0) || pageCount;
+  return `${total} 頁${labels.join("、")}文件`;
+}

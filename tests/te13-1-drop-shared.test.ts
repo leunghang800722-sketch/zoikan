@@ -47,7 +47,7 @@ describe("TE-13.1 drop_shared 卡死修正", () => {
   const qFor = async (kind: string, no: string) => (await prisma.triageQuestion.findMany({ where: { kind } })).find((q) => JSON.stringify((q.evidenceJson as { person: { staffNumbers: unknown } }).person.staffNumbers).includes(no))!;
 
   it("電話共用、兩人都冇身份證：drop_shared → dropped，可確認，唔建人，題目 answered，audit 記 option", async () => {
-    await apply([person("pa", { tel: "91000031", no: "U91031" }), person("pb", { tel: "91000031", no: "U91032" })]);
+    await apply([person("pa", { tel: "90000031", no: "U91031" }), person("pb", { tel: "90000031", no: "U91032" })]);
     const q = await qFor("dup_tel_across_persons", "U91031");
     expect((q.optionsJson as { id: string }[]).map((o) => o.id)).toEqual(expect.arrayContaining(["keep", "drop_shared", "enter_hkid"]));
     const pv = await preview(q.id, { option: "drop_shared" });
@@ -69,7 +69,7 @@ describe("TE-13.1 drop_shared 卡死修正", () => {
   });
 
   it("keep 對冇身份證嘅人：仍然擋，講明要先輸入身份證號；enter_hkid 可用", async () => {
-    await apply([person("pa", { tel: "91000033", no: "U91033" }), person("pb", { tel: "91000033", no: "U91034" })]);
+    await apply([person("pa", { tel: "90000033", no: "U91033" }), person("pb", { tel: "90000033", no: "U91034" })]);
     const q = await qFor("dup_tel_across_persons", "U91033");
     const pv = await preview(q.id, { option: "keep" });
     expect(pv.impact.can_confirm).toBe(false);
@@ -78,8 +78,17 @@ describe("TE-13.1 drop_shared 卡死修正", () => {
     expect(pe.impact.reason_text ?? "").not.toContain("要先輸入身份證號先可以建人");
   });
 
+  it("S3：舊題（options 冇 enter_hkid）揀 keep → reason_text 改請揀剔走或補身份證後重新導入", async () => {
+    await apply([person("pa", { tel: "90000037", no: "U91037" }), person("pb", { tel: "90000037", no: "U91038" })]);
+    const q = await qFor("dup_tel_across_persons", "U91037");
+    await prisma.triageQuestion.update({ where: { id: q.id }, data: { optionsJson: (q.optionsJson as { id: string }[]).filter((o) => o.id !== "enter_hkid") as never } });
+    const pv = await preview(q.id, { option: "keep" });
+    expect(pv.impact.can_confirm).toBe(false);
+    expect(pv.impact.reason_text).toBe("請揀「唔係呢個人嘅（剔走）」，或者喺人卡補身份證後重新導入");
+  });
+
   it("有 confirmed 身份證：drop_shared 照舊行 create 路徑（唔係 dropped）", async () => {
-    await apply([person("pa", { hkid: HK, name: "導入測試員甲", tel: "91000035", no: "U91035" }), person("pb", { hkid: HK_B, name: "導入測試員乙", tel: "91000035", no: "U91036" })]);
+    await apply([person("pa", { hkid: HK, name: "導入測試員甲", tel: "90000035", no: "U91035" }), person("pb", { hkid: HK_B, name: "導入測試員乙", tel: "90000035", no: "U91036" })]);
     const q = await qFor("dup_tel_across_persons", "U91035");
     expect((q.optionsJson as { id: string }[]).map((o) => o.id)).not.toContain("enter_hkid");
     const pv = await preview(q.id, { option: "drop_shared" });

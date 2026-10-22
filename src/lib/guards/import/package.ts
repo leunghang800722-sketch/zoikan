@@ -8,6 +8,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { canonicalHkid } from "@/lib/guards/identity";
 import { normTel8 } from "./text";
+import { isNonIdentityKinds } from "@/lib/triage/shared-card";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { HKICL_BANK_CODE_SET } from "@/lib/longterm-payroll/hkicl-bank-codes";
 
@@ -197,11 +198,11 @@ const personHasExt = (p: PackagePerson): boolean =>
 
 /**
  * TE-13 ghost person：由銀行戶口等文件產生嘅空記錄（rating fail／no_id_page、個人欄全部 missing、冇 ext、有工號），
- * 而且佢每個工號都只同**同一個**身份已確認（hkid confirmed 且有效）嘅包內 person 共用，
- * 該工號喺打字名單嘅身份證（listHkids，如有）同嗰個人一致 → 自動併入嗰個真人（唔出題、唔建人）。
+ * 而且文件只有非身份文件（銀行等）、佢每個工號都只同**同一個**身份已確認（hkid confirmed 且有效）嘅包內 person 共用，
+ * 而且每個工號喺打字名單嘅身份證（listHkids）都同嗰個人一致（冇名單佐證＝唔併，suspect 模式只標疑似）→ 自動併入嗰個真人（唔出題、唔建人）。
  * 任何一點唔符合（兩個真人共用、名單 HKID 唔一致、真人冇確認身份證…）→ 唔係 ghost，照舊出題。
  */
-export function findGhostPersons(persons: readonly PackagePerson[]): Map<string, GhostInfo> {
+export function findGhostPersons(persons: readonly PackagePerson[], opts: { suspect?: boolean } = {}): Map<string, GhostInfo> {
   const out = new Map<string, GhostInfo>();
   const owners = new Map<string, PackagePerson[]>();
   for (const p of persons) for (const n of p.staffNumbers) {
@@ -215,6 +216,8 @@ export function findGhostPersons(persons: readonly PackagePerson[]): Map<string,
   for (const g of persons) {
     if (!(g.rating === "fail" || g.reasons.includes("no_id_page"))) continue;
     if (g.staffNumbers.length === 0 || !personFieldsAllMissing(g) || personHasExt(g)) continue;
+    // TE-13.2 (a)：文件只可以係非身份文件（銀行等）；有身份證／入職表／住址證明頁＝真新人，唔係 ghost
+    if (!isNonIdentityKinds(g.docInfo?.pagesByKind)) continue;
     const nos = [...new Set(g.staffNumbers.map((n) => normalizeStaffNumber(n.number)))];
     const real = new Set<PackagePerson>();
     let ok = true;
@@ -228,7 +231,10 @@ export function findGhostPersons(persons: readonly PackagePerson[]): Map<string,
     const rh = r.hkid.status === "confirmed" ? canonicalHkid(fieldValue(r.hkid)) : null;
     if (!rh || out.has(r.key)) continue;
     // 名單 HKID（如有）要同真人一致
-    if (nos.some((k) => { const l = listOf(g, k) ?? listOf(r, k); return l !== null && l !== rh; })) continue;
+    // TE-13.2 (b)：冇名單 HKID 佐證一律唔自動併入（suspect 模式只用嚟顯示「疑似空記錄」提示）；名單 HKID 唔一致永遠唔係 ghost
+    const lists = nos.map((k) => listOf(g, k) ?? listOf(r, k));
+    if (lists.some((l) => l !== null && l !== rh)) continue;
+    if (!opts.suspect && lists.some((l) => l === null)) continue;
     out.set(g.key, { mergedInto: r.key, staffNumbers: nos });
   }
   // 真人本身唔可以係 ghost（鏈式併入唔做）

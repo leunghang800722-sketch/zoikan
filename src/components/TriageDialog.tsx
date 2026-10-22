@@ -251,6 +251,7 @@ function PersonCard({ q, canGoto, onGoto }: { q: Question; canGoto?: (id: string
         )}
         <div className="text-zk-sm text-zk-muted">下一步：請補交身份證副本／入職表再導入，或者人手輸入。</div>
         <ExtLines ext={p.ext} />
+        {q.evidence.note && <div className="text-zk-sm font-semibold text-zk-warning" data-testid="triage-merge-note">{q.evidence.note}</div>}
         <OriginalPages imgs={q.evidence_images ?? []} hidden={q.evidence_pages_hidden ?? 0} />
       </StaffNoOnlyPerson>
       </>

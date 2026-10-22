@@ -52,8 +52,8 @@ async function drafts(persons: PackagePerson[]) {
 describe("evidence.shared_with（generator）", () => {
   beforeEach(clearAll);
   it("共用工號：每個人嘅題列出其他共用者（狀態／文件頁數／工號），唔含 HKID／電話值", async () => {
-    const a = person({ key: personKeyForHkid(HK), hkid: HK, name: "導入測試員甲", tel: "91000011", nos: ["U91001"], pages: 3 });
-    const b = person({ key: "pkg-b", hkid: HK2, name: "導入測試員乙", tel: "91000012", nos: ["U91001", "MP91002"], pages: 2 });
+    const a = person({ key: personKeyForHkid(HK), hkid: HK, name: "導入測試員甲", tel: "90000011", nos: ["U91001"], pages: 3 });
+    const b = person({ key: "pkg-b", hkid: HK2, name: "導入測試員乙", tel: "90000012", nos: ["U91001", "MP91002"], pages: 2 });
     const ds = (await drafts([a, b])).filter((d) => d.kind === "staffno_shared_by_persons");
     expect(ds).toHaveLength(2);
     const da = ds.find((d) => d.evidence.person.nameZh.value === "導入測試員甲")!;
@@ -61,18 +61,18 @@ describe("evidence.shared_with（generator）", () => {
     expect(da.evidence.shared_with![0]).toMatchObject({ name_zh: "導入測試員乙", hkid_status: "confirmed", has_docs: true, doc_count: 2, staff_numbers: ["U91001", "MP91002"], tel_status: "confirmed" });
     const txt = JSON.stringify(da.evidence.shared_with);
     expect(txt).not.toContain(HK2);
-    expect(txt).not.toContain("91000012");
+    expect(txt).not.toContain("90000012");
     // 選項文案
     expect(da.options.map((o) => o.label)).toEqual(expect.arrayContaining(["工號係呢個人嘅（其他人唔用）", "工號唔係呢個人嘅（由呢個人剔走）"]));
   });
   it("共用電話：shared_with 按電話反查；選項講電話", async () => {
-    const a = person({ key: "pa", hkid: HK, name: "導入測試員甲", tel: "91000013", nos: ["U91011"], pages: 1 });
-    const b = person({ key: "pb", hkid: HK2, name: "導入測試員乙", tel: "91000013", nos: ["U91012"], pages: 0 });
+    const a = person({ key: "pa", hkid: HK, name: "導入測試員甲", tel: "90000013", nos: ["U91011"], pages: 1 });
+    const b = person({ key: "pb", hkid: HK2, name: "導入測試員乙", tel: "90000013", nos: ["U91012"], pages: 0 });
     const ds = (await drafts([a, b])).filter((d) => d.kind === "dup_tel_across_persons");
     expect(ds).toHaveLength(2);
     const d0 = ds[0]!;
     expect(d0.evidence.shared_with).toHaveLength(1);
-    expect(JSON.stringify(d0.evidence.shared_with)).not.toContain("91000013");
+    expect(JSON.stringify(d0.evidence.shared_with)).not.toContain("90000013");
     expect(d0.options.map((o) => o.label)).toEqual(expect.arrayContaining(["電話係呢個人嘅（其他人唔用）", "電話唔係呢個人嘅（由呢個人剔走）"]));
   });
 });

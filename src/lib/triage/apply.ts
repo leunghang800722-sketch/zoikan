@@ -272,7 +272,10 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   if (!impact.can_confirm && answer.option === "keep" && (q.kind === "staffno_shared_by_persons" || q.kind === "dup_tel_across_persons")) {
     const hk = resolved.pkg.persons[0]!.hkid;
     const c = hk.status === "confirmed" ? canonicalHkid(fieldValue(hk)) : null;
-    if (!(c && hkidCheckDigitValid(c))) impact.reason_text = "要先輸入身份證號先可以建人：請揀「輸入身份證號」並輸入合法號碼；或者揀「…唔係呢個人嘅（由呢個人剔走）」";
+    if (!(c && hkidCheckDigitValid(c))) {
+      const hasEnter = (q.optionsJson as unknown as { id: string }[]).some((x) => x.id === "enter_hkid");
+      impact.reason_text = hasEnter ? "要先輸入身份證號先可以建人：請揀「輸入身份證號」並輸入合法號碼；或者揀「…唔係呢個人嘅（由呢個人剔走）」" : "請揀「唔係呢個人嘅（剔走）」，或者喺人卡補身份證後重新導入"; // S3：舊題冇 enter_hkid
+    }
   }
   const ph = hashOf(q.id, answer, out.fingerprint);
   stashFp(ph, out.fpInput);
