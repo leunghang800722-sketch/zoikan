@@ -627,3 +627,10 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 效果：`packageConflicts` 唔再計 ghost 工號為共用；preview 評估 reasons 加 `dropped_ghost`（「由文件產生嘅空記錄，已自動併入…」）；apply 唔處理 ghost（唔建人、`persons_total` 唔計）；分診 generator 唔為 ghost 出題，真人嘅題 evidence 帶 `note`（「由銀行戶口文件產生嘅空記錄，已自動併入 U01095」）同合併後嘅 `docInfo`（頁數／各類頁數）。兩個真人共用、名單 HKID 唔一致、真人身份未確認 → 照舊出題（用新題卡列晒共用者）。
 - **production 舊題收題**：`POST /api/triage/sessions/:id/proposals`（含 `?dry_run=1`）開頭會對 session 內仍 open 嘅 `staffno_shared_by_persons` 題跑同一條 ghost 規則（用題目 evidence 內嘅 person；舊題冇 `listHkids` 就當無矛盾），符合嘅 ghost 題同「淨係因 ghost 而共用」嘅真人題標 `superseded`；回應 counts 加 `ghost_questions_closed`（dry＝會收嘅題數，唔寫 DB）。真人另有其他衝突（電話共用／重複身份證等）就唔郁。亦可重新上載同一個包（新規則下會作廢舊題）。
 - `24-open-gap-audit` 暫未加 ghost 分類（audit 輸入冇值，睇唔到個人欄／ghost 狀態）；要睇有幾多條會被收，用 proposals dry run 嘅 `ghost_questions_closed`。
+
+### TE-13.1：共用工號／電話題「兩個選項都卡死」修正
+
+- 問題：人冇 confirmed 身份證（例：只有電話＋工號），`drop_shared`（剔走爭議工號／電話）之後行 create 路徑，要 HKID confirmed → 擋；`keep` 同樣擋。
+- 修正：`resolveAnswer` 新 outcome `mode: "dropped"`——`drop_shared` 而人冇 confirmed 有效身份證**而且題目冇 link 目標（targetGuardId）** → 答案接受、唔寫任何嘢（唔建人）、題目 `answered`（`apply_result_json.outcome = "dropped"`）、audit `triage_answer`（option＝drop_shared、outcome＝dropped、writes＝false）；預覽 `can_confirm=true`，summary「已剔走爭議工號／電話；呢筆記錄冇身份資料，唔會建人」，唔觸發 `needs_decision`。有 confirmed 身份證（或有 link 目標）照舊行 create／link。
+- `keep` 對冇身份證嘅人保持擋，`reason_text`＝「要先輸入身份證號先可以建人…」；兩種 kind 對冇 confirmed 身份證嘅人加 `enter_hkid` 輸入選項（`input: "hkid"`）。已存在嘅舊題 options 唔含 `enter_hkid`，重新 apply 同一個包（作廢舊題重出）先會有。
+- 唯讀自檢：`24-open-gap-audit` 新增 class `drop_shared_stuck`（共用題而包內個人冇 confirmed 有效身份證；reason `hkid_missing`／`hkid_not_confirmed`）。未答題匯出每條可加 `id`，輸出行會帶返 `id`，`summary.by_category.drop_shared_stuck` 即題數。

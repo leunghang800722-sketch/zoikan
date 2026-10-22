@@ -478,7 +478,7 @@ export async function loadHkidOwnerCard(guardId: string, c: ViewerCaps): Promise
 export const BLOCK_TEXT: Record<string, string> = {
   create_no_name: "呢位保安員冇姓名，要一併輸入先可以建立",
   name_not_confirmed: "姓名未確認，要輸入／確認中文姓名先可以建立",
-  create_hkid_not_confirmed: "身份證號未確認，唔可以建立：請揀「輸入身份證號」並輸入合法號碼",
+  create_hkid_not_confirmed: "要先輸入身份證號先可以建人：請揀「輸入身份證號」並輸入合法號碼",
   hkid_not_confirmed_no_other_key: "身份證號未確認，又冇工號／電話可以對上現有保安員：請輸入身份證號",
   guard_has_other_hkid_unconfirmed: "同名現有保安員已有另一個身份證號：請核對身份證號，或者揀「連去現有保安員」",
   extract_fail: "證件讀取失敗：請輸入身份證號",

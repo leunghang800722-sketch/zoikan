@@ -9,7 +9,7 @@ import type { Prisma, TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { ApiError, BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
-import { canonicalHkid } from "@/lib/guards/identity";
+import { canonicalHkid, hkidCheckDigitValid } from "@/lib/guards/identity";
 import { fieldValue } from "@/lib/guards/import/package";
 import { normZh } from "@/lib/guards/import/text";
 import { applyOnePerson, extOutcomeOf, fpDiffPaths, summarizeExt, type ApplyOptions } from "@/lib/guards/import/apply";
@@ -59,7 +59,7 @@ const omitConflicts = <T extends { ext_conflicts?: number }>(s: T): Omit<T, "ext
 };
 
 function load(q: QRow) {
-  return { kind: q.kind as QuestionKind, evidence: q.evidenceJson as unknown as QuestionEvidence, options: q.optionsJson as unknown as QuestionOption[] };
+  return { kind: q.kind as QuestionKind, evidence: q.evidenceJson as unknown as QuestionEvidence, options: q.optionsJson as unknown as QuestionOption[], targetGuardId: q.targetGuardId };
 }
 
 function assertAnswerable(q: QRow): void {
@@ -193,6 +193,11 @@ export interface PreviewOutput {
   impact: ImpactView;
 }
 
+const DROPPED_TEXT = "已剔走爭議工號／電話；呢筆記錄冇身份資料，唔會建人";
+function droppedImpact(): ImpactView {
+  return { can_confirm: true, summary: [DROPPED_TEXT], changes: [], field_outcomes: [], notes: [] };
+}
+
 export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, caps: ViewerCaps, ip: string | null): Promise<PreviewOutput> {
   assertAnswerable(q);
   await assertNoNewer(prisma, q, actor);
@@ -214,6 +219,9 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
     const cards = await loadHkidOwnerCard(ownerChk.ownerId, caps);
     const impact: ImpactView = { can_confirm: false, summary: ["呢個身份證號已屬於系統內一位保安員，唔可以再建新人"], changes: [], field_outcomes: [], notes: [], reason_text: HKID_OWNER_TEXT, needs_decision: { reason: "hkid_matches_existing_guard", candidates: cards, options: caps.pii && caps.guardUpdate ? ["link", "skip"] : ["skip"] } };
     return { preview_hash: hashOf(q.id, answer, "hkid-owner"), writes: false, impact };
+  }
+  if (resolved.mode === "dropped") {
+    return { preview_hash: hashOf(q.id, answer, "dropped"), writes: false, impact: droppedImpact() };
   }
   if (resolved.mode === "skip") {
     return { preview_hash: hashOf(q.id, answer, "skip"), writes: false, impact: { can_confirm: true, summary: ["跳過：唔寫任何資料，呢條留返人手處理"], changes: [], field_outcomes: [], notes: [] } };
@@ -260,6 +268,12 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   }
   // TE-3：唔過嘅原因用人話講清楚；缺姓名而選項容許補姓名就列出要補嘅欄（UI 同一張卡展開輸入）
   if (!impact.can_confirm) Object.assign(impact, explainBlocked(out.result.reasons, answer.option, EXTRA_NAME_OPTIONS, !!answer.extra?.name_zh));
+  // TE-13.1：共用題 keep 而人冇 confirmed 有效身份證 → 建唔到人，講清楚要先輸入身份證號（或揀剔走）
+  if (!impact.can_confirm && answer.option === "keep" && (q.kind === "staffno_shared_by_persons" || q.kind === "dup_tel_across_persons")) {
+    const hk = resolved.pkg.persons[0]!.hkid;
+    const c = hk.status === "confirmed" ? canonicalHkid(fieldValue(hk)) : null;
+    if (!(c && hkidCheckDigitValid(c))) impact.reason_text = "要先輸入身份證號先可以建人：請揀「輸入身份證號」並輸入合法號碼；或者揀「…唔係呢個人嘅（由呢個人剔走）」";
+  }
   const ph = hashOf(q.id, answer, out.fingerprint);
   stashFp(ph, out.fpInput);
   return { preview_hash: ph, writes: impact.can_confirm, impact };
@@ -307,6 +321,23 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
   const now = new Date();
   let followUpCreated = false;
 
+  if (resolved.mode === "dropped") {
+    if (!previewHash) throw BadRequest("要先預覽影響，再帶返 preview_hash 確認");
+    if (previewHash !== hashOf(q.id, answer, "dropped")) throw Conflict("預覽已過期，請重新預覽");
+    const impact = droppedImpact();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
+      await assertNoNewer(tx, q, actor);
+      const n = await tx.triageQuestion.updateMany({
+        where: { id: q.id, status: { in: ["open", "skipped"] } },
+        data: { status: "answered", answerJson: JSON.parse(JSON.stringify(extra ? { ...answer, source: extra.source } : answer)), answeredBy: actor.userId, answeredAt: now, applyResultJson: { outcome: "dropped" } },
+      });
+      if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
+      await deleteUnneeded(tx, q.sessionId, q.personKey);
+      await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: false, outcome: "dropped", manual_confirmed: !extra }, ip });
+    });
+    return await finish("answered", impact, q.sessionId);
+  }
   if (resolved.mode === "skip") {
     await prisma.$transaction(async (tx) => {
       const n = await tx.triageQuestion.updateMany({

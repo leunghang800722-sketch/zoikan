@@ -118,6 +118,8 @@ function optionsFor(kind: QuestionKind, p: PackagePerson, candidateIds: string[]
       {
         const what = kind === "dup_tel_across_persons" ? "電話" : "工號";
         opts.push({ id: "keep", label: `${what}係呢個人嘅（其他人唔用）` }, { id: "drop_shared", label: `${what}唔係呢個人嘅（由呢個人剔走）` });
+        // TE-13.1：冇 confirmed 有效身份證 → keep 建唔到人，要先輸入身份證號
+        if (!hkidConfirmedValid(p)) opts.push({ id: "enter_hkid", label: "輸入身份證號（先可以建人）", input: "hkid" });
       }
       break;
     case "package_conflict":
