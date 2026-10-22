@@ -637,7 +637,7 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 ### TE-13.2：ghost 規則收緊（Opus 驗收）
 
-- **(a)** ghost 嘅 `docInfo.pagesByKind` 必須有資料而且**只有非身份文件**（bank／blank／sia_permit／safety_card／printed）；有 id_card／application_form（入職表）／address_proof 即唔係 ghost（真新人工號錯配）；冇 docInfo 亦唔當 ghost。
+- **(a)** ghost 嘅 `docInfo.pagesByKind` 必須有資料而且**只有非身份文件**（bank／blank／sia_permit／safety_card；**TE-13.3：`printed` 已剔走**——printed 類可能係印刷版證件副本（QAS 證書／印刷身份證影印），保守起見有 printed 頁一律唔當 ghost）；有 id_card／application_form（入職表）／address_proof 即唔係 ghost（真新人工號錯配）；冇 docInfo 亦唔當 ghost。
 - **(b)** **冇名單 HKID 佐證一律唔自動併入**：ghost 每個工號都要有 `listHkids`（ghost 或真人其中一邊帶）而且同真人 HKID 一致；舊包／舊題 evidence 冇 `listHkids` → 唔併，照出共用題，ghost 嗰條 evidence `note`＝「疑似空記錄（只有 N 頁銀行文件）：冇打字名單身份證佐證，未自動併入，請核對」（題卡顯示）。名單 HKID 係另一人 → 完全唔係 ghost。
 - **(c)** 併入說明按實際 pagesByKind 寫，例：「由 2 頁銀行文件產生嘅空記錄，已自動併入 U01095」。
 - 舊題收題由 proposals import **拆出**：`POST /api/triage/sessions/:id/ghost-close`——**預設 dry run**（只回 `question_ids`／`count`），`?dry_run=0` 先真收（標 `superseded`）；每條被收嘅題逐條 audit `triage_ghost_close`（`question_id`、`person_key`、`rule=ghost_staffno_shared_v2`）。proposals import 唔再收題（`ghost_questions_closed` 已移除）。同一套 (a)(b) 限制：舊題 evidence 冇 `listHkids` 就唔收。
