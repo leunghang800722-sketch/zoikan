@@ -133,6 +133,8 @@ export const packagePersonSchema = z
     emergencyContacts: z.array(emergencyContactSchema).max(4).optional(),
     /** 人層面入職日期（取最早）；逐工號入職日期放喺 staffNumbers[].hireDate */
     hireDate: hireLeaf.optional(),
+    /** TE-13：打字名單（U Team／在勤兼職）逐工號嘅身份證號（canonical）——只畀 ghost 自動併入規則核對「名單 HKID 係咪同真人一致」，唔寫入任何資料 */
+    listHkids: z.record(z.string().max(32), z.string().max(12)).optional(),
   })
   .strict();
 
@@ -182,6 +184,58 @@ export function fieldValue(f: { value: string | null; status: FieldStatus }): st
   return v ? v : null;
 }
 
+export interface GhostInfo {
+  /** 併入嘅真人（包內 person key） */
+  mergedInto: string;
+  /** ghost 自己嘅工號（正規化） */
+  staffNumbers: string[];
+}
+
+const personFieldsAllMissing = (p: PackagePerson): boolean => [p.hkid, p.nameZh, p.nameEn, p.dateOfBirth, p.sex, p.phone, p.address].every((f) => fieldValue(f) === null);
+const personHasExt = (p: PackagePerson): boolean =>
+  !!p.siaPermit || !!p.safetyCard || !!p.qas || !!p.hireDate || (p.emergencyContacts?.length ?? 0) > 0 || (!!p.bank && Object.values(p.bank).some((l) => !!l.value?.trim())) || p.staffNumbers.some((n) => !!n.hireDate?.value?.trim());
+
+/**
+ * TE-13 ghost person：由銀行戶口等文件產生嘅空記錄（rating fail／no_id_page、個人欄全部 missing、冇 ext、有工號），
+ * 而且佢每個工號都只同**同一個**身份已確認（hkid confirmed 且有效）嘅包內 person 共用，
+ * 該工號喺打字名單嘅身份證（listHkids，如有）同嗰個人一致 → 自動併入嗰個真人（唔出題、唔建人）。
+ * 任何一點唔符合（兩個真人共用、名單 HKID 唔一致、真人冇確認身份證…）→ 唔係 ghost，照舊出題。
+ */
+export function findGhostPersons(persons: readonly PackagePerson[]): Map<string, GhostInfo> {
+  const out = new Map<string, GhostInfo>();
+  const owners = new Map<string, PackagePerson[]>();
+  for (const p of persons) for (const n of p.staffNumbers) {
+    const k = normalizeStaffNumber(n.number);
+    owners.set(k, [...(owners.get(k) ?? []), p]);
+  }
+  const listOf = (p: PackagePerson, k: string): string | null => {
+    for (const [no, h] of Object.entries(p.listHkids ?? {})) if (normalizeStaffNumber(no) === k) return canonicalHkid(h);
+    return null;
+  };
+  for (const g of persons) {
+    if (!(g.rating === "fail" || g.reasons.includes("no_id_page"))) continue;
+    if (g.staffNumbers.length === 0 || !personFieldsAllMissing(g) || personHasExt(g)) continue;
+    const nos = [...new Set(g.staffNumbers.map((n) => normalizeStaffNumber(n.number)))];
+    const real = new Set<PackagePerson>();
+    let ok = true;
+    for (const k of nos) {
+      const others = (owners.get(k) ?? []).filter((x) => x !== g);
+      if (others.length !== 1) { ok = false; break; }
+      real.add(others[0]!);
+    }
+    if (!ok || real.size !== 1) continue;
+    const r = [...real][0]!;
+    const rh = r.hkid.status === "confirmed" ? canonicalHkid(fieldValue(r.hkid)) : null;
+    if (!rh || out.has(r.key)) continue;
+    // 名單 HKID（如有）要同真人一致
+    if (nos.some((k) => { const l = listOf(g, k) ?? listOf(r, k); return l !== null && l !== rh; })) continue;
+    out.set(g.key, { mergedInto: r.key, staffNumbers: nos });
+  }
+  // 真人本身唔可以係 ghost（鏈式併入唔做）
+  for (const [gk, info] of out) if (out.has(info.mergedInto)) out.delete(gk);
+  return out;
+}
+
 /**
  * 包內跨人衝突：key 重複、同一 hkid 出現多次、同一工號掛喺多個人、同一電話掛喺多個人。
  * 回傳 key → 理由碼（有就該人一律 conflict，唔自動套用）。
@@ -197,6 +251,7 @@ export function packageConflicts(persons: readonly PackagePerson[]): Map<string,
   const noOwner = new Map<string, Set<string>>();
   const telOwner = new Map<string, Set<string>>();
   const acctOwner = new Map<string, Set<string>>();
+  const ghosts = findGhostPersons(persons); // TE-13：ghost 嘅工號唔計入共用
   for (const p of persons) {
     keyCount.set(p.key, (keyCount.get(p.key) ?? 0) + 1);
     const acct = p.bank?.accountNo ? fieldValue(p.bank.accountNo) : null;
@@ -206,7 +261,7 @@ export function packageConflicts(persons: readonly PackagePerson[]): Map<string,
     }
     const h = canonicalHkid(fieldValue(p.hkid));
     if (h) hkidOwner.set(h, [...(hkidOwner.get(h) ?? []), p.key]);
-    for (const n of p.staffNumbers) {
+    for (const n of ghosts.has(p.key) ? [] : p.staffNumbers) {
       const k = normalizeStaffNumber(n.number);
       if (!noOwner.has(k)) noOwner.set(k, new Set());
       noOwner.get(k)!.add(p.key);
@@ -222,7 +277,7 @@ export function packageConflicts(persons: readonly PackagePerson[]): Map<string,
     if ((keyCount.get(p.key) ?? 0) > 1) add(p.key, "duplicate_key_in_package");
     const h = canonicalHkid(fieldValue(p.hkid));
     if (h && (hkidOwner.get(h)?.length ?? 0) > 1) add(p.key, "duplicate_hkid_in_package");
-    if (p.staffNumbers.some((n) => (noOwner.get(normalizeStaffNumber(n.number))?.size ?? 0) > 1)) add(p.key, "staffno_shared_by_persons");
+    if (!ghosts.has(p.key) && p.staffNumbers.some((n) => (noOwner.get(normalizeStaffNumber(n.number))?.size ?? 0) > 1)) add(p.key, "staffno_shared_by_persons");
     const t = normTel8(fieldValue(p.phone));
     if (t && (telOwner.get(t)?.size ?? 0) > 1) add(p.key, "dup_tel_across_persons");
     const acct = p.bank?.accountNo ? fieldValue(p.bank.accountNo) : null;

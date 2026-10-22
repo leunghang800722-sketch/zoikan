@@ -620,3 +620,10 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - `evidence.shared_with[]`（generator 由 `noOwners`／`telOwners` 反查，只放狀態同工號：`person_key`／姓名／`hkid_status`／`has_docs`／`doc_count`／`staff_numbers`／`tel_status`，**唔放 HKID／電話值**）。`view.ts` 輸出 `evidence.shared_with` + `shared_staff_numbers`：姓名冇「保安員個人資料:view」＝null＋`name_hidden`；`question_id` 由同 session 同 kind、`personKey` 相同嘅題反查。舊題（冇 `shared_with`）題卡照舊。
 - 題卡頂部白話「工號 U01xxx 同時出現喺 N 個人身上，請揀邊個先係真正用呢個工號」，列出每個人（本人標「（呢條題嘅人）」），「去嗰條題」只喺嗰條題已載入隊列時出。選項：「工號／電話係呢個人嘅（其他人唔用）」＝keep；「…唔係呢個人嘅（由呢個人剔走）」＝drop_shared。
 - 空人後備放寬：所有個人欄 missing 就顯示「導入包只讀到呢位嘅工號（嚟自打字名單／更表），冇任何文件」＋原因＋檔案資訊（唔再逐行「—（未讀到）」）；爭議類 kind 嘅「冇裁圖」改「呢類題目唔需要裁圖」。
+
+### TE-13 追加：ghost person 自動併入
+
+- **ghost**＝由銀行戶口等文件產生嘅空記錄：`rating=fail` 或 reasons 含 `no_id_page`、七個個人欄全部 missing、冇 ext（牌照／平安咭／QAS／銀行／緊急聯絡人／入職日期）、有工號，而且**每個工號都只同同一個身份已確認（hkid confirmed 且有效）嘅包內 person 共用**，該工號喺打字名單嘅 HKID（package person 可選欄 `listHkids`：`{工號: canonical HKID}`，由 `package-v3.ts` 按 typed-sources 填；冇就當無矛盾）同真人一致（`findGhostPersons`，`src/lib/guards/import/package.ts`）。
+- 效果：`packageConflicts` 唔再計 ghost 工號為共用；preview 評估 reasons 加 `dropped_ghost`（「由文件產生嘅空記錄，已自動併入…」）；apply 唔處理 ghost（唔建人、`persons_total` 唔計）；分診 generator 唔為 ghost 出題，真人嘅題 evidence 帶 `note`（「由銀行戶口文件產生嘅空記錄，已自動併入 U01095」）同合併後嘅 `docInfo`（頁數／各類頁數）。兩個真人共用、名單 HKID 唔一致、真人身份未確認 → 照舊出題（用新題卡列晒共用者）。
+- **production 舊題收題**：`POST /api/triage/sessions/:id/proposals`（含 `?dry_run=1`）開頭會對 session 內仍 open 嘅 `staffno_shared_by_persons` 題跑同一條 ghost 規則（用題目 evidence 內嘅 person；舊題冇 `listHkids` 就當無矛盾），符合嘅 ghost 題同「淨係因 ghost 而共用」嘅真人題標 `superseded`；回應 counts 加 `ghost_questions_closed`（dry＝會收嘅題數，唔寫 DB）。真人另有其他衝突（電話共用／重複身份證等）就唔郁。亦可重新上載同一個包（新規則下會作廢舊題）。
+- `24-open-gap-audit` 暫未加 ghost 分類（audit 輸入冇值，睇唔到個人欄／ghost 狀態）；要睇有幾多條會被收，用 proposals dry run 嘅 `ghost_questions_closed`。

@@ -78,6 +78,17 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
   };
 
   const report: UnverifiedRow[] = [];
+  const typedRows = [...(typed.maxwell ?? []), ...(typed.uteam ?? [])];
+  // TE-13：逐工號嘅打字名單身份證號（canonical）——伺服器 ghost 自動併入規則核對用，冇就唔出（唔寫入任何資料）
+  const listHkidsOf = (nums: readonly { number: string }[]): { listHkids?: Record<string, string> } => {
+    const m: Record<string, string> = {};
+    for (const n of nums) {
+      const r = typedRows.find((t) => t.staffNo && cmpNo(t.staffNo) === cmpNo(n.number) && canonicalHkid(t.hkid ?? ''));
+      const h = r ? canonicalHkid(r.hkid ?? '') : null;
+      if (h) m[n.number] = h;
+    }
+    return Object.keys(m).length ? { listHkids: m } : {};
+  };
   let curPerson = '';
   type Kind = 'plain' | 'bank' | 'emergency';
   const leafOf = (f: unknown, field = '?', kind: Kind = 'plain'): Leaf => {
@@ -258,12 +269,11 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
     const x = extFields(e, p.staffNumbers);
     const reasons = [...new Set([...(p.reasons as string[]), ...x.bankReasons, ...(x.identityCheck ? ['ext_identity_check'] : [])])].slice(0, 60);
     if (x.identityCheck) counts.identity_check_persons += 1;
-    persons.push(sanitize({ ...base, staffNumbers: x.staffNumbers, reasons, ...(conflicts ? { conflicts } : {}), ...x.fields }));
+    persons.push(sanitize({ ...base, staffNumbers: x.staffNumbers, reasons, ...(conflicts ? { conflicts } : {}), ...x.fields, ...listHkidsOf(x.staffNumbers) }));
     counts.persons_with_docs += 1;
   }
 
   // 只喺打字名單嘅人（hkid 或工號做 key）
-  const typedRows = [...(typed.maxwell ?? []), ...(typed.uteam ?? [])];
   const unassigned: Record<string, unknown>[] = [];
   for (const e of ext) {
     if (used.has(e)) continue;

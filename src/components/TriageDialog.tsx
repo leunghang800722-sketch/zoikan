@@ -75,6 +75,7 @@ interface Question {
     bank_update: boolean;
     person: { hkid: Field; name_zh: Field; name_en: Field; date_of_birth: Field; phone: Field; address: Field; staff_numbers: string[]; ext: ExtView | null; doc_info?: { page_count: number; pages_by_kind: Record<string, number>; file_ext: string[] } | null } | null;
     reasons: string[];
+    note?: string | null;
     doc_ref?: { file_name: string | null; page_count: number; pages_by_kind: Record<string, number> } | null;
     candidates: Candidate[];
     review_fields: { field: string; label: string; check: string }[];
@@ -273,6 +274,7 @@ function PersonCard({ q, canGoto, onGoto }: { q: Question; canGoto?: (id: string
         </div>
       )}
       <ExtLines ext={p.ext} />
+      {q.evidence.note && <div className="text-zk-sm text-zk-muted" data-testid="triage-merge-note">{q.evidence.note}</div>}
       {!q.evidence.pii_visible && <div className="text-zk-xs text-zk-faint">你冇「保安員個人資料」權限，身份證／電話／地址已遮罩，出生日期唔顯示。</div>}
     </div>
     </>

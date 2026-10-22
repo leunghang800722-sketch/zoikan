@@ -161,6 +161,8 @@ export interface QuestionView {
     review_fields: { field: string; label: string; check: string }[];
     /** TE-7：來源檔案線索（file_name 可能含人名，冇「保安員個人資料:view」＝null） */
     doc_ref: { file_name: string | null; page_count: number; pages_by_kind: Record<string, number> } | null;
+    /** TE-13：自動併入嘅空記錄說明（只有工號，冇 PII） */
+    note: string | null;
     ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
     /** TE-13：staffno_shared／dup_tel 題——共用嘅工號（工號唔係 PII）＋共用嘅其他人（姓名冇「保安員個人資料:view」＝null；只有狀態同工號，冇 HKID／電話值） */
     shared_staff_numbers: string[];
@@ -203,7 +205,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         status: r.status,
         options: [],
         restricted: true,
-        evidence: { pii_visible: c.pii, pii_update: c.piiUpdate, guard_update: c.guardUpdate, bank_view: c.bankView, bank_update: false, person: null, reasons: [], candidates: [], review_fields: [], doc_ref: null, ext_review: [], shared_staff_numbers: [], shared_with: [], unassigned: null },
+        evidence: { pii_visible: c.pii, pii_update: c.piiUpdate, guard_update: c.guardUpdate, bank_view: c.bankView, bank_update: false, person: null, reasons: [], candidates: [], review_fields: [], doc_ref: null, note: null, ext_review: [], shared_staff_numbers: [], shared_with: [], unassigned: null },
         answer: ans?.option ? { option: ans.option } : null,
         answered_by: r.answeredBy,
         answered_at: r.answeredAt,
@@ -241,6 +243,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         person: personView(e.person, c),
         reasons: c.pii ? e.reasons : e.reasons.filter((x) => !NAME_REASONS.has(x)),
         candidates,
+        note: e.note ?? null,
         doc_ref: e.doc_ref ? { file_name: c.pii ? e.doc_ref.file_name : null, page_count: e.doc_ref.page_count, pages_by_kind: e.doc_ref.pages_by_kind } : null,
         // 逐欄 check 反映現有 DB 值嘅比較結果：冇「保安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),

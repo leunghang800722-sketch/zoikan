@@ -14,6 +14,7 @@ import { canonicalHkid, hkidCheckDigitValid } from "@/lib/guards/identity";
 import { fieldValue } from "@/lib/guards/import/package";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { serverPersonKey } from "@/lib/guards/import/person-key";
+import { closeGhostStaffnoQuestions } from "./ghost-close";
 import { normTel8, normZh, parseBirthDate } from "@/lib/guards/import/text";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { previewAnswer, submitAnswer, type FollowUpDraft } from "./apply";
@@ -80,8 +81,10 @@ interface ProposalCounts {
   invalid_reasons: Record<string, number>;
   /** TE-11.4：commit 時遇 409「資料中途變咗」而自動重新預覽再答一次嘅題數 */
   resubmitted: number;
+  /** TE-13：舊「同一工號出現喺多個人」題之中，ghost（空記錄）自動併入真人而收埋（dry＝會收）嘅題數 */
+  ghost_questions_closed: number;
 }
-const emptyCounts = (): ProposalCounts => ({ invalid_reasons: {}, resubmitted: 0, proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_low_confidence: 0, skipped_needs_decision: 0, skipped_duplicate_question: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
+const emptyCounts = (): ProposalCounts => ({ invalid_reasons: {}, resubmitted: 0, ghost_questions_closed: 0, proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_low_confidence: 0, skipped_needs_decision: 0, skipped_duplicate_question: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
 
 type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_low_confidence" | "skipped_needs_decision" | "skipped_duplicate_question" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
 
@@ -207,6 +210,7 @@ export interface ProposalRunResult extends ProposalCounts {
 export async function runProposals(actor: AuthedSession, sessionId: string, proposals: readonly Proposal[], opts: { dryRun: boolean; ip: string | null }): Promise<ProposalRunResult> {
   const counts = emptyCounts();
   counts.proposals_total = proposals.length;
+  counts.ghost_questions_closed = await closeGhostStaffnoQuestions(sessionId, opts.dryRun); // TE-13
   // 同一人同一欄冇共識（同欄多個唔同值）→ 全部當 invalid，唔猜
   const byKey = new Map<string, Map<ProposalField, Set<string>>>();
   const idxOf = new Map<string, number[]>();

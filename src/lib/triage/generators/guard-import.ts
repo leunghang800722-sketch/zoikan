@@ -2,7 +2,7 @@
 // 輸入：導入包＋apply 完成後重新評估嘅結果（剩低 needs_review／conflict 同 link 但仍有 review 欄嘅人）。
 // 一個人最多一條題目（group_key＝導入人 key）→ 冪等、已解決嘅唔會再出。
 import type { Evaluation } from "@/lib/guards/import/apply";
-import { fieldValue, packageConflicts, unassignedBankOf, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
+import { fieldValue, findGhostPersons, packageConflicts, unassignedBankOf, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
 import { serverPersonKey, bankAccountRef } from "@/lib/guards/import/person-key";
 import { bankComplete, digits, extKeyGroup, isBankKey, isEmergencyKey, normPayee, type ExtItem } from "@/lib/guards/import/ext";
 import { hkidCheckDigitValid, canonicalHkid } from "@/lib/guards/identity";
@@ -284,6 +284,26 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
     telOwners.get(t)!.add(p.key);
   }
   const byKey = new Map(pkg.persons.map((p) => [p.key, p]));
+  // TE-13：ghost（空記錄）自動併入真人——唔出題；ghost 嘅文件頁數併入真人 docInfo，evidence 記 note
+  const ghosts = findGhostPersons(pkg.persons);
+  const ghostsOf = new Map<string, { staffNumbers: string[]; ghost: PackagePerson }[]>();
+  for (const [gk, info] of ghosts) {
+    const g = byKey.get(gk);
+    if (g) ghostsOf.set(info.mergedInto, [...(ghostsOf.get(info.mergedInto) ?? []), { staffNumbers: info.staffNumbers, ghost: g }]);
+  }
+  const mergeDocInfo = (p: PackagePerson): PackagePerson["docInfo"] => {
+    const gs = ghostsOf.get(p.key);
+    if (!gs) return p.docInfo;
+    const pagesByKind: Record<string, number> = { ...(p.docInfo?.pagesByKind ?? {}) };
+    let pageCount = p.docInfo?.pageCount ?? 0;
+    const exts = new Set(p.docInfo?.fileExts ?? []);
+    for (const { ghost } of gs) {
+      pageCount += ghost.docInfo?.pageCount ?? 0;
+      for (const [k, n] of Object.entries(ghost.docInfo?.pagesByKind ?? {})) pagesByKind[k] = (pagesByKind[k] ?? 0) + n;
+      for (const x of ghost.docInfo?.fileExts ?? []) exts.add(x);
+    }
+    return { pageCount, pagesByKind, ...(exts.size ? { fileExts: [...exts].slice(0, 5) } : {}) };
+  };
   // TE-13：共用嘅「其他人」——只放狀態／工號，唔放 HKID／電話值
   const sharedWithOf = (p: PackagePerson, kind: QuestionKind): SharedWithEntry[] => {
     const keys = new Set<string>();
@@ -305,6 +325,7 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
   const drafts: QuestionDraft[] = [];
   for (const e of evals) {
     const p = e.person;
+    if (ghosts.has(p.key)) continue; // TE-13：dropped_ghost
     const sk = serverPersonKey(p);
     if (seen.has(p.key) || seen.has(`sk:${sk}`)) continue; // duplicate_key_in_package／同一個人兩行：只問一次
     seen.add(p.key);
@@ -321,8 +342,9 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
     const candidateIds = [...new Set([...(e.guardId ? [e.guardId] : []), ...e.candidates])].slice(0, MAX_CANDIDATES);
     const evidence: QuestionEvidence = {
       v: 1,
-      person: { ...p, key: sk },
-      reasons: [...new Set([...e.reasons, ...gr])],
+      person: { ...p, key: sk, ...(ghostsOf.has(p.key) ? { docInfo: mergeDocInfo(p) } : {}) },
+      reasons: [...new Set([...e.reasons.filter((r) => r !== "dropped_ghost"), ...gr])],
+      ...(ghostsOf.has(p.key) ? { note: `由銀行戶口文件產生嘅空記錄，已自動併入 ${[...new Set(ghostsOf.get(p.key)!.flatMap((x) => x.staffNumbers))].join("、")}` } : {}),
       candidate_guard_ids: kind === "field_review" ? [] : candidateIds,
       ...(kind === "staffno_shared_by_persons" || kind === "dup_tel_across_persons" || kind === "group_name_differs" || kind === "package_conflict"
         ? {
