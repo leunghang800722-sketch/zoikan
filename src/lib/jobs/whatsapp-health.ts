@@ -14,7 +14,6 @@ import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
 const WHATSAPP_HEALTH_KEY = "whatsapp_health";
 const WA_ALERT_REPEAT_MS = 6 * 3600 * 1000;
-const H = 3600 * 1000;
 const WA_BACKLOG_COUNT = 200;
 const WA_BACKLOG_AGE_MS = 30 * 60 * 1000;
 const RECOVERY_LOOKBACK_MS = 7 * 86400000;
