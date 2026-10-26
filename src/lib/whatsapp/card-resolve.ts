@@ -89,7 +89,9 @@ async function personFor(card: PhotoCard, ctx: ResolveContext): Promise<{ person
     // 疑似第二張卡（只一個引擎讀到，而同一張相已有確認嘅卡）：人配到就一撳確認；系統冇呢個工號 → person_unknown
     if (card.reasons.includes("card_suspect_second") && card.staff_no) {
       const hit = idx.byStaffNumber.get(normalizeStaffNumber(card.staff_no)) ?? null;
-      if (hit) return { person: { guardId: hit.guardId, reasons: [], candidates: [], basis: "card_suspect_second" }, extra: ["card_suspect_second", ...(hit.status !== "current" ? ["card_former_number"] : [])] };
+      // candidates＝同相所有候選工號對應嘅 guard（「加多一位」揀人用，唔影響 kind 判定）
+      const allIds = [...new Set(cands.flatMap((n) => { const h = idx.byStaffNumber.get(normalizeStaffNumber(n)); return h ? [h.guardId] : []; }))];
+      if (hit) return { person: { guardId: hit.guardId, reasons: [], candidates: allIds.slice(0, MAX_SITE_CANDIDATES), basis: "card_suspect_second" }, extra: ["card_suspect_second", ...(hit.status !== "current" ? ["card_former_number"] : [])] };
       return { person: { guardId: null, reasons: ["person_unknown", "card_staff_no_unknown"], candidates: [], basis: "card_suspect_second_unmatched" }, extra: ["card_suspect_second"] };
     }
     // review：候選工號 → guard 候選（畀人揀；三個讀數都唔同＝一條題列晒全部候選）

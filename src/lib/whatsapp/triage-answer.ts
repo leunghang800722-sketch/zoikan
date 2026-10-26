@@ -8,7 +8,7 @@
 //  - 鎖月：預覽／確認都擋，400 固定字串，題保持 open（tx 內 assertMonthNotLockedTx 再擋一次）。
 //  - 答題人要有「導入分診:update」（route 層）＋「保安員:view」＋「更表:create」；evidence（原話／姓名）只俾有「保安員:view」嘅人睇。
 import { createHmac } from "node:crypto";
-import type { TriageQuestion, TriageSession } from "@prisma/client";
+import type { Prisma, TriageQuestion, TriageSession } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { assertMonthNotLockedTx } from "@/lib/month-lock";
@@ -21,6 +21,8 @@ import { TRIAGE_LOCK } from "@/lib/triage/session";
 import { addDays, hkDateOf, isoToDbDate } from "./dates";
 import { createPrismaResolveRepo } from "./repo";
 import { deleteMediaEvidence } from "./media";
+import { hasDistinctCandidates } from "./card-parse";
+import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { leaveRowShiftType } from "./leave-row";
 import { evaluateCancelState, evaluateCoverState, evaluateWaState, type WaEffective } from "./triage-eval";
 import { buildDraft, insertWaQuestions, refreshWaSession } from "./triage";
@@ -107,7 +109,7 @@ export interface WaQuestionView {
     /** W4：確認後會被取消嘅記錄（「會取消 10 月 18 日 N 更」）；撞更題／取消題／替更題 */
     cancel_preview: string[];
     /** WA-8：工卡相辨識結果（工號／姓名／圖片 id 只畀有「保安員:view」嘅人） */
-    card: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; none: "expired" | "not_card" | "unreadable" | null } | null;
+    card: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; multi_hint: boolean; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -140,6 +142,53 @@ function cancelPreviewOf(kind: string, ev: WaEvidence, recBy: Map<string, RecLit
     if (ev.reasons.some((r) => r === "conflict_leave" || r === "conflict_other_shift")) lines(ev.candidates.existing_record_ids, named);
   }
   return out;
+}
+
+const SIBLING_DROP_REASONS = new Set(["person_ambiguous", "person_unknown", "low_confidence", "card_disputed", "card_arbiter_unavailable", "card_suspect_second", "card_name_only", "card_former_number", "card_name_mismatch", "card_staff_no_unknown", "card_confirm"]);
+
+/** WA-8.2：同一相另開一條確認題（新 intent idx＋新 evidence；保留盤／日子／更別，人換成 also guard；圖片因此仍有 open 題而保留）。回新題 id。 */
+async function createSiblingCardQuestion(tx: Prisma.TransactionClient, q: QRowWithSession, ev: WaEvidence, alsoGuardId: string): Promise<string | null> {
+  if (!ev.card) return null;
+  const base = await tx.whatsappIntent.findUniqueOrThrow({ where: { id: ev.message.intent_id } });
+  const max = await tx.whatsappIntent.aggregate({ where: { messageId: ev.message.message_id, messageRevision: ev.message.revision }, _max: { idx: true } });
+  const idx = (max._max.idx ?? ev.message.idx) + 1;
+  const reasons = [...ev.reasons.filter((r) => !SIBLING_DROP_REASONS.has(r)), "card_confirm"];
+  const res = (base.resolution && typeof base.resolution === "object" && !Array.isArray(base.resolution) ? base.resolution : {}) as Record<string, unknown>;
+  const intent = await tx.whatsappIntent.create({
+    data: {
+      messageId: ev.message.message_id,
+      messageRevision: ev.message.revision,
+      idx,
+      kind: base.kind,
+      workDate: base.workDate,
+      siteId: base.siteId,
+      guardId: alsoGuardId,
+      shiftTypeId: base.shiftTypeId,
+      leaveCode: null,
+      hours: base.hours,
+      confidence: 0.5,
+      resolution: JSON.parse(JSON.stringify({ ...res, type: "shift", reasons, notes: [...new Set([...(Array.isArray(res.notes) ? (res.notes as string[]) : []), "added_by_reviewer"])], basis: { ...(typeof res.basis === "object" && res.basis ? (res.basis as object) : {}), person: "reviewer_added" }, candidates: {} })),
+      routed: "triage",
+    },
+  });
+  const sn = await tx.guardStaffNumber.findMany({ where: { guardId: alsoGuardId }, select: { number: true } });
+  const mine = new Set(sn.map((s) => normalizeStaffNumber(s.number)));
+  const ev2: WaEvidence = {
+    ...ev,
+    round: 1,
+    message: { ...ev.message, idx, intent_id: intent.id },
+    intent: { ...ev.intent, guard_id: alsoGuardId, confidence: 0.5 },
+    reasons,
+    notes: [...new Set([...ev.notes, "added_by_reviewer"])],
+    candidates: { ...ev.candidates, guard_ids: [], existing_record_ids: [] },
+    human: { ...(ev.human.site_id ? { site_id: ev.human.site_id } : {}), ...(ev.human.work_date ? { work_date: ev.human.work_date } : {}) },
+    card: { ...ev.card, staff_no_read: ev.card.candidates.find((c) => mine.has(normalizeStaffNumber(c))) ?? null, votes: 1, candidates: [], others: ev.card.staff_no_read ? [{ staff_no: ev.card.staff_no_read, status: "confirmed" as const }] : [] },
+  };
+  const draft = buildDraft(ev2, { label: ev.group.label }, new Date(ev.sent_at));
+  const { created, existing } = await insertWaQuestions(tx, q.sessionId, [draft]);
+  const id = created[0]?.id ?? existing.get(draft.groupKey) ?? null;
+  if (id) await tx.whatsappIntent.update({ where: { id: intent.id }, data: { resultRef: id } });
+  return id;
 }
 
 export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Promise<WaQuestionView[]> {
@@ -263,6 +312,8 @@ export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Pro
               arbiter: ev.card.arbiter,
               candidates: caps.canSee ? ev.card.candidates : [],
               others: caps.canSee ? (ev.card.others ?? []) : [],
+              // WA-8.2：候選工號 ≥2 而且互不相似 → 提示相入面可能有多過一張卡（只喺 wa_card_confirm／wa_person_ambiguous 題；唔含工號值）
+              multi_hint: (r.kind === "wa_card_confirm" || r.kind === "wa_person_ambiguous") && hasDistinctCandidates(ev.card.candidates),
               none: ev.card.none ?? null,
             }
           : null,
@@ -321,6 +372,14 @@ async function validateAnswerAgainstOptions(q: QRowWithSession, a: TriageAnswer)
   const opts = optsOf(q);
   const same = opts.filter((o) => o.id === a.option);
   if (same.length === 0) throw BadRequest("呢個選項唔屬於呢條問題");
+  // WA-8.2：同一相仲有另一位——只限工卡相題、wa_pick_guard／wa_accept／wa_force_write，對象必須係候選之一（而且唔係今條揀嘅人）
+  if (a.also_guard_id !== undefined) {
+    const ev = evOf(q);
+    if (!ev.card || !["wa_pick_guard", "wa_accept", "wa_force_write"].includes(a.option)) throw BadRequest("「加多一位」淨係工卡相題嘅確認／揀人可以用");
+    if (ev.intent.kind !== "shift") throw BadRequest("「加多一位」淨係報更題可以用");
+    if (!ev.candidates.guard_ids.includes(a.also_guard_id)) throw BadRequest("加多嘅一位要係候選之一");
+    if (a.also_guard_id === (a.guard_id ?? ev.human.guard_id ?? ev.intent.guard_id)) throw BadRequest("加多嘅一位唔可以同今條揀嘅人一樣");
+  }
   if (a.option === "wa_pick_guard") {
     if (!a.guard_id) throw BadRequest("要揀邊個保安員");
     const viaCand = same.some((o) => o.guard_id === a.guard_id);
@@ -368,6 +427,10 @@ async function resolveWaPlan(actor: AuthedSession, q: QRowWithSession, answer: T
     return { plan: { type: "skip" }, fingerprint: "skip", impact };
   }
   await validateAnswerAgainstOptions(q, answer);
+  if (answer.also_guard_id) {
+    const g = await prisma.guard.findUnique({ where: { id: answer.also_guard_id }, select: { nameZh: true } });
+    impact.notes.push(`同一相仲有另一位（${g?.nameZh ?? "候選"}）：答完呢條之後會另外開一條確認題`);
+  }
   switch (answer.option) {
     case "wa_ignore":
       impact.summary.push("忽略：唔入更，呢條當處理咗");
@@ -745,6 +808,8 @@ export async function submitWaAnswer(actor: AuthedSession, q: QRowWithSession, r
           applyResult = { plan: "exists", record_ids: plan.ids };
         }
 
+        const n0 = answer.also_guard_id && (plan.type === "write" || plan.type === "next" || plan.type === "exists") ? await createSiblingCardQuestion(tx, q, ev, answer.also_guard_id) : null;
+        if (n0) result.also_question_id = n0;
         const n = await tx.triageQuestion.updateMany({
           where: { id: q.id, status: { in: ["open", "skipped"] } },
           data: {
