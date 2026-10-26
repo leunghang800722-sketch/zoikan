@@ -675,3 +675,12 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **策略**（env `WA_CARD_OCR_STRATEGY`，預設 `S1`；bench 結果出咗再定）：S1 tesseract+deepseek→claude｜S2 tesseract+deepseek→haiku｜S3 deepseek+haiku→claude｜S4 tesseract+qwen→haiku｜S5 qwen+deepseek→claude。
   兩個便宜引擎各讀一次：工號一致 → confirmed（零仲裁成本）；唔一致／其中一個失敗 → 仲裁引擎讀一次（三取二，≥2 票 confirmed）；單票或三個都唔同 → review（出分流題，帶候選工號）；兩個都話冇卡 → `not_card`（唔仲裁）；單票讀數同已確認工號只差 ≤2 位數字（同前綴同長度）視為同一張卡嘅誤讀，唔另開卡。一張相多張卡逐個工號判定。冇工號但讀到姓名 → review（`card_name_only`）。完全冇 caption 以外嘅文字推斷（辨識唔睇 caption）。
 - **基準測試**（離線、只讀、唔寫 DB）：`npx tsx scripts/whatsapp/card-ocr-bench.ts --dir <相片夾> --truth <truth.csv> --engines tesseract,deepseek,haiku,qwen,claude --qwen-models qwen-vl-ocr,qwen3-vl-plus [--strategies S1,S2,S3,S4,S5] [--out data/…/report.json]`；`--dry` 用合成 fixture（假引擎）。truth.csv：`file,staff_nos`（多張卡用 `|`；空＝相入面冇卡）。每個引擎出 exact／review／wrong／unreadable＋每張平均 prompt／completion tokens；每個策略出 exact／review／confirmed_wrong／unreadable＋仲裁觸發比例＋token（按 provider:model）。輸出淨係計數，唔印工號／姓名／檔名。**上線門檻：工號 exact ≥90%、confirmed-but-wrong 0。**
+
+### WA-8 C：工卡相歸屬
+
+`src/lib/whatsapp/card-resolve.ts`（重用 `resolveIntents`，每張卡一個 shift intent；日期窗口／鎖月／撞更／額滿／quota 檢查照舊）：
+- **人**：工號 →`guard_staff_numbers`（含 former 卡 → 提示碼 `card_former_number`，要人確認）；系統冇呢個工號 → `person_unknown`（唔用姓名補救）；卡上姓名同系統姓名唔 strict 一致 → `card_name_mismatch`（要人確認）。review 卡（單票）→ 候選工號對應 guard 畀人揀（`wa_person_ambiguous`）。冇工號但讀到姓名 → strict 姓名配對：唯一 → 一撳確認（`card_name_only`）；同名多人 → 揀人。姓名只輔助，工號為主。
+- **日期**：訊息 `ts` 嘅香港日；00:00–05:00 送出 → 沿用凌晨降級（`date_ambiguous`，候選當日／前一日，出題）。
+- **盤**：單盤群＝群盤；大群／判頭群：該人當日更表預排（唯一盤，並沿用已排更別）→ 近 60 日同盤（唯一才採用，**要人一撳確認**）→ 多個／冇紀錄 → `wa_site_ambiguous` 題（候選盤）。
+- **更**：群組「開工」口語對照（`shift_word_map` 加 `開工 → D／N`）優先；否則按訊息 ts 對該盤各更開始時間 ±2 小時（24h 環形）推；多個且差距 <0.5 小時 → `shift_ambiguous`；推唔到 → `shift_unmapped`（出題）。
+- **新題型 `wa_card_confirm`**（「WhatsApp 工卡相：要你確認」）：辨識／歸屬齊晒，淨係等人一撳確認（群組冇開自動寫入、former 工號、姓名唔夾、只有姓名）→ 選項「確認入更（待批核）／人手入更／忽略／跳過」；相片過期／唔係工卡／讀唔到（`card_media_expired`／`card_not_card`／`card_unreadable`）→ 淨係「人手入更／忽略／跳過」。

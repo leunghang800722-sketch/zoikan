@@ -38,7 +38,9 @@ export type QuestionKind =
   | "wa_unparsed" // 未能自動理解
   // W4（替更／取消，首階段一律 Triage）
   | "wa_cover" // 替更：確認被替者該更取消＋替更者入更
-  | "wa_cancel"; // 取消：取消自己當日更／請假，或改為請假
+  | "wa_cancel" // 取消：取消自己當日更／請假，或改為請假
+  // WA-8（工卡相報開工）
+  | "wa_card_confirm"; // 工卡相：一撳確認，或相片過期／唔係工卡／讀唔到
 
 export const KIND_LABEL: Record<QuestionKind, string> = {
   no_id_card: "冇可用嘅身份證號",
@@ -72,10 +74,11 @@ export const KIND_LABEL: Record<QuestionKind, string> = {
   wa_unparsed: "WhatsApp 報更：未能自動理解",
   wa_cover: "WhatsApp 報更：替更要你確認",
   wa_cancel: "WhatsApp 報更：取消要你確認",
+  wa_card_confirm: "WhatsApp 工卡相：要你確認",
 };
 
 /** W2：WhatsApp 分診題 kind（session.sourceType="whatsapp"）；evidence 含原話＋姓名（PII，只存 DB）。 */
-export const WA_KINDS: readonly QuestionKind[] = ["wa_person_ambiguous", "wa_person_unknown", "wa_site_ambiguous", "wa_date_ambiguous", "wa_shift_conflict", "wa_unparsed", "wa_cover", "wa_cancel"];
+export const WA_KINDS: readonly QuestionKind[] = ["wa_person_ambiguous", "wa_person_unknown", "wa_site_ambiguous", "wa_date_ambiguous", "wa_shift_conflict", "wa_unparsed", "wa_cover", "wa_cancel", "wa_card_confirm"];
 
 /** 一題入面可揀嘅選項 id。`skip` 永遠有，唔經 apply。 */
 export const OPTION_IDS = [

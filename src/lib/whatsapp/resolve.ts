@@ -7,6 +7,7 @@ import { classifySiteName, type SiteNameCandidate } from "@/lib/month-close/auto
 import type { GuardMatchIndex } from "@/lib/roster-upload/match";
 import { normalizeTelHk } from "@/lib/guards/identity";
 import type { ParsedIntent } from "./parse";
+import type { WaCardEvidence } from "./triage-types";
 import { dateInWindow, resolveDates, addDays, hkDateOf } from "./dates";
 
 type IntentKind = "shift" | "leave" | "cover" | "cancel" | "unclear" | "question_only";
@@ -50,6 +51,8 @@ export interface ResolveContext {
   group: { id: string; kind: "site" | "multi_site" | "broker" | "office" | "ignored"; siteId: string | null; brokerId: string | null; shiftWordMap: Record<string, string>; /** W5：群組請假詞覆寫（優先於內建）；冇就用內建 */ leaveWordMap?: Record<string, string>; autoWrite: boolean };
   senderGuardId: string | null;
   senderTelNorm: string | null;
+  /** WA-8：intents[idx] 嘅覆寫（冇＝照舊） */
+  overrides?: ReadonlyMap<number, IntentOverride>;
   sites: readonly SiteNameCandidate[];
   index: GuardMatchIndex;
   repo: ResolveRepo;
@@ -88,7 +91,19 @@ export interface ResolvedIntent {
   src?: IntentSrc;
 }
 
+/** WA-8：工卡相——每張卡由 card-resolve.ts 預先算好人／盤／更，覆寫 resolveIntents 對應步驟（其餘日期、衝突、額滿、鎖月等檢查照舊）。 */
+export interface IntentOverride {
+  person?: { guardId: string | null; reasons: string[]; candidates: string[]; basis: string };
+  site?: { siteId: string | null; reasons: string[]; candidates: string[]; basis: string };
+  shift?: { shiftTypeId: string | null; reasons: string[]; candidates: string[]; basis: string };
+  /** 額外阻擋自動寫入嘅原因碼（例：card_confirm） */
+  extraReasons?: string[];
+  extraNotes?: string[];
+}
+
 export interface IntentSrc {
+  /** WA-8：工卡相辨識資料（evidence 用，DB 內） */
+  card?: WaCardEvidence;
   person_raw: string | null;
   site_raw: string | null;
   date_raw: string | null;
@@ -302,7 +317,8 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
     return t;
   };
 
-  for (const it of intents) {
+  for (const [intentIdx, it] of intents.entries()) {
+    const ov = ctx.overrides?.get(intentIdx);
     const kind = it.type as IntentKind;
     const conf = it.confidence;
 
@@ -320,7 +336,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
     }
 
     // ---- 共用：盤口、日期、人
-    const site = resolveSite(it.site_raw, ctx);
+    const site = ov?.site ?? resolveSite(it.site_raw, ctx);
     const dateRes = resolveDates({ raw: it.date?.raw ?? null, kind: it.date?.kind ?? null }, ctx.ts);
 
     const workers: Array<{ raw: string | null; self: boolean }> = it.persons.filter((p) => p.role === "worker").map((p) => ({ raw: p.raw, self: SELF_WORDS.test(normName(p.raw)) }));
@@ -341,7 +357,8 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
     let leaveCode: string | null = null;
     const baseReasons: string[] = [];
     if (kind === "shift" || kind === "cover") {
-      if (site.siteId) shift = resolveShift(it.shift_raw, it.shift_code_guess, await typesOf(site.siteId), ctx.group.shiftWordMap);
+      if (ov?.shift) shift = { ...ov.shift };
+      else if (site.siteId) shift = resolveShift(it.shift_raw, it.shift_code_guess, await typesOf(site.siteId), ctx.group.shiftWordMap);
     } else if (kind === "leave") {
       const lv = mapLeaveCode(it.leave_raw, ctx.group.leaveWordMap);
       if (lv.code) leaveCode = lv.code;
@@ -353,7 +370,8 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
 
     for (const w of workerList) {
       let person: PersonRes;
-      if (w.self) person = resolveSelf(ctx);
+      if (ov?.person) person = ov.person;
+      else if (w.self) person = resolveSelf(ctx);
       else if (w.raw === null) person = { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "no_person" };
       else person = await resolveNamed(w.raw, ctx, site.siteId);
 
@@ -377,6 +395,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
           if (dateRes.candidates.length) res.candidates.dates = dateRes.candidates;
         }
         if (!ctx.group.autoWrite) pushUnique(res.notes, "group_auto_write_off");
+        if (ov?.extraNotes) pushUnique(res.notes, ...ov.extraNotes);
 
         const row: ResolvedIntent = {
           kind,
@@ -490,6 +509,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
         }
 
         if (conf < MIN_AUTO_CONFIDENCE) pushUnique(res.reasons, "low_confidence"); // LLM 信心過低唔自動
+        if (ov?.extraReasons) pushUnique(res.reasons, ...ov.extraReasons);
         row.routed = res.reasons.length === 0 ? "auto_write" : "triage";
         out.push(row);
       }

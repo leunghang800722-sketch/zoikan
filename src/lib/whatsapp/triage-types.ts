@@ -3,8 +3,28 @@
 // 冇電話全號：發訊人只記保安員 id＋電話尾 4 位。
 import type { QuestionKind, QuestionOption } from "@/lib/triage/types";
 
-export type WaKind = Extract<QuestionKind, "wa_person_ambiguous" | "wa_person_unknown" | "wa_site_ambiguous" | "wa_date_ambiguous" | "wa_shift_conflict" | "wa_unparsed" | "wa_cover" | "wa_cancel">;
+export type WaKind = Extract<QuestionKind, "wa_person_ambiguous" | "wa_person_unknown" | "wa_site_ambiguous" | "wa_date_ambiguous" | "wa_shift_conflict" | "wa_unparsed" | "wa_cover" | "wa_cancel" | "wa_card_confirm">;
 export type WaIntentKind = "shift" | "leave" | "cover" | "cancel" | "unclear" | "question_only";
+
+/** WA-8：工卡相辨識資料（DB 內；工號／姓名係 PII-ish → API 層按「保安員:view」遮罩）。 */
+export interface WaCardEvidence {
+  /** whatsapp_media_evidence.id（圖片 GET 用）；過期／冇圖＝null */
+  media_id: string | null;
+  staff_no_read: string | null;
+  name_zh_read: string | null;
+  name_en_read: string | null;
+  /** 支持該工號嘅引擎票數 */
+  votes: number;
+  /** 一張相入面第幾張卡／共幾張 */
+  index: number;
+  total: number;
+  /** 有用到仲裁 */
+  arbiter: boolean;
+  /** review 時畀人揀嘅候選工號 */
+  candidates: string[];
+  /** 無圖原因：expired｜not_card｜unreadable */
+  none?: "expired" | "not_card" | "unreadable";
+}
 
 /** 同一 intent 最多問兩輪；第三輪一律 wa_unparsed（只剩人手／忽略）。 */
 const WA_MAX_ROUNDS = 2;
@@ -66,6 +86,8 @@ export interface WaEvidence {
   human: WaHuman;
   /** W4：只喺 intent.kind=cover 有 */
   cover?: WaCoverEvidence;
+  /** WA-8：只喺工卡相來源有 */
+  card?: WaCardEvidence;
   /** 工作月（YYYY-MM-01）；鎖月檢查／session 月份用。未知日期就用訊息月。 */
   month: string;
 }
@@ -88,6 +110,10 @@ const CONFLICT_REASONS = new Set(["conflict_leave", "conflict_other_shift", "con
 
 /** W3：只係安全閥／低信心擋住（解析本身完整）→ 「照解析結果入更」。 */
 const SOFT_REASONS = new Set(["low_confidence", "daily_cap", "auto_disabled"]);
+/** WA-8：工卡相冇資料可用（過期／唔係工卡／讀唔到）→ 只可人手／忽略。 */
+const CARD_DEAD_REASONS = new Set(["card_media_expired", "card_not_card", "card_unreadable"]);
+/** WA-8：辨識／歸屬都有結果，但要人一撳確認嘅提示碼。 */
+const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "card_former_number", "card_name_only"]);
 
 /**
  * 優先次序：unparsed > site > person > date > conflict（低信心單獨出現 → unparsed＋「照解析入更」）。
@@ -96,6 +122,9 @@ const SOFT_REASONS = new Set(["low_confidence", "daily_cap", "auto_disabled"]);
  */
 export function pickWaKind(reasons: readonly string[], intentKind?: WaIntentKind): WaKind {
   const has = (set: Set<string>) => reasons.some((r) => set.has(r));
+  // WA-8：工卡相——冇可用資料，或者辨識全齊淨係等人一撳確認 → wa_card_confirm
+  if (has(CARD_DEAD_REASONS)) return "wa_card_confirm";
+  if (has(CARD_CONFIRM_REASONS) && reasons.every((r) => SOFT_REASONS.has(r) || CARD_CONFIRM_REASONS.has(r))) return "wa_card_confirm";
   if (has(UNPARSED_REASONS)) return "wa_unparsed";
   if (intentKind === "cover" || intentKind === "cancel") {
     if (intentKind === "cover" && has(SITE_REASONS)) return "wa_site_ambiguous";
@@ -160,6 +189,10 @@ export function optionsForWa(kind: WaKind, ev: Pick<WaEvidence, "candidates" | "
         { id: "wa_manual", label: "人手處理（去排更頁）" },
         SKIP,
       ];
+    case "wa_card_confirm": {
+      if (ev.reasons.some((r) => CARD_DEAD_REASONS.has(r))) return [{ id: "wa_manual", label: "人手入更（去排更頁）" }, { id: "wa_ignore", label: "忽略（唔入更）" }, SKIP];
+      return [{ id: "wa_accept", label: "確認入更（待批核）" }, { id: "wa_manual", label: "人手入更（去排更頁）" }, { id: "wa_ignore", label: "忽略（唔入更）" }, SKIP];
+    }
     case "wa_unparsed": {
       const i = ev.intent;
       const complete = (i.kind === "shift" || i.kind === "leave") && ev.reasons.length > 0 && ev.reasons.every((r) => SOFT_REASONS.has(r));
