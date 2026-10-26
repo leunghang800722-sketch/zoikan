@@ -53,6 +53,8 @@ interface MessageRow {
   sender: string;
   status: string;
   ignore_reason: string | null;
+  filter_reasons?: string[];
+  triage_session_id?: string | null;
   filter_score: number | null;
   revision: number;
   edited: boolean;
@@ -78,8 +80,11 @@ const BUILTIN_LEAVE_HINT = "內建：病假→SL、年假→AL、事假／無薪
 
 const KIND_LABEL: Record<string, string> = { site: "單盤群", multi_site: "大群（多盤）", broker: "判頭群", office: "辦公室", ignored: "略過" };
 const STATUS_LABEL: Record<string, string> = { received: "已收", filtered: "已過濾", parsed: "已解析", routed: "已分流", done: "完成", ignored: "略過", error: "錯誤", revoked: "已撤回" };
-const IGNORE_LABEL: Record<string, string> = { not_group: "非群組", from_me: "本機發出", stale: "過期", no_timestamp: "冇時間", future_ts: "時間異常" };
-const STATUS_FILTERS = ["", "received", "ignored", "error", "revoked"] as const;
+const IGNORE_LABEL: Record<string, string> = { not_group: "非群組", from_me: "本機發出", stale: "過期", no_timestamp: "冇時間", future_ts: "時間異常", group_unbound: "群組未綁定", group_ignored: "群組已略過", llm_noise: "AI 判斷係閒聊", filtered_out: "分數太低" };
+/** WA-7：過濾層原因（filter_reasons）中文——略過行顯示「點解被略過」 */
+const FILTER_REASON_LABEL: Record<string, string> = { media_only: "純圖片／媒體（唔解析，要打字）", too_short: "太短", emoji_only: "純表情／符號", group_unbound: "群組未綁定", group_ignored: "群組已略過" };
+const STATUS_FILTERS = ["", "received", "filtered", "parsed", "routed", "done", "ignored", "error", "revoked"] as const;
+const FILTER_LABEL: Record<string, string> = { routed: "分流", filtered: "已過濾", parsed: "已解析", done: "已完成" };
 
 function statusVariant(s: string): "success" | "neutral" | "warning" | "danger" {
   if (s === "error") return "danger";
@@ -273,7 +278,7 @@ export default function WhatsappPage() {
           <div className="text-zk-sm font-semibold text-zk-text">最近訊息（最多 200 條）{groupFilter && groups ? ` · ${groups.rows.find((g) => g.id === groupFilter)?.label ?? ""}` : ""}</div>
           <select aria-label="狀態篩選" className={`${selectCls} !w-auto`} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             {STATUS_FILTERS.map((s) => (
-              <option key={s} value={s}>{s ? STATUS_LABEL[s] : "全部狀態"}</option>
+              <option key={s} value={s}>{s ? (FILTER_LABEL[s] ?? STATUS_LABEL[s]) : "全部狀態"}</option>
             ))}
           </select>
         </div>
@@ -297,7 +302,10 @@ export default function WhatsappPage() {
                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
                   <span className="text-zk-text-secondary">{m.sender}</span>
                   <Pill variant={statusVariant(m.status)}>{STATUS_LABEL[m.status] ?? m.status}</Pill>
-                  {m.ignore_reason && <Pill variant="neutral">{IGNORE_LABEL[m.ignore_reason] ?? m.ignore_reason}</Pill>}
+                  {m.ignore_reason && <Pill variant="neutral">{m.ignore_reason === "filtered_out" && m.filter_reasons?.[0] ? (FILTER_REASON_LABEL[m.filter_reasons[0]] ?? IGNORE_LABEL.filtered_out) : (IGNORE_LABEL[m.ignore_reason] ?? FILTER_REASON_LABEL[m.ignore_reason] ?? m.ignore_reason)}</Pill>}
+                  {m.status === "routed" && m.triage_session_id && (
+                    <Link href={`/triage?open=${encodeURIComponent(m.triage_session_id)}`} className="text-zk-primary underline" data-testid="wa-goto-triage">去答題</Link>
+                  )}
                   {m.filter_score !== null && <span className="text-zk-xs text-zk-muted">分數 {m.filter_score}</span>}
                   {m.edited && <Pill variant="warning">已編輯 r{m.revision}</Pill>}
                   {m.revoked && m.status !== "revoked" && <Pill variant="danger">已撤回</Pill>}
