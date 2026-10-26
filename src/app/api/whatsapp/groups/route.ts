@@ -79,6 +79,10 @@ export async function PATCH(req: Request) {
       data.labelLocked = true; // 用戶手動改群名：之後 WAHA 同步唔再覆蓋
     }
     if (body.active !== undefined) data.active = body.active;
+    if (body.card_photo_mode !== undefined) {
+      if (body.card_photo_mode && (kind === "ignored" || kind === "office")) throw BadRequest("「略過」或「辦公室」群唔可以開工卡相模式");
+      data.cardPhotoMode = body.card_photo_mode;
+    }
     if (body.auto_write_daily_cap !== undefined) data.autoWriteDailyCap = body.auto_write_daily_cap;
     if (body.filter_threshold !== undefined) data.filterThreshold = body.filter_threshold;
     if (body.shift_word_map !== undefined) data.shiftWordMap = pairsToWordMap(body.shift_word_map);

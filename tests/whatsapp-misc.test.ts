@@ -32,7 +32,7 @@ describe("W0 保留期 job", () => {
     const mk = (id: string, days: number, extra: Record<string, unknown> = {}) => ({ session: "default", chatJid: "test-g1@g.us", messageId: id, senderJid: "x", ts: d(days), text: `原文-${id}`, textHistory: [{ revision: 1, text: "舊" }], status: "done" as const, parsedJson: { keep: true }, ...extra });
     await prisma.whatsappMessage.createMany({ data: [mk("old1", 91), mk("old2", 200), mk("new1", 89), mk("done0", 120, { redactedAt: d(10), text: "" })] });
     const r = await runWhatsappRetention(now);
-    expect(r).toEqual({ status: "ok", summary: { redacted: 2, retention_days: 90 } });
+    expect(r).toEqual({ status: "ok", summary: { redacted: 2, media_purged: 0, retention_days: 90 } });
     const rows = Object.fromEntries((await prisma.whatsappMessage.findMany()).map((m) => [m.messageId, m]));
     for (const id of ["old1", "old2"]) {
       expect(rows[id]).toMatchObject({ text: "", textHistory: [], parsedJson: null, status: "done" }); // W1：parsed_json 含 LLM 抽出嘅原話片段，一併清走（原本斷言為保留）
@@ -41,7 +41,7 @@ describe("W0 保留期 job", () => {
     expect(rows["new1"]).toMatchObject({ text: "原文-new1", redactedAt: null, parsedJson: { keep: true } });
     expect(rows["done0"]!.redactedAt?.getTime()).toBe(d(10).getTime());
     const again = await runWhatsappRetention(now);
-    expect(again).toEqual({ status: "skipped", summary: { redacted: 0, retention_days: 90 } });
+    expect(again).toEqual({ status: "skipped", summary: { redacted: 0, media_purged: 0, retention_days: 90 } });
   });
 
   it("已登記入 JOBS、每日 03:00、cron 合法", () => {

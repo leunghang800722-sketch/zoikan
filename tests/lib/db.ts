@@ -31,6 +31,7 @@ export async function clearAll() {
   await prisma.scheduledJob.deleteMany({});
   await prisma.whatsappIntent.deleteMany({}); // W0：WhatsApp 三表（intent 先於 message；groups 對 site／broker／guard 係 SET NULL，但仍然每個 test 清走）
   await prisma.whatsappMessage.deleteMany({});
+  await prisma.whatsappMediaEvidence.deleteMany({}); // WA-8
   await prisma.whatsappGroup.deleteMany({});
   await prisma.appErrorLog.deleteMany({}); // WP-AI-DIAG：應用層錯誤日誌（無 FK）
   await prisma.monthCloseAutoChange.deleteMany({}); // WP-ONE-CLICK-AUTO：自動改動流水帳（FK 落 month_close_runs）

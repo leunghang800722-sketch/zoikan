@@ -28,6 +28,8 @@ export const GroupPatchSchema = z.object({
   leave_word_map: z.array(LeavePairSchema).max(30).optional(),
   auto_write: z.boolean().optional(),
   auto_confirm: z.boolean().optional(),
+  /** WA-8：工卡相報開工（開咗先拉圖／辨識） */
+  card_photo_mode: z.boolean().optional(),
   active: z.boolean().optional(),
   /** W3：每群每日自動寫入上限（0–1000；0＝全部改 Triage）。 */
   auto_write_daily_cap: z.number().int().min(0).max(1000).optional(),

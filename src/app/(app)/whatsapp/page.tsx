@@ -33,6 +33,7 @@ interface GroupRow {
   auto_write: boolean;
   auto_confirm: boolean;
   auto_write_daily_cap: number;
+  card_photo_mode?: boolean;
   active: boolean;
   last_message_at: string | null;
   unprocessed_count: number;
@@ -412,6 +413,7 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
   const [autoWrite, setAutoWrite] = useState(group.auto_write);
   const [autoConfirm, setAutoConfirm] = useState(group.auto_confirm);
   const [active, setActive] = useState(group.active);
+  const [cardPhoto, setCardPhoto] = useState(group.card_photo_mode ?? false);
   const [threshold, setThreshold] = useState(group.filter_threshold === null ? "" : String(group.filter_threshold));
   const [cap, setCap] = useState(String(group.auto_write_daily_cap ?? 50));
   const [saving, setSaving] = useState(false);
@@ -453,6 +455,7 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
       auto_write: noAuto ? false : autoWrite,
       auto_confirm: noAuto || !autoWrite ? false : autoConfirm,
       auto_write_daily_cap: cap.trim() === "" ? 50 : Number(cap),
+      card_photo_mode: noAuto ? false : cardPhoto,
       active,
     });
     setSaving(false);
@@ -537,6 +540,10 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
         <label className={`block space-y-1 ${noAuto || !autoWrite ? "opacity-50" : ""}`}>
           <span className="block text-sm text-zk-text-secondary">每日自動寫入上限（0–1000；超過會改去分流）</span>
           <input className={inputCls} type="number" min={0} max={1000} aria-label="每日自動寫入上限" disabled={noAuto || !autoWrite} value={cap} onChange={(e) => setCap(e.target.value)} />
+        </label>
+        <label className={`flex items-center gap-2 text-sm ${noAuto ? "opacity-50" : ""}`}>
+          <input type="checkbox" checked={!noAuto && cardPhoto} disabled={noAuto} onChange={(e) => setCardPhoto(e.target.checked)} data-testid="wa-card-photo-mode" />
+          工卡相報開工（保安員 send 工卡相，系統自動辨識；準確度唔夠會出分流題）
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />

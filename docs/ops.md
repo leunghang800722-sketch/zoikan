@@ -648,3 +648,20 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **訊息清單**（`/whatsapp`）：狀態篩選加「分流／已過濾／已解析／已完成」（`status=routed|filtered|parsed|done`）；分流行出「去答題」→ `/triage?open=<session>`（session＝`sourceType=whatsapp`、`sourceRef=<group_jid>:<YYYY-MM>`，月＝訊息香港日所屬月；API `triage_session_id`，要有「導入分診」view 權先回）；略過行顯示原因中文（`filter_reasons`：`media_only`／`too_short`／`emoji_only`／`group_unbound`／`group_ignored`；`ignore_reason`：`llm_noise`、`filtered_out` 等）。
 - **圖片訊息獨立原因碼 `media_only`**：訊息有媒體（image／video／document／audio…，`media_type` 非空）而冇文字／caption → 過濾層 reason `media_only`（score 0、ignore），唔再混入 `too_short`。指標 `filtered_media_only`（整體＋按群）；指標頁「其中純圖片」。**圖片唔解析（設計），保安員要打字報更**；系統冇發訊／自動回覆能力，維持被動，唔提示發訊人。
 - **靜默告警口徑（`whatsapp_health`）**：條件改為「自當日 07:00（香港）起已綁定群組冇任何訊息」（去掉 now−6h，避免早上報完更、下晝靜默誤報）；香港週一至六 13:00–23:00 檢查；**每日最多一條**（dedupe key＝香港日期）。標題：WAHA＝WORKING →「WhatsApp 群組今日靜默」，內文「WAHA 正常，只係今日未收到任何訊息，如果群組有人發過訊息請檢查…」；WAHA 唔係 WORKING →「WhatsApp 橋接異常」；查唔到 WAHA 狀態 → 「群組今日靜默」但唔講 WAHA 正常。
+
+### WA-8：工卡相報開工（A：媒體擷取＋群組設定）
+
+保安員／判頭習慣淨係 send 工卡相。系統自己讀相（辨識見 B）、歸屬（C）、寫入或出分流題（D）；唔叫人打字。
+
+**Eric 要做嘅 WAHA 設定（WAHA service env）**
+1. `WAHA_EVENTS_DOWNLOAD_MEDIA=true`
+2. `WAHA_EVENTS_DOWNLOAD_MEDIA_MIMETYPES=image/jpeg,image/png`
+3. `WHATSAPP_FILES_LIFETIME=900`（WAHA 下載檔預設只留 **180 秒**；俾足時間畀我哋拉）
+4. 舊 `WHATSAPP_DOWNLOAD_MEDIA=false` 要移除或改 `true`（舊變數只喺新變數未設時生效）。唔使 mount volume。
+5. 我哋呢邊：`WAHA_BASE_URL`／`WAHA_API_KEY`（已有）；webhook 收到 `media.url` 後只取 path+query、用自己嘅 `WAHA_BASE_URL`＋`X-Api-Key` 由私網拉（唔信 payload 內 host）。
+
+**行為**
+- 群組設定新增「工卡相報開工」（`whatsapp_groups.card_photo_mode`，預設關；「略過」／「辦公室」群唔可開）。**關住時即使 WAHA 有 `media.url` 都唔拉、唔存任何圖。**
+- 開咗：webhook 落庫嗰個 request 內即時 `fetchMedia`（timeout 10 秒、≤8MB、只收 JPEG／PNG magic bytes；失敗唔阻落庫、照回 200），bytes 即時 AES-256-GCM 加密寫入 `whatsapp_media_evidence`（key 同 triage 證據圖一樣由 SESSION_SECRET HKDF；TTL 7 日；`whatsapp_retention` 每日清過期；答題後刪）。唔寫檔案系統、唔 log、圖片內容唔入 audit。
+- 拉唔到（冇 `media.url`／`media.error`／過期／404／唔係圖）→ 訊息 `media_state='expired'`，之後出分流題「相片已過期，請再 send」。成功 → `media_state='stored'`。
+- DB 只存加密圖同 `media_state`；`media.url`／檔名唔落 DB。

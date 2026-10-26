@@ -2255,6 +2255,8 @@ model WhatsappGroup {
   autoConfirm   Boolean           @default(false) @map("auto_confirm")
   // W3：每群每日自動寫入上限（超過 → 改 Triage）
   autoWriteDailyCap Int           @default(50) @map("auto_write_daily_cap")
+  // WA-8：工卡相報開工——開咗先拉圖／辨識（預設關）
+  cardPhotoMode Boolean           @default(false) @map("card_photo_mode")
   active        Boolean           @default(true)
   lastMessageAt DateTime?         @map("last_message_at") @db.Timestamptz(3)
   createdBy     String            @map("created_by")
@@ -2278,6 +2280,8 @@ model WhatsappMessage {
   text            String                @default("")
   textHistory     Json                  @default("[]") @map("text_history")
   mediaType       String?               @map("media_type")
+  // WA-8：工卡相狀態 stored（已加密暫存）／expired（拉唔到：過期／404／media.error）；其他＝null
+  mediaState      String?               @map("media_state")
   quotedMessageId String?               @map("quoted_message_id")
   status          WhatsappMessageStatus @default(received)
   ignoreReason    String?               @map("ignore_reason")
@@ -2332,4 +2336,26 @@ model WhatsappIntent {
   @@unique([messageId, messageRevision, idx])
   @@index([createdAt])
   @@map("whatsapp_intents")
+}
+
+/// WA-8：WhatsApp 工卡相加密暫存（AES-256-GCM，同 triage_evidence_images 同一把 key／AAD 做法；TTL 7 日，答題後刪）。
+/// bytes 白名單：imageBytes／iv／tag 只喺 src/lib/whatsapp/media.ts 出現。
+model WhatsappMediaEvidence {
+  id         String   @id @default(uuid())
+  /// WAHA message_id（每條訊息至多一張相）
+  messageId  String   @unique @map("message_id")
+  chatJid    String   @map("chat_jid")
+  imageBytes Bytes    @map("image_bytes")
+  iv         Bytes
+  tag        Bytes
+  encVersion Int      @default(1) @map("enc_version")
+  width      Int?
+  height     Int?
+  mime       String
+  sha256     String
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("whatsapp_media_evidence")
 }

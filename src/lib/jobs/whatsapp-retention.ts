@@ -4,6 +4,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { WA_RETENTION_DAYS } from "@/lib/whatsapp/config";
+import { purgeExpiredMedia } from "@/lib/whatsapp/media";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
 const WHATSAPP_RETENTION_KEY = "whatsapp_retention";
@@ -14,7 +15,8 @@ export async function runWhatsappRetention(now: Date): Promise<JobResult> {
     where: { ts: { lt: cutoff }, redactedAt: null },
     data: { text: "", textHistory: [], parsedJson: Prisma.DbNull, redactedAt: now }, // W1：parsed_json 含 LLM 抽出嘅原話片段，一併清走
   });
-  return { status: res.count === 0 ? "skipped" : "ok", summary: { redacted: res.count, retention_days: WA_RETENTION_DAYS } };
+  const media = await purgeExpiredMedia(now); // WA-8：工卡相加密暫存過期（TTL 7 日）清走
+  return { status: res.count === 0 && media === 0 ? "skipped" : "ok", summary: { redacted: res.count, media_purged: media, retention_days: WA_RETENTION_DAYS } };
 }
 
 export const whatsappRetentionJob: JobDef = {
