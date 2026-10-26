@@ -31,6 +31,7 @@ export function toWaGroupDTO(row: Record<string, unknown>): Dto {
     filter_threshold: g.filterThreshold ?? null,
     auto_write: g.autoWrite,
     auto_confirm: g.autoConfirm,
+    card_photo_mode: g.cardPhotoMode,
     auto_write_daily_cap: g.autoWriteDailyCap,
     active: g.active,
     last_message_at: g.lastMessageAt ? g.lastMessageAt.toISOString() : null,

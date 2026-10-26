@@ -245,7 +245,7 @@ describe("TE-1 證據裁圖", () => {
   });
 
   describe("M4 bytes 白名單", () => {
-    it("META_SELECT 永不含 bytes／iv／tag；source 內 imageBytes 只喺 evidence-images.ts；冇 include evidenceImages", () => {
+    it("META_SELECT 永不含 bytes／iv／tag；source 內 imageBytes 只喺 evidence-images.ts（WA-8：另加 whatsapp/media.ts，同一加密暫存紀律）；冇 include evidenceImages", () => {
       for (const k of ["imageBytes", "iv", "tag"]) expect(Object.keys(EVIDENCE_META_SELECT)).not.toContain(k);
       const root = path.resolve(__dirname, "../src");
       const hits: string[] = [];
@@ -256,7 +256,7 @@ describe("TE-1 證據裁圖", () => {
           else if (/\.(ts|tsx)$/.test(e.name)) {
             const s = fs.readFileSync(p, "utf8");
             const rel = path.relative(root, p).split(path.sep).join("/");
-            if (/\bimageBytes\b|\bimage_bytes\b/.test(s) && rel !== "lib/triage/evidence-images.ts") hits.push(`${rel}: imageBytes`);
+            if (/\bimageBytes\b|\bimage_bytes\b/.test(s) && rel !== "lib/triage/evidence-images.ts" && rel !== "lib/whatsapp/media.ts") hits.push(`${rel}: imageBytes`);
             if (/\bevidenceImages\b/.test(s)) hits.push(`${rel}: evidenceImages`);
             // 凡係讀 triageEvidenceImage 嘅 find*，必須有 select
             for (const m of s.matchAll(/triageEvidenceImage\.(findMany|findFirst|findUnique)\(\s*\{([\s\S]{0,400}?)\}\s*\)/g)) if (!/select\s*:/.test(m[2]!)) hits.push(`${rel}: find without select`);

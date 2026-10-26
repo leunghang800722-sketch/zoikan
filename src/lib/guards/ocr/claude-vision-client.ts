@@ -109,7 +109,8 @@ export class ClaudeVisionClient implements VisionClient {
       res = await this.api.messages.create({
         model: this.model,
         max_tokens: OCR_CLAUDE_MAX_OUTPUT_TOKENS,
-        output_config: { effort: "low", format: { type: "json_schema", schema: ocrJsonSchema(req.fields ?? DEFAULT_FIELDS, req.boxFields ?? []) } },
+        // Haiku 系列唔支援 effort 參數（WA-8 工卡辨識用 Haiku 做仲裁）→ 只對其他型號帶 low
+        output_config: { ...(/haiku/i.test(this.model) ? {} : { effort: "low" as const }), format: { type: "json_schema" as const, schema: (req.jsonSchema ?? ocrJsonSchema(req.fields ?? DEFAULT_FIELDS, req.boxFields ?? [])) as never } },
         system: req.system,
         messages: [
           {

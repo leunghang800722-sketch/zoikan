@@ -21,7 +21,8 @@ const PayloadSchema = z.object({
   fromMe: Nullish(z.boolean()),
   body: Nullish(z.string()),
   hasMedia: Nullish(z.boolean()),
-  media: Nullish(z.object({ mimetype: Nullish(z.string().max(256)) })),
+  // WA-8：WAHA 開咗 WAHA_EVENTS_DOWNLOAD_MEDIA 先有 url／filename；拉唔到有 error。url 只喺處理時用，唔落 DB。
+  media: Nullish(z.object({ mimetype: Nullish(z.string().max(256)), url: Nullish(z.string().max(2048)), filename: Nullish(z.string().max(256)), error: Nullish(z.unknown()) })),
   replyTo: Nullish(z.object({ id: Nullish(z.string().max(256)) })),
   editedMessageId: Nullish(z.string().max(256)),
   revokedMessageId: Nullish(z.string().max(256)),
@@ -49,6 +50,9 @@ export interface NormalizedWaEvent {
   ts: Date | null;
   text: string;
   mediaType: string | null;
+  /** WA-8：WAHA 提供嘅媒體下載 URL（記憶體限定，唔落 DB）；mediaError＝WAHA 報下載失敗。 */
+  mediaUrl?: string | null;
+  mediaError?: boolean;
   quotedMessageId: string | null;
   /** 編輯事件自己嘅 id（去重用）：payload.id（若同目標訊息 id 唔同）；否則 sha256(message_id+timestamp+text)。 */
   eventId: string;
@@ -112,6 +116,8 @@ export function normalizeEvent(kind: WaEventKind, env: z.infer<typeof WebhookEnv
     ts,
     text: body,
     mediaType: mediaTypeOf(p),
+    mediaUrl: p.media?.url ?? null,
+    mediaError: p.media?.error !== undefined && p.media?.error !== null,
     quotedMessageId: p.replyTo?.id ?? null,
     eventId,
   };

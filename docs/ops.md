@@ -648,3 +648,57 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **訊息清單**（`/whatsapp`）：狀態篩選加「分流／已過濾／已解析／已完成」（`status=routed|filtered|parsed|done`）；分流行出「去答題」→ `/triage?open=<session>`（session＝`sourceType=whatsapp`、`sourceRef=<group_jid>:<YYYY-MM>`，月＝訊息香港日所屬月；API `triage_session_id`，要有「導入分診」view 權先回）；略過行顯示原因中文（`filter_reasons`：`media_only`／`too_short`／`emoji_only`／`group_unbound`／`group_ignored`；`ignore_reason`：`llm_noise`、`filtered_out` 等）。
 - **圖片訊息獨立原因碼 `media_only`**：訊息有媒體（image／video／document／audio…，`media_type` 非空）而冇文字／caption → 過濾層 reason `media_only`（score 0、ignore），唔再混入 `too_short`。指標 `filtered_media_only`（整體＋按群）；指標頁「其中純圖片」。**圖片唔解析（設計），保安員要打字報更**；系統冇發訊／自動回覆能力，維持被動，唔提示發訊人。
 - **靜默告警口徑（`whatsapp_health`）**：條件改為「自當日 07:00（香港）起已綁定群組冇任何訊息」（去掉 now−6h，避免早上報完更、下晝靜默誤報）；香港週一至六 13:00–23:00 檢查；**每日最多一條**（dedupe key＝香港日期）。標題：WAHA＝WORKING →「WhatsApp 群組今日靜默」，內文「WAHA 正常，只係今日未收到任何訊息，如果群組有人發過訊息請檢查…」；WAHA 唔係 WORKING →「WhatsApp 橋接異常」；查唔到 WAHA 狀態 → 「群組今日靜默」但唔講 WAHA 正常。
+
+### WA-8：工卡相報開工（A：媒體擷取＋群組設定）
+
+保安員／判頭習慣淨係 send 工卡相。系統自己讀相（辨識見 B）、歸屬（C）、寫入或出分流題（D）；唔叫人打字。
+
+**Eric 要做嘅 WAHA 設定（WAHA service env）**
+1. `WAHA_EVENTS_DOWNLOAD_MEDIA=true`
+2. `WAHA_EVENTS_DOWNLOAD_MEDIA_MIMETYPES=image/jpeg,image/png`
+3. `WHATSAPP_FILES_LIFETIME=900`（WAHA 下載檔預設只留 **180 秒**；俾足時間畀我哋拉）
+4. 舊 `WHATSAPP_DOWNLOAD_MEDIA=false` 要移除或改 `true`（舊變數只喺新變數未設時生效）。唔使 mount volume。
+5. 我哋呢邊：`WAHA_BASE_URL`／`WAHA_API_KEY`（已有）；webhook 收到 `media.url` 後只取 path+query、用自己嘅 `WAHA_BASE_URL`＋`X-Api-Key` 由私網拉（唔信 payload 內 host）。
+
+**行為**
+- 群組設定新增「工卡相報開工」（`whatsapp_groups.card_photo_mode`，預設關；「略過」／「辦公室」群唔可開）。**關住時即使 WAHA 有 `media.url` 都唔拉、唔存任何圖。**
+- 開咗：webhook 落庫嗰個 request 內即時 `fetchMedia`（timeout 10 秒、≤8MB、只收 JPEG／PNG magic bytes；失敗唔阻落庫、照回 200），bytes 即時 AES-256-GCM 加密寫入 `whatsapp_media_evidence`（key 同 triage 證據圖一樣由 SESSION_SECRET HKDF；TTL 7 日；`whatsapp_retention` 每日清過期；答題後刪）。唔寫檔案系統、唔 log、圖片內容唔入 audit。
+- 拉唔到（冇 `media.url`／`media.error`／過期／404／唔係圖）→ 訊息 `media_state='expired'`，之後出分流題「相片已過期，請再 send」。成功 → `media_state='stored'`。
+- DB 只存加密圖同 `media_state`；`media.url`／檔名唔落 DB。
+
+### WA-8 B：工卡辨識引擎與策略（成本優先，Claude 唔做主力）
+
+- **引擎**（`src/lib/whatsapp/card-engines.ts`，同一介面：一張相 → 0..n 張卡 `{is_card, staff_no, name_zh, name_en, confidence}`，另回 token usage）：
+  `tesseract`（本機 child_process，零成本；Dockerfile runner 階段已 `apt-get install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng`；冇 binary → unavailable；env `TESSERACT_BIN`／`TESSERACT_LANGS`；前處理：自動旋轉、放大到長邊 1600、灰階＋正規化、二值化後再用 A-Z0-9 白名單第二次 OCR 專攻工號）｜`deepseek`（deepseek-flash）｜`haiku`（Claude Haiku 5.5，env `WA_CARD_HAIKU_MODEL` 預設 `claude-haiku-5-5`）｜`qwen`（阿里 Model Studio，OpenAI 相容；env `QWEN_API_KEY`、`QWEN_BASE_URL` 預設 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`、`QWEN_VL_MODEL` 預設 `qwen-vl-ocr`；輸出可能係純文字 → 容錯解析：先 JSON，失敗用正則抽工號；純文字冇工號唔當工卡）｜`claude`（Opus，只做仲裁）。
+  送模型嘅圖統一壓到長邊 ≤1000（sharp 可選；冇 sharp 且係 JPEG 就原圖，唔係 JPEG 就該引擎 failed）。key 只由 env 讀，唔寫檔案／log；冇 key＝unavailable。
+- **工號格式**：`U\d{5}｜MP\d{4}｜MG\d{4}｜MW\d{4}`；不合格式一律當讀唔到（唔猜）。
+- **策略**（env `WA_CARD_OCR_STRATEGY`，預設 `S1`；bench 結果出咗再定）：S1 tesseract+deepseek→claude｜S2 tesseract+deepseek→haiku｜S3 deepseek+haiku→claude｜S4 tesseract+qwen→haiku｜S5 qwen+deepseek→claude。
+  兩個便宜引擎各讀一次：工號一致 → confirmed（零仲裁成本）；唔一致／其中一個失敗 → 仲裁引擎讀一次（三取二，≥2 票 confirmed）；單票或三個都唔同 → review（出分流題，帶候選工號）；兩個都話冇卡 → `not_card`（唔仲裁）；單票讀數同已確認工號只差 ≤2 位數字（同前綴同長度）視為同一張卡嘅誤讀，唔另開卡。一張相多張卡逐個工號判定。冇工號但讀到姓名 → review（`card_name_only`）。完全冇 caption 以外嘅文字推斷（辨識唔睇 caption）。
+- **基準測試**（離線、只讀、唔寫 DB）：`npx tsx scripts/whatsapp/card-ocr-bench.ts --dir <相片夾> --truth <truth.csv> --engines tesseract,deepseek,haiku,qwen,claude --qwen-models qwen-vl-ocr,qwen3-vl-plus [--strategies S1,S2,S3,S4,S5] [--out data/…/report.json]`；`--dry` 用合成 fixture（假引擎）。truth.csv：`file,staff_nos`（多張卡用 `|`；空＝相入面冇卡）。每個引擎出 exact／review／wrong／unreadable＋每張平均 prompt／completion tokens；每個策略出 exact／review／confirmed_wrong／unreadable＋仲裁觸發比例＋token（按 provider:model）。輸出淨係計數，唔印工號／姓名／檔名。**上線門檻：工號 exact ≥90%、confirmed-but-wrong 0。**
+
+### WA-8 C：工卡相歸屬
+
+`src/lib/whatsapp/card-resolve.ts`（重用 `resolveIntents`，每張卡一個 shift intent；日期窗口／鎖月／撞更／額滿／quota 檢查照舊）：
+- **人**：工號 →`guard_staff_numbers`（含 former 卡 → 提示碼 `card_former_number`，要人確認）；系統冇呢個工號 → `person_unknown`（唔用姓名補救）；卡上姓名同系統姓名唔 strict 一致 → `card_name_mismatch`（要人確認）。review 卡（單票）→ 候選工號對應 guard 畀人揀（`wa_person_ambiguous`）。冇工號但讀到姓名 → strict 姓名配對：唯一 → 一撳確認（`card_name_only`）；同名多人 → 揀人。姓名只輔助，工號為主。
+- **日期**：訊息 `ts` 嘅香港日；00:00–05:00 送出 → 沿用凌晨降級（`date_ambiguous`，候選當日／前一日，出題）。
+- **盤**：單盤群＝群盤；大群／判頭群：該人當日更表預排（唯一盤，並沿用已排更別）→ 近 60 日同盤（唯一才採用，**要人一撳確認**）→ 多個／冇紀錄 → `wa_site_ambiguous` 題（候選盤）。
+- **更**：群組「開工」口語對照（`shift_word_map` 加 `開工 → D／N`）優先；否則按訊息 ts 對該盤各更開始時間 ±2 小時（24h 環形）推；多個且差距 <0.5 小時 → `shift_ambiguous`；推唔到 → `shift_unmapped`（出題）。
+- **新題型 `wa_card_confirm`**（「WhatsApp 工卡相：要你確認」）：辨識／歸屬齊晒，淨係等人一撳確認（群組冇開自動寫入、former 工號、姓名唔夾、只有姓名）→ 選項「確認入更（待批核）／人手入更／忽略／跳過」；相片過期／唔係工卡／讀唔到（`card_media_expired`／`card_not_card`／`card_unreadable`）→ 淨係「人手入更／忽略／跳過」。
+
+### WA-8 D：寫入、題卡、指標、做唔到嘅情況
+
+- **流程**：webhook（開咗 `card_photo_mode` 嘅群）即時拉圖＋加密暫存 → `whatsapp_parse` job：過濾層對 card 群嘅圖片直接放行（reason `card_photo`，唔再係 `media_only`）→ 辨識（B）→ 歸屬（C）→ 沿用現有 `autowrite.ts`／pending_approval／分流流程。**群組「自動寫入」關住 → 全部去分流題 `wa_card_confirm`**（顯示工卡相、讀到嘅工號姓名、建議盤／更，一撳「確認入更（待批核）」）；開咗 → 辨識全齊（兩讀工號一致＋格式合法＋唯一 guard＋盤／更明確）先 `pending_approval`（`auto_confirm` 開咗就 `confirmed`），其餘出題。同日同人同更去重（現有 FOR SHARE）。
+- **圖片**：`GET /api/whatsapp/media/:id`（要「導入分診:view」＋「保安員:view」＋「更表:create」，圖必須屬於一條仍然 open 嘅 WA 分診題，session 擁有人／老闆；`no-store`、`nosniff`；只寫計數 audit）。全自動／答完（同一訊息冇其他 open 題）即刪暫存圖；跳過或下一輪題照留，TTL 7 日由 `whatsapp_retention` 清。題卡 DTO `wa.card`：`media_url`／`staff_no`／`name_zh`／`name_en`（冇「保安員:view」＝null）、票數、第幾／共幾張卡、候選工號、`none`（expired｜not_card｜unreadable）。
+- **指標**（`/whatsapp/metrics`，整體＋按群）：`card_photos`（工卡相數）／`card_ok`（全自動，冇分流題）／`card_triage`（出分流題）／`card_fail`（過期＋讀唔到）／`card_arbiter`（用過仲裁嘅相數，即「Claude 仲裁次數」）／`card_cost_est`（預估成本 USD，單價 env `WA_CARD_PRICE_USD_PER_MTOK`＝JSON `{"deepseek":{"in":0.3,"out":0.5},"haiku":{"in":0.1,"out":0.5},"qwen":{…},"claude":{…}}`，**唔寫死**；冇設＝「—」）。數據來自 `parsed_json.card`（只有計數／引擎名／token，冇工號姓名）。
+- **做唔到嘅情況（一律出分流題，唔會靜靜寫錯）**：① 相太暗／太糊／反光、工號讀唔到或兩個引擎＋仲裁都唔一致 → 揀人題（候選工號對應嘅 guard）或「讀唔到」題；② 相入面冇工卡（打卡機螢幕、自拍、其他）→ 「唔係工卡」題（只可人手／忽略）；③ 一張相多張卡 → 逐張出記錄（各自判定）；④ 判頭群／大群唔知盤（當日冇預排、近 60 日冇或多過一個同盤）→ `wa_site_ambiguous`；近 60 日歷史推斷嘅單一盤亦要人一撳確認；⑤ 更別推唔到（群組冇「開工」對照、ts 離任何更開始時間 >2 小時，或多個更同樣近）→ 出題；⑥ 凌晨 00:00–05:00 送出 → 日期降級出題（今日／前一日）；⑦ former 工號、卡上姓名同系統唔夾、只有姓名 → 一撳確認，永遠唔自動；⑧ WAHA 檔案過期（`WHATSAPP_FILES_LIFETIME` 之後）、冇 `media.url`、`media.error`、拉圖 timeout → 「相片已過期，請再 send」；⑨ 非 JPEG／PNG（貼圖、webp）、>8MB → 當過期處理；⑩ 工號格式只認 `U\d{5}｜MP\d{4}｜MG\d{4}｜MW\d{4}`，其他一律當讀唔到；⑪ 辨識完全唔睇 caption，亦唔用 caption 以外嘅文字推斷任何值；⑫ 系統冇發訊／自動回覆能力（被動）：相片過期只喺分流題提示，唔會自動叫發訊人重 send。
+- **啟動自檢**（`scripts/ai/guard-ocr-selftest.ts`，背景、唔阻網站起）：除證件自檢外，每個容器啟動對 qwen／deepseek／haiku 各 call 一次合成圖，log 一行 `[card-ocr] <engine> configured=<bool> reachable=<bool> model=<model> ms=<n> status=ok|failed|unavailable`。只印 bool／model／status／ms，**絕對唔印 key 或回應文字**；deploy 後可由 pod log 確認生產讀到 `QWEN_API_KEY`／`DEEPSEEK_API_KEY`／`CLAUDE_API_KEY`。
+- **成本估算用實測 usage**：bench 報表嘅 `est_usd_per_photo` ＝ 實測 token 用量 × env `WA_CARD_PRICE_USD_PER_MTOK` 單價（唔用假設值）；metrics 嘅 `card_cost_est` 同口徑。參考實測（本機合成圖 ping）：`qwen-vl-ocr` HTTP 200、2.2 秒、prompt 972 tokens（image 952＋text 20）、completion 8，即每張相約 1k token、≈US$0.00007。
+
+### WA-8.1（Opus 驗收修正）
+
+- **M1 redirect**：`fetchMedia` 用 `redirect: "manual"`，任何 3xx 一律當 `http_error`（唔跟、唔會將 `X-Api-Key` 送去第三方）。
+- **M2 多卡**：單票讀數**唔准靜靜丟**。只有「所有讀得到嘅引擎都只讀到 ≤1 張卡」先當同一張卡嘅誤讀（併入候選）；只要有任何一個引擎見到 ≥2 張卡，單票讀數就變 review 卡（`card_suspect_second`）→ `wa_card_confirm` 題，題卡列明「同一張相仲有：U01095（已確認）」同疑似嗰張（只一個引擎讀到），畀人剔。同事連號工號（U01095／U01096）一齊影相、其中一個引擎漏讀第二張，唔會再冇記錄冇題。
+- **S4**：所有引擎各讀到唔同嘅單張卡（三個都唔同）→ **一條**題列全部候選（`wa_person_ambiguous`），唔出三條。
+- **S2 sharp**：`sharp` 已加做正式依賴（`package.json`／lock）；啟動自檢多一行 `[card-ocr] sharp loaded=<bool>`。冇 sharp（載入失敗）時只支援 JPEG 且唔縮圖，PNG 只有 tesseract 可用。
+- **S3 media_state**：以暫存表有冇資料為準——`upsert` 成功先標訊息 `media_state='stored'`；兩個 request 並發撞 unique 當已存在（唔標 expired）；WAHA 重送時之前標咗 expired 嘅，今次拉到會更正為 stored。**WAHA webhook timeout 要 ≥15 秒**（我哋 request 內最多 10 秒拉圖＋落庫）。
+- **S1 knip**：清走未用 export；`knip.json` 加 `ignoreBinaries: ["tesseract"]`。

@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { telLookupVariants } from "@/lib/guards/identity";
 import { WA_FUTURE_MS, WA_STALE_MS } from "./config";
 import { isGroupJid, telFromJid, type NormalizedWaEvent } from "./schema";
+import { fetchMedia, storeMediaEvidence } from "./media";
 
 export type IngestOutcome =
   | "inserted"
@@ -63,12 +64,32 @@ async function resolveSenderGuardId(telNorm: string | null): Promise<string | nu
   }
 }
 
+/**
+ * WA-8：工卡相——群組開咗 card_photo_mode 先處理圖片（關住＝唔拉、唔存任何圖）。喺 webhook request 內即時拉（WAHA 下載檔只留 180 秒），
+ * 成功 → 加密暫存 + media_state='stored'；拉唔到（冇 url／media.error／過期／404…）→ 'expired'。失敗唔阻落庫。
+ */
+async function captureCardPhoto(ev: NormalizedWaEvent): Promise<"stored" | "expired" | null> {
+  if (ev.mediaType !== "image" && ev.mediaType !== "unknown") return null;
+  const group = await prisma.whatsappGroup.findUnique({ where: { groupJid: ev.chatJid }, select: { cardPhotoMode: true, active: true, kind: true } });
+  if (!group?.cardPhotoMode || !group.active || group.kind === "ignored" || group.kind === "office") return null;
+  if (!ev.mediaUrl || ev.mediaError) return "expired";
+  try {
+    const r = await fetchMedia(ev.mediaUrl);
+    if (!r.ok) return "expired";
+    await storeMediaEvidence({ messageId: ev.messageId, chatJid: ev.chatJid, bytes: r.bytes, mime: r.mime }); // TTL 按真實時鐘（唔跟 webhook 事件時間）
+    return "stored";
+  } catch {
+    return "expired";
+  }
+}
+
 async function ingestMessage(ev: NormalizedWaEvent, now: Date): Promise<IngestOutcome> {
   const ts = ev.ts;
   const reason = ignoreReasonFor(ev, ts, now);
   const isPrivate = reason === "not_group";
   const telNorm = isPrivate || ev.fromMe ? null : telFromJid(ev.senderJid);
   const senderGuardId = reason ? null : await resolveSenderGuardId(telNorm);
+  const mediaState = isPrivate || reason ? null : await captureCardPhoto(ev);
   const res = await prisma.whatsappMessage.createMany({
     data: [
       {
@@ -84,6 +105,7 @@ async function ingestMessage(ev: NormalizedWaEvent, now: Date): Promise<IngestOu
         ts: ts ?? now,
         text: isPrivate ? "" : ev.text,
         mediaType: ev.mediaType,
+        mediaState,
         quotedMessageId: isPrivate ? null : ev.quotedMessageId,
         status: reason ? "ignored" : "received",
         ignoreReason: reason,
@@ -91,6 +113,8 @@ async function ingestMessage(ev: NormalizedWaEvent, now: Date): Promise<IngestOu
     ],
     skipDuplicates: true,
   });
+  // WA-8 S3：media_state 以 evidence 表有冇資料為準——暫存成功（upsert）之後先標 stored（重送：之前標咗 expired 嘅，今次拉到就更正）
+  if (mediaState === "stored") await prisma.whatsappMessage.updateMany({ where: { messageId: ev.messageId, chatJid: ev.chatJid }, data: { mediaState: "stored" } });
   if (res.count === 0) {
     // 「編輯先到」tombstone 行：原訊息後到時補返欄位（唔改文字／狀態／revision）；撤回 tombstone 完全保持
     if (!isPrivate) {

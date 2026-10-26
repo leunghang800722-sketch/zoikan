@@ -12,6 +12,8 @@ import { buildSystemPrompt, buildUserTextFull } from "../../src/lib/guards/ocr/p
 import { parseModelJson } from "../../src/lib/guards/ocr/read";
 import { selftestFailLine } from "../../src/lib/guards/ocr/selftest-log";
 import { normalizeField } from "../../src/lib/guards/ocr/normalize";
+import { createEngine, type CardEngineName } from "../../src/lib/whatsapp/card-engines";
+import { sharpLoaded } from "../../src/lib/whatsapp/card-image";
 
 const TIMEOUT_MS = 25_000;
 const HARD_LIMIT_MS = 30_000;
@@ -40,6 +42,26 @@ async function runOne(provider: "claude" | "deepseek", img: Buffer): Promise<voi
   }
 }
 
+/**
+ * WA-8：工卡辨識引擎自檢（qwen／deepseek／haiku）。一行：`[card-ocr] <engine> configured=<bool> reachable=<bool> model=<model> ms=<n> status=ok|failed|unavailable`。
+ * 只印 bool／model／status／ms——絕對唔印 key 或回應文字；失敗唔阻網站起。
+ */
+async function cardPing(engine: Extract<CardEngineName, "qwen" | "deepseek" | "haiku">, img: Buffer): Promise<void> {
+  const configured = engine === "qwen" ? !!process.env.QWEN_API_KEY : engine === "deepseek" ? !!process.env.DEEPSEEK_API_KEY : !!process.env.CLAUDE_API_KEY;
+  const e = createEngine(engine);
+  if (!configured) {
+    console.log(`[card-ocr] ${engine} configured=false reachable=false model=${e.model} ms=0 status=unavailable`);
+    return;
+  }
+  const t0 = Date.now();
+  try {
+    const r = await e.read(img);
+    console.log(`[card-ocr] ${engine} configured=true reachable=${r.ok} model=${r.ok && r.usage ? r.usage.model : e.model} ms=${Date.now() - t0} status=${r.ok ? "ok" : r.error}`);
+  } catch {
+    console.log(`[card-ocr] ${engine} configured=true reachable=false model=${e.model} ms=${Date.now() - t0} status=failed`);
+  }
+}
+
 async function main(): Promise<void> {
   const timer = setTimeout(() => {
     console.warn(`[guard-ocr-selftest] fail reason=timeout ms=${HARD_LIMIT_MS}`);
@@ -48,7 +70,8 @@ async function main(): Promise<void> {
   timer.unref();
   const img = readFileSync(join(__dirname, "fixtures", "synthetic-id-card.jpg"));
   // 兩個供應商並行（各自 ≤25 秒），任何一個 fail 都唔影響另一個、唔擋啟動
-  await Promise.all([runOne("claude", img), runOne("deepseek", img)]);
+  console.log(`[card-ocr] sharp loaded=${await sharpLoaded()}`);
+  await Promise.all([runOne("claude", img), runOne("deepseek", img), cardPing("qwen", img), cardPing("deepseek", img), cardPing("haiku", img)]);
 }
 
 main()

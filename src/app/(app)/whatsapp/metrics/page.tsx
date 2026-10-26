@@ -26,6 +26,12 @@ interface Metrics {
   llm_tokens_in: number;
   llm_tokens_out: number;
   errors: number;
+  card_photos: number;
+  card_ok: number;
+  card_triage: number;
+  card_fail: number;
+  card_arbiter: number;
+  card_cost_est: number | null;
 }
 interface GroupMetrics extends Metrics {
   group_id: string | null;
@@ -56,10 +62,17 @@ const FIELDS: Array<[keyof Metrics, string]> = [
   ["llm_tokens_in", "Token 入"],
   ["llm_tokens_out", "Token 出"],
   ["errors", "錯誤"],
+  ["card_photos", "工卡相"],
+  ["card_ok", "工卡自動"],
+  ["card_triage", "工卡分流"],
+  ["card_fail", "工卡失敗"],
+  ["card_arbiter", "Claude 仲裁次數"],
+  ["card_cost_est", "預估成本（USD）"],
 ];
 
 function show(k: keyof Metrics, v: number | null): string {
   if (k === "consistency_rate") return v === null ? "—" : `${Math.round(v * 100)}%`;
+  if (k === "card_cost_est") return v === null ? "—" : v.toFixed(4);
   return String(v ?? 0);
 }
 

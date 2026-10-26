@@ -3,7 +3,7 @@
 // （取代簡報嘅「每 30 秒」）。WA_ENABLED=1 先跑；scheduler 有 PG advisory lock 防並發。
 import { prisma } from "@/lib/db";
 import { waEnabled } from "@/lib/whatsapp/config";
-import { failAttempt, loadRunContext, markRevokedIntents, processWhatsappMessage, type ProcessStats } from "@/lib/whatsapp/process";
+import { failAttempt, loadRunContext, markRevokedIntents, processWhatsappMessage, type ProcessStats, type RunContext } from "@/lib/whatsapp/process";
 import { supersedeRevokedWaQuestions } from "@/lib/whatsapp/triage";
 import { followUpRevokedWrites } from "@/lib/whatsapp/source-change";
 import { ensureSystemUser } from "@/lib/system-user";
@@ -19,7 +19,7 @@ const BATCH = 20;
 /** 單次 run 時間預算（毫秒）：超過就唔再攞新訊息，留俾下一分鐘。 */
 const WA_PARSE_BUDGET_MS = 45_000;
 
-export async function runWhatsappParse(now: Date, opts: { llm?: LlmClient[]; budgetMs?: number; force?: boolean } = {}): Promise<JobResult> {
+export async function runWhatsappParse(now: Date, opts: { llm?: LlmClient[]; budgetMs?: number; force?: boolean; cardEngines?: RunContext["cardEngines"] } = {}): Promise<JobResult> {
   if (!opts.force && !waEnabled()) return { status: "skipped", summary: { enabled: false } };
   const started = Date.now();
   const budget = opts.budgetMs ?? WA_PARSE_BUDGET_MS;
@@ -35,7 +35,7 @@ export async function runWhatsappParse(now: Date, opts: { llm?: LlmClient[]; bud
   // 冇待處理訊息就唔使載入全部保安員索引（job 每分鐘跑）
   if (revoked === 0 && revokedRejected === 0 && (await prisma.whatsappMessage.count({ where: { status: "received", revokedAt: null } })) === 0) return { status: "skipped", summary: { ...counts, revoked_marked: 0, revoked_rejected: 0, backlog: 0 } };
   const ctxBase = await loadRunContext();
-  const ctx = { ...ctxBase, ...(opts.llm ? { llm: opts.llm } : {}) };
+  const ctx = { ...ctxBase, ...(opts.llm ? { llm: opts.llm } : {}), ...(opts.cardEngines ? { cardEngines: opts.cardEngines } : {}) };
   while (Date.now() - started < budget) {
     const rows = await prisma.whatsappMessage.findMany({ where: { status: "received", revokedAt: null, id: { notIn: [...attempted] } }, orderBy: [{ ts: "asc" }, { id: "asc" }], take: BATCH, select: { id: true } });
     if (rows.length === 0) break;

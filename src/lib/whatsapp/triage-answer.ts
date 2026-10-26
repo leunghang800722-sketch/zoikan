@@ -20,6 +20,7 @@ import { answerSchema, KIND_LABEL, type QuestionKind, type QuestionOption, type 
 import { TRIAGE_LOCK } from "@/lib/triage/session";
 import { addDays, hkDateOf, isoToDbDate } from "./dates";
 import { createPrismaResolveRepo } from "./repo";
+import { deleteMediaEvidence } from "./media";
 import { leaveRowShiftType } from "./leave-row";
 import { evaluateCancelState, evaluateCoverState, evaluateWaState, type WaEffective } from "./triage-eval";
 import { buildDraft, insertWaQuestions, refreshWaSession } from "./triage";
@@ -105,6 +106,8 @@ export interface WaQuestionView {
     } | null;
     /** W4：確認後會被取消嘅記錄（「會取消 10 月 18 日 N 更」）；撞更題／取消題／替更題 */
     cancel_preview: string[];
+    /** WA-8：工卡相辨識結果（工號／姓名／圖片 id 只畀有「保安員:view」嘅人） */
+    card: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -248,6 +251,21 @@ export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Pro
               }
             : null,
         cancel_preview: cancelPreviewOf(r.kind, ev, recBy, caps.canSee ? guardBy : null),
+        card: ev.card
+          ? {
+              media_url: caps.canSee && ev.card.media_id && r.status === "open" ? `/api/whatsapp/media/${ev.card.media_id}` : null,
+              staff_no: caps.canSee ? ev.card.staff_no_read : null,
+              name_zh: caps.canSee ? ev.card.name_zh_read : null,
+              name_en: caps.canSee ? ev.card.name_en_read : null,
+              votes: ev.card.votes,
+              index: ev.card.index,
+              total: ev.card.total,
+              arbiter: ev.card.arbiter,
+              candidates: caps.canSee ? ev.card.candidates : [],
+              others: caps.canSee ? (ev.card.others ?? []) : [],
+              none: ev.card.none ?? null,
+            }
+          : null,
         can_remember_alias: caps.canSee && (r.kind === "wa_person_ambiguous" || r.kind === "wa_person_unknown") && ev.intent.kind !== "cancel" && !!ev.src.person_raw,
         manual_href: siteIdForLink ? `/roster/${siteIdForLink}/${month}${workDate || guardIdForLink ? `?${[workDate ? `date=${workDate}` : "", guardIdForLink ? `guard=${guardIdForLink}` : ""].filter(Boolean).join("&")}` : ""}` : null,
       },
@@ -757,6 +775,11 @@ export async function submitWaAnswer(actor: AuthedSession, q: QRowWithSession, r
     throw e;
   }
   await journalAutoCardUsesSafe(autoCardUses);
+  // WA-8：工卡相答完即刪加密暫存圖（同一訊息冇其他 open 題先刪；跳過／下一輪題照留，TTL 7 日自動清）
+  if (ev.card?.media_id && plan.type !== "skip" && plan.type !== "next") {
+    const left = await prisma.triageQuestion.count({ where: { status: "open", session: { sourceType: "whatsapp" }, evidenceJson: { path: ["message", "message_id"], equals: ev.message.message_id } } });
+    if (left === 0) await deleteMediaEvidence([ev.message.message_id]).catch(() => 0);
+  }
   const open_remaining = await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } });
   const session_status = open_remaining === 0 ? "done" : "open";
   const skipped = plan.type === "skip";
