@@ -212,6 +212,8 @@ export const answerSchema = z
     site_id: z.string().min(1).max(64).optional(),
     /** W4：wa_cover_confirm／wa_cover_add_only／wa_use_whatsapp（替更題）揀咗邊個做被替者（替更者用 guard_id） */
     replaced_guard_id: z.string().min(1).max(64).optional(),
+    /** WA-8.2：工卡相題——同一張相仲有另一位（候選之一）：答完呢條之後同一相另開一條確認題 */
+    also_guard_id: z.string().min(1).max(64).optional(),
     /** W2：wa_pick_guard 同時「記住呢個花名」（將原話人名加做佢嘅別名） */
     remember_alias: z.boolean().optional(),
     /** month_close_*：揀咗邊個候選（evidence.candidates[].id） */

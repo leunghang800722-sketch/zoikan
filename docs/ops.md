@@ -702,3 +702,9 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **S2 sharp**：`sharp` 已加做正式依賴（`package.json`／lock）；啟動自檢多一行 `[card-ocr] sharp loaded=<bool>`。冇 sharp（載入失敗）時只支援 JPEG 且唔縮圖，PNG 只有 tesseract 可用。
 - **S3 media_state**：以暫存表有冇資料為準——`upsert` 成功先標訊息 `media_state='stored'`；兩個 request 並發撞 unique 當已存在（唔標 expired）；WAHA 重送時之前標咗 expired 嘅，今次拉到會更正為 stored。**WAHA webhook timeout 要 ≥15 秒**（我哋 request 內最多 10 秒拉圖＋落庫）。
 - **S1 knip**：清走未用 export；`knip.json` 加 `ignoreBinaries: ["tesseract"]`。
+
+### WA-8.2：同一相可能有多張卡（提示＋「加多一位」）
+
+- 兩引擎各只讀到一張唔同嘅卡而仲裁失敗，會合併成一條 review 題（`wa_person_ambiguous`，列晒候選）。審核人揀咗一位，另一位未必有記錄——所以題卡（`wa_card_confirm`／`wa_person_ambiguous`）當候選工號 ≥2 而且當中有兩個**互不相似**（唔係同前綴同長度差 ≤2 位）時，顯示提示「相入面可能有多過一張工卡：如果係兩個人，請分別確認」（DTO `wa.card.multi_hint`，純 bool，唔含工號值）。候選工號差 ≤2 位多數係同一張卡嘅誤讀，唔提示。
+- **「加多一位」**：答案可帶 `also_guard_id`（只限工卡相題、選項 `wa_pick_guard`／`wa_accept`／`wa_force_write`、報更類；對象必須係題目候選之一，而且唔可以同今條揀嘅人一樣）。答完今條後，同一事務內為對方另開一條確認題（新 intent idx、保留盤／日子／更別、`card_confirm`，通常係 `wa_card_confirm`），所以暫存圖仍有 open 題而保留，全部答完先刪。預覽會提示「另外會開一條確認題」。UI：題卡提示下面有「加多一位（同一相另開確認題）」下拉。
+- **tesseract 自檢**（`scripts/ai/guard-ocr-selftest.ts`）：多兩行 log——`[card-ocr] tesseract available=<bool> version=<--version 第一行> langs=<chi_tra,eng 有邊啲>`（spawn 失敗／ENOENT → `available=false`，唔阻網站起）；同 `[card-ocr] tesseract read ok=<bool> ms=<n>`（用合成卡圖跑一次引擎，唔印讀到嘅文字）。deploy 後可確認容器有冇 binary 同 `chi_tra` 語言包。

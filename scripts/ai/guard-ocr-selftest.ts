@@ -3,6 +3,7 @@
 // log 每個供應商一行：[guard-ocr-selftest] ok|fail provider=claude|deepseek model=… ms=… prompt_tokens=… completion_tokens=… hkid_read_ok=true|false
 // 冇 key → `skipped reason=no_api_key provider=…`。唔 log 圖、辨識內容、key。
 import "dotenv/config";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DeepSeekVisionClient, type VisionClient } from "../../src/lib/guards/ocr/vision-client";
@@ -62,6 +63,33 @@ async function cardPing(engine: Extract<CardEngineName, "qwen" | "deepseek" | "h
   }
 }
 
+/**
+ * WA-8.2：tesseract 自檢。兩行：
+ *   [card-ocr] tesseract available=<bool> version=<--version 第一行> langs=<chi_tra,eng 有冇>
+ *   [card-ocr] tesseract read ok=<bool> ms=<n>（用合成卡圖跑一次；唔印讀到嘅文字）
+ * spawn 失敗（ENOENT）→ available=false；唔阻網站起。
+ */
+async function tesseractPing(img: Buffer): Promise<void> {
+  const bin = process.env.TESSERACT_BIN?.trim() || "tesseract";
+  const v = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 5000 });
+  if (v.error || v.status !== 0) {
+    console.log("[card-ocr] tesseract available=false version=- langs=-");
+    return;
+  }
+  const version = ((v.stdout || v.stderr || "").split("\n")[0] ?? "").trim().slice(0, 60) || "unknown";
+  const l = spawnSync(bin, ["--list-langs"], { encoding: "utf8", timeout: 5000 });
+  const have = new Set(`${l.stdout ?? ""}\n${l.stderr ?? ""}`.split("\n").map((x) => x.trim()));
+  const langs = ["chi_tra", "eng"].filter((x) => have.has(x));
+  console.log(`[card-ocr] tesseract available=true version=${version} langs=${langs.join(",") || "none"}`);
+  const t0 = Date.now();
+  try {
+    const r = await createEngine("tesseract").read(img);
+    console.log(`[card-ocr] tesseract read ok=${r.ok} ms=${Date.now() - t0}`);
+  } catch {
+    console.log(`[card-ocr] tesseract read ok=false ms=${Date.now() - t0}`);
+  }
+}
+
 async function main(): Promise<void> {
   const timer = setTimeout(() => {
     console.warn(`[guard-ocr-selftest] fail reason=timeout ms=${HARD_LIMIT_MS}`);
@@ -71,7 +99,7 @@ async function main(): Promise<void> {
   const img = readFileSync(join(__dirname, "fixtures", "synthetic-id-card.jpg"));
   // 兩個供應商並行（各自 ≤25 秒），任何一個 fail 都唔影響另一個、唔擋啟動
   console.log(`[card-ocr] sharp loaded=${await sharpLoaded()}`);
-  await Promise.all([runOne("claude", img), runOne("deepseek", img), cardPing("qwen", img), cardPing("deepseek", img), cardPing("haiku", img)]);
+  await Promise.all([runOne("claude", img), runOne("deepseek", img), cardPing("qwen", img), cardPing("deepseek", img), cardPing("haiku", img), tesseractPing(img)]);
 }
 
 main()

@@ -12,6 +12,22 @@ export interface CardRead {
   confidence: CardConfidence;
 }
 
+/** WA-8.2：兩個工號「相似」＝同前綴同長度而且只差 ≤2 位數字（多數係同一張卡嘅誤讀）。 */
+export function similarStaffNos(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length || a.replace(/\d/g, "") !== b.replace(/\d/g, "")) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+  return d <= 2;
+}
+
+/** WA-8.2：候選工號 ≥2 個而且當中有兩個互不相似（唔係差 ≤2 位）→ 相入面可能有多過一張工卡。 */
+export function hasDistinctCandidates(nos: readonly string[]): boolean {
+  const u = [...new Set(nos.flatMap((n) => { const x = normStaffNo(n); return x ? [x] : []; }))];
+  for (let i = 0; i < u.length; i++) for (let j = i + 1; j < u.length; j++) if (!similarStaffNos(u[i]!, u[j]!)) return true;
+  return false;
+}
+
 /** 正規化工號：大寫、去空白；格式合法回字串，否則 null。 */
 export function normStaffNo(raw: string | null | undefined): string | null {
   if (!raw) return null;

@@ -60,7 +60,7 @@ interface WaQuestion {
       replaced_records: Array<{ id: string; site_name: string; shift_code: string; work_date: string; status: string }>;
     } | null;
     cancel_preview: string[];
-    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; none: "expired" | "not_card" | "unreadable" | null } | null;
+    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; multi_hint?: boolean; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -181,6 +181,7 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
   const [pickedGuard, setPickedGuard] = useState<{ id: string; name: string } | null>(null);
   const [dateText, setDateText] = useState("");
   const [remember, setRemember] = useState(false);
+  const [alsoGuard, setAlsoGuard] = useState(""); // WA-8.2：同一相仲有另一位
   const [coverWorker, setCoverWorker] = useState<string | null>(null);
   const [coverReplaced, setCoverReplaced] = useState<string | null>(null);
   const [leaveCode, setLeaveCode] = useState("AL");
@@ -208,6 +209,7 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
     setPickedGuard(null);
     setDateText(q?.wa.date_candidates[0] ?? "");
     setRemember(false);
+    setAlsoGuard("");
     setCoverWorker(null);
     setCoverReplaced(null);
     setLeaveCode("AL");
@@ -221,11 +223,14 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
 
   function buildAnswer(): Record<string, unknown> | null {
     if (!opt) return null;
+    const also = alsoGuard && q?.wa.card?.multi_hint && (opt.id === "wa_pick_guard" || opt.id === "wa_accept" || opt.id === "wa_force_write") ? { also_guard_id: alsoGuard } : {};
     if (opt.id === "wa_pick_guard") {
       const gid = opt.guard_id ?? pickedGuard?.id;
       if (!gid) return null;
-      return { option: opt.id, guard_id: gid, ...(remember ? { remember_alias: true } : {}) };
+      if (also.also_guard_id === gid) return null;
+      return { option: opt.id, guard_id: gid, ...(remember ? { remember_alias: true } : {}), ...also };
     }
+    if (opt.id === "wa_accept" || opt.id === "wa_force_write") return { option: opt.id, ...also };
     if (opt.id === "wa_pick_site") return opt.site_id ? { option: opt.id, site_id: opt.site_id } : null;
     if (opt.id === "wa_set_date") {
       const v = opt.date ?? dateText.trim();
@@ -347,6 +352,25 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
                           {q.wa.card.name_en ? ` · ${q.wa.card.name_en}` : ""}
                           <span className="ml-1 text-zk-faint">（{q.wa.card.votes} 票{q.wa.card.arbiter ? "，已用仲裁" : ""}）</span>
                           {q.wa.card.candidates.length > 1 && <div className="text-zk-muted">其他可能：{q.wa.card.candidates.join("、")}</div>}
+                          {q.wa.card.multi_hint && (
+                            <div className="mt-1 rounded border border-zk-warning-border bg-zk-warning-bg p-2" data-testid="wa-card-multi-hint">
+                              <div className="text-zk-warning">相入面可能有多過一張工卡：如果係兩個人，請分別確認。</div>
+                              {(() => {
+                                const others = q.wa.guard_candidates.filter((c) => c.name_zh !== q.wa.intent.guard_name);
+                                return others.length > 0 ? (
+                                  <label className="mt-1 flex flex-wrap items-center gap-2">
+                                    <span>加多一位（同一相另開確認題）：</span>
+                                    <select className="rounded border border-zk-border px-1 py-0.5" value={alsoGuard} onChange={(e) => { setAlsoGuard(e.target.value); setImpact(null); setHash(null); }} aria-label="加多一位" data-testid="wa-card-add-another">
+                                      <option value="">（唔加）</option>
+                                      {others.map((c) => (
+                                        <option key={c.guard_id} value={c.guard_id}>{c.name_zh}{c.staff_numbers.length ? `（${c.staff_numbers.join("、")}）` : ""}</option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                ) : null;
+                              })()}
+                            </div>
+                          )}
                           {(q.wa.card.others?.length ?? 0) > 0 && (
                             <div className="text-zk-muted" data-testid="wa-card-others">
                               同一張相仲有：{q.wa.card.others!.map((o) => `${o.staff_no ?? "（讀唔到工號）"}（${o.status === "confirmed" ? "已確認" : "只一個引擎讀到"}）`).join("、")}
