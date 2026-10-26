@@ -642,3 +642,8 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **(c)** 併入說明按實際 pagesByKind 寫，例：「由 2 頁銀行文件產生嘅空記錄，已自動併入 U01095」。
 - 舊題收題由 proposals import **拆出**：`POST /api/triage/sessions/:id/ghost-close`——**預設 dry run**（只回 `question_ids`／`count`），`?dry_run=0` 先真收（標 `superseded`）；每條被收嘅題逐條 audit `triage_ghost_close`（`question_id`、`person_key`、`rule=ghost_staffno_shared_v2`）。proposals import 唔再收題（`ghost_questions_closed` 已移除）。同一套 (a)(b) 限制：舊題 evidence 冇 `listHkids` 就唔收。
 - 舊題（options 冇 `enter_hkid`）揀 keep：reason_text＝「請揀『唔係呢個人嘅（剔走）』，或者喺人卡補身份證後重新導入」。
+
+### WA-7：WhatsApp 運維微調
+
+- **訊息清單**（`/whatsapp`）：狀態篩選加「分流／已過濾／已解析／已完成」（`status=routed|filtered|parsed|done`）；分流行出「去答題」→ `/triage?open=<session>`（session＝`sourceType=whatsapp`、`sourceRef=<group_jid>:<YYYY-MM>`，月＝訊息香港日所屬月；API `triage_session_id`，要有「導入分診」view 權先回）；略過行顯示原因中文（`filter_reasons`：`media_only`／`too_short`／`emoji_only`／`group_unbound`／`group_ignored`；`ignore_reason`：`llm_noise`、`filtered_out` 等）。
+- **圖片訊息獨立原因碼 `media_only`**：訊息有媒體（image／video／document／audio…，`media_type` 非空）而冇文字／caption → 過濾層 reason `media_only`（score 0、ignore），唔再混入 `too_short`。指標 `filtered_media_only`（整體＋按群）；指標頁「其中純圖片」。**圖片唔解析（設計），保安員要打字報更**；系統冇發訊／自動回覆能力，維持被動，唔提示發訊人。

@@ -38,6 +38,8 @@ export interface WaStats {
   to: string;
   received: number;
   filtered: number;
+  /** WA-7：filtered 之中純圖片／媒體（reason media_only；圖片唔解析，要打字） */
+  filtered_media_only: number;
   parsed: number;
   auto_write: number;
   triage: number;
@@ -75,9 +77,10 @@ export async function computeStats(range: WaRange, groupJid: string | null): Pro
     revokedAt: null,
     message: { ts: { gte: range.start, lt: range.end }, ...(groupJid ? { chatJid: groupJid } : {}) },
   };
-  const [received, filtered, parsed, errors, pending, byRouted, cmpRows] = await Promise.all([
+  const [received, filtered, filteredMediaOnly, parsed, errors, pending, byRouted, cmpRows] = await Promise.all([
     prisma.whatsappMessage.count({ where: msgWhere }),
     prisma.whatsappMessage.count({ where: { ...msgWhere, ignoreReason: { in: FILTER_REASONS } } }),
+    prisma.whatsappMessage.count({ where: { ...msgWhere, ignoreReason: { in: FILTER_REASONS }, filterReasons: { array_contains: "media_only" } } }),
     prisma.whatsappMessage.count({ where: { ...msgWhere, llmProvider: { not: null } } }),
     prisma.whatsappMessage.count({ where: { ...msgWhere, status: "error" } }),
     prisma.whatsappMessage.count({ where: { ...msgWhere, status: "received" } }),
@@ -113,6 +116,7 @@ export async function computeStats(range: WaRange, groupJid: string | null): Pro
     to: range.toIso,
     received,
     filtered,
+    filtered_media_only: filteredMediaOnly,
     parsed,
     auto_write: count("auto_write"),
     triage: count("triage"),

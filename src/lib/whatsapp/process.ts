@@ -174,6 +174,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     siteAliases: siteNames,
     senderKnown: msg.senderGuardId !== null,
     threshold: group?.filterThreshold ?? null,
+    mediaType: msg.mediaType ?? null,
   });
   if (filtered.decision === "ignore") {
     const reason = filtered.reasons.includes("group_unbound") ? "group_unbound" : filtered.reasons.includes("group_ignored") ? "group_ignored" : "filtered_out";
