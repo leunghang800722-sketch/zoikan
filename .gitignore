@@ -51,3 +51,6 @@ playwright/.cache/
 
 # 部署暫存（由 git archive 砌出嚟，唔入 git）
 .deploy-src/
+
+# Graphify 代碼知識圖（12MB 生成物，本機重建：graphify update .）
+graphify-out/

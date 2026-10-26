@@ -1,0 +1,14 @@
+data/
+out/
+tools/importer/out/
+.deploy-src/
+node_modules/
+graphify-out/
+**/*.pdf
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.xlsx
+**/*.xls
+**/*.xlsm
+**/*.csv
