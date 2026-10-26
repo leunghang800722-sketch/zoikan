@@ -113,6 +113,8 @@ async function ingestMessage(ev: NormalizedWaEvent, now: Date): Promise<IngestOu
     ],
     skipDuplicates: true,
   });
+  // WA-8 S3：media_state 以 evidence 表有冇資料為準——暫存成功（upsert）之後先標 stored（重送：之前標咗 expired 嘅，今次拉到就更正）
+  if (mediaState === "stored") await prisma.whatsappMessage.updateMany({ where: { messageId: ev.messageId, chatJid: ev.chatJid }, data: { mediaState: "stored" } });
   if (res.count === 0) {
     // 「編輯先到」tombstone 行：原訊息後到時補返欄位（唔改文字／狀態／revision）；撤回 tombstone 完全保持
     if (!isPrivate) {

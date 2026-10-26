@@ -45,7 +45,6 @@ export interface CardPhotoResult {
 type Ran = { engine: CardEngineName; out: Awaited<ReturnType<CardEngine["read"]>> };
 
 const nosOf = (cards: readonly CardRead[]): string[] => [...new Set(cards.flatMap((c) => (c.staff_no ? [c.staff_no] : [])))];
-const hamming = (a: string, b: string): number => [...a].reduce((n, ch, i) => n + (ch === b[i] ? 0 : 1), 0);
 const norm = (s: string | null): string | null => (s ? s.normalize("NFKC").replace(/\s+/g, "").toLowerCase() || null : null);
 
 function pickName(reads: readonly (CardRead | undefined)[], key: "name_zh" | "name_en"): string | null {
@@ -111,23 +110,25 @@ export async function readCardPhoto(bytes: Buffer, opts: ReadPhotoOptions = {}):
   const votesOf = (no: string): number => all.filter((r) => r.out.ok && nosOf(r.out.cards).includes(no)).length;
   const cards: PhotoCard[] = [];
   const allNos = [...new Set([...union, ...(C ?? [])])];
-  // 單票讀數若同已確認工號只差 ≤2 個數字（同前綴同長度）＝同一張卡嘅誤讀，唔另開一張卡（只當候選）
   const confirmedNos = allNos.filter((n) => votesOf(n) >= 2);
-  const misread = (no: string): boolean => confirmedNos.some((c) => c !== no && c.length === no.length && c.replace(/\d/g, "") === no.replace(/\d/g, "") && hamming(c, no) <= 2);
-  for (const no of allNos) {
-    const votes = votesOf(no);
-    if (votes < 2 && misread(no)) continue;
-    const reads = readsByNo.get(no) ?? [];
-    const confirmed = votes >= 2;
-    cards.push({
-      staff_no: no,
-      name_zh: pickName(reads, "name_zh"),
-      name_en: pickName(reads, "name_en"),
-      status: confirmed ? "confirmed" : "review",
-      reasons: confirmed ? [] : [arbiterUsed && arbiter && !arbiter.out.ok ? "card_arbiter_unavailable" : "card_disputed"],
-      candidates: confirmed ? [] : allNos,
-      votes,
-    });
+  const singles = allNos.filter((n) => votesOf(n) < 2);
+  // 所有讀得到嘅引擎都只讀到 ≤1 張卡 → 單票讀數只可能係同一張卡嘅誤讀；只要有任何一個引擎見到 ≥2 張卡，單票讀數就唔准丟（可能係漏讀嘅第二個人）
+  const singleCardPhoto = all.every((r) => !r.out.ok || nosOf(r.out.cards).length <= 1);
+  const arbiterDown = arbiterUsed && !!arbiter && !arbiter.out.ok;
+  const mk = (no: string | null, status: PhotoCard["status"], reasons: string[], candidates: string[], votes: number): PhotoCard => {
+    const reads = no ? (readsByNo.get(no) ?? []) : okReads(all).flatMap((o) => o.cards);
+    return { staff_no: no, name_zh: pickName(reads, "name_zh"), name_en: pickName(reads, "name_en"), status, reasons, candidates, votes };
+  };
+  for (const no of confirmedNos) cards.push(mk(no, "confirmed", [], singleCardPhoto ? singles : [], votesOf(no)));
+  if (singleCardPhoto) {
+    // 淨係單票讀數、冇一個確認 → 同一張卡嘅分歧讀數，合併成一條題列晒全部候選（唔出幾條）
+    if (confirmedNos.length === 0 && singles.length > 0) cards.push(mk(singles.length === 1 ? singles[0]! : null, "review", [arbiterDown ? "card_arbiter_unavailable" : "card_disputed"], singles, Math.max(...singles.map(votesOf))));
+  } else {
+    for (const no of singles) {
+      // 已有確認嘅卡而又只得一票 → 疑似漏讀嘅另一張卡：出題畀人剔（列明已確認嗰張＋疑似嗰張）
+      const reasons = confirmedNos.length > 0 ? ["card_suspect_second"] : [arbiterDown ? "card_arbiter_unavailable" : "card_disputed"];
+      cards.push(mk(no, "review", reasons, allNos, votesOf(no)));
+    }
   }
   // 冇任何工號，但有人讀到姓名 → 姓名輔助配對（永遠 review）
   if (cards.length === 0) {

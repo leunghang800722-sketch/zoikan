@@ -118,6 +118,22 @@ describe("WA-8 C 歸屬", () => {
     expect(multi!.resolution.candidates.guard_ids).toEqual(expect.arrayContaining(["g3", "g4"]));
     expect(pickWaKind(multi!.resolution.reasons, "shift")).toBe("wa_person_ambiguous");
   });
+  it("M2 疑似第二張卡（只一個引擎讀到）→ 人配到＝wa_card_confirm 一撳確認，證據列明同相其他卡；S4 合併候選 → 一條揀人題", async () => {
+    const second = pc({ staff_no: "MP9002", status: "review", votes: 1, reasons: ["card_suspect_second"], candidates: ["U90001", "MP9002"] });
+    const rs = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc(), second]), mediaId: "m1", deps: deps() });
+    expect(rs[0]).toMatchObject({ guardId: "g1", routed: "auto_write" });
+    expect(rs[1]).toMatchObject({ guardId: "g2", routed: "triage" });
+    expect(rs[1]!.resolution.reasons).toContain("card_suspect_second");
+    expect(pickWaKind(rs[1]!.resolution.reasons, "shift")).toBe("wa_card_confirm");
+    expect(rs[1]!.src?.card?.others).toEqual([{ staff_no: "U90001", status: "confirmed" }]);
+    expect(rs[0]!.src?.card?.others).toEqual([{ staff_no: "MP9002", status: "review" }]);
+    const unknown = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc(), pc({ staff_no: "U98888", status: "review", votes: 1, reasons: ["card_suspect_second"] })]), mediaId: null, deps: deps() });
+    expect(unknown[1]!.resolution.reasons).toEqual(expect.arrayContaining(["person_unknown", "card_staff_no_unknown", "card_suspect_second"]));
+    const merged = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc({ staff_no: null, status: "review", votes: 1, reasons: ["card_disputed"], candidates: ["U90001", "MP9002", "MG8888"] })]), mediaId: null, deps: deps() });
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.resolution.candidates.guard_ids).toEqual(expect.arrayContaining(["g1", "g2"]));
+    expect(pickWaKind(merged[0]!.resolution.reasons, "shift")).toBe("wa_person_ambiguous");
+  });
   it("一張相多張卡 → 逐張一個 intent（各自證據 index／total）", async () => {
     const rs = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc(), pc({ staff_no: "MP9002" })]), mediaId: "m1", deps: deps() });
     expect(rs.map((r) => [r.guardId, r.src?.card?.index, r.src?.card?.total])).toEqual([["g1", 1, 2], ["g2", 2, 2]]);

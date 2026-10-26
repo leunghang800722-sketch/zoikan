@@ -107,7 +107,7 @@ export interface WaQuestionView {
     /** W4：確認後會被取消嘅記錄（「會取消 10 月 18 日 N 更」）；撞更題／取消題／替更題 */
     cancel_preview: string[];
     /** WA-8：工卡相辨識結果（工號／姓名／圖片 id 只畀有「保安員:view」嘅人） */
-    card: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; none: "expired" | "not_card" | "unreadable" | null } | null;
+    card: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -262,6 +262,7 @@ export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Pro
               total: ev.card.total,
               arbiter: ev.card.arbiter,
               candidates: caps.canSee ? ev.card.candidates : [],
+              others: caps.canSee ? (ev.card.others ?? []) : [],
               none: ev.card.none ?? null,
             }
           : null,

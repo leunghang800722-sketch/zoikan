@@ -693,3 +693,12 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **做唔到嘅情況（一律出分流題，唔會靜靜寫錯）**：① 相太暗／太糊／反光、工號讀唔到或兩個引擎＋仲裁都唔一致 → 揀人題（候選工號對應嘅 guard）或「讀唔到」題；② 相入面冇工卡（打卡機螢幕、自拍、其他）→ 「唔係工卡」題（只可人手／忽略）；③ 一張相多張卡 → 逐張出記錄（各自判定）；④ 判頭群／大群唔知盤（當日冇預排、近 60 日冇或多過一個同盤）→ `wa_site_ambiguous`；近 60 日歷史推斷嘅單一盤亦要人一撳確認；⑤ 更別推唔到（群組冇「開工」對照、ts 離任何更開始時間 >2 小時，或多個更同樣近）→ 出題；⑥ 凌晨 00:00–05:00 送出 → 日期降級出題（今日／前一日）；⑦ former 工號、卡上姓名同系統唔夾、只有姓名 → 一撳確認，永遠唔自動；⑧ WAHA 檔案過期（`WHATSAPP_FILES_LIFETIME` 之後）、冇 `media.url`、`media.error`、拉圖 timeout → 「相片已過期，請再 send」；⑨ 非 JPEG／PNG（貼圖、webp）、>8MB → 當過期處理；⑩ 工號格式只認 `U\d{5}｜MP\d{4}｜MG\d{4}｜MW\d{4}`，其他一律當讀唔到；⑪ 辨識完全唔睇 caption，亦唔用 caption 以外嘅文字推斷任何值；⑫ 系統冇發訊／自動回覆能力（被動）：相片過期只喺分流題提示，唔會自動叫發訊人重 send。
 - **啟動自檢**（`scripts/ai/guard-ocr-selftest.ts`，背景、唔阻網站起）：除證件自檢外，每個容器啟動對 qwen／deepseek／haiku 各 call 一次合成圖，log 一行 `[card-ocr] <engine> configured=<bool> reachable=<bool> model=<model> ms=<n> status=ok|failed|unavailable`。只印 bool／model／status／ms，**絕對唔印 key 或回應文字**；deploy 後可由 pod log 確認生產讀到 `QWEN_API_KEY`／`DEEPSEEK_API_KEY`／`CLAUDE_API_KEY`。
 - **成本估算用實測 usage**：bench 報表嘅 `est_usd_per_photo` ＝ 實測 token 用量 × env `WA_CARD_PRICE_USD_PER_MTOK` 單價（唔用假設值）；metrics 嘅 `card_cost_est` 同口徑。參考實測（本機合成圖 ping）：`qwen-vl-ocr` HTTP 200、2.2 秒、prompt 972 tokens（image 952＋text 20）、completion 8，即每張相約 1k token、≈US$0.00007。
+
+### WA-8.1（Opus 驗收修正）
+
+- **M1 redirect**：`fetchMedia` 用 `redirect: "manual"`，任何 3xx 一律當 `http_error`（唔跟、唔會將 `X-Api-Key` 送去第三方）。
+- **M2 多卡**：單票讀數**唔准靜靜丟**。只有「所有讀得到嘅引擎都只讀到 ≤1 張卡」先當同一張卡嘅誤讀（併入候選）；只要有任何一個引擎見到 ≥2 張卡，單票讀數就變 review 卡（`card_suspect_second`）→ `wa_card_confirm` 題，題卡列明「同一張相仲有：U01095（已確認）」同疑似嗰張（只一個引擎讀到），畀人剔。同事連號工號（U01095／U01096）一齊影相、其中一個引擎漏讀第二張，唔會再冇記錄冇題。
+- **S4**：所有引擎各讀到唔同嘅單張卡（三個都唔同）→ **一條**題列全部候選（`wa_person_ambiguous`），唔出三條。
+- **S2 sharp**：`sharp` 已加做正式依賴（`package.json`／lock）；啟動自檢多一行 `[card-ocr] sharp loaded=<bool>`。冇 sharp（載入失敗）時只支援 JPEG 且唔縮圖，PNG 只有 tesseract 可用。
+- **S3 media_state**：以暫存表有冇資料為準——`upsert` 成功先標訊息 `media_state='stored'`；兩個 request 並發撞 unique 當已存在（唔標 expired）；WAHA 重送時之前標咗 expired 嘅，今次拉到會更正為 stored。**WAHA webhook timeout 要 ≥15 秒**（我哋 request 內最多 10 秒拉圖＋落庫）。
+- **S1 knip**：清走未用 export；`knip.json` 加 `ignoreBinaries: ["tesseract"]`。

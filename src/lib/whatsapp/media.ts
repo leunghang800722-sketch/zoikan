@@ -9,8 +9,8 @@ import { decryptImage, encryptImage } from "@/lib/triage/evidence-images";
 import { wahaApiKey, wahaBaseUrl } from "./config";
 
 export const WA_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
-export const WA_MEDIA_TIMEOUT_MS = 10_000;
-export const WA_MEDIA_TTL_MS = 7 * 86_400_000;
+const WA_MEDIA_TIMEOUT_MS = 10_000;
+const WA_MEDIA_TTL_MS = 7 * 86_400_000;
 const ENC_VERSION = 1;
 
 export type MediaFetchResult = { ok: true; bytes: Buffer; mime: "image/jpeg" | "image/png" } | { ok: false; error: "not_configured" | "bad_url" | "unreachable" | "timeout" | "http_error" | "too_large" | "not_image" };
@@ -45,12 +45,14 @@ export async function fetchMedia(mediaUrl: string, fetchImpl: typeof fetch = fet
   if (key) headers["X-Api-Key"] = key;
   let res: Response;
   try {
-    res = await fetchImpl(url, { method: "GET", headers, signal: AbortSignal.timeout(WA_MEDIA_TIMEOUT_MS), cache: "no-store" });
+    // redirect: "manual"——任何 3xx 都唔跟（假 WAHA 回 302 去第三方會連 X-Api-Key 一齊送出）
+    res = await fetchImpl(url, { method: "GET", headers, signal: AbortSignal.timeout(WA_MEDIA_TIMEOUT_MS), cache: "no-store", redirect: "manual" });
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
     return { ok: false, error: name === "TimeoutError" || name === "AbortError" ? "timeout" : "unreachable" };
   }
-  if (!res.ok) return { ok: false, error: "http_error" };
+  if (res.status >= 300 && res.status < 400) return { ok: false, error: "http_error" };
+  if (res.type === "opaqueredirect" || !res.ok) return { ok: false, error: "http_error" };
   const len = Number(res.headers.get("content-length"));
   if (Number.isFinite(len) && len > WA_MEDIA_MAX_BYTES) return { ok: false, error: "too_large" };
   let buf: Buffer;
@@ -93,24 +95,30 @@ export async function storeMediaEvidence(args: { messageId: string; chatJid: str
   const id = randomUUID();
   const enc = encryptImage(args.bytes, id);
   const now = args.now ?? new Date();
-  await prisma.whatsappMediaEvidence.upsert({
-    where: { messageId: args.messageId },
-    create: {
-      id,
-      messageId: args.messageId,
-      chatJid: args.chatJid,
-      imageBytes: new Uint8Array(enc.bytes),
-      iv: new Uint8Array(enc.iv),
-      tag: new Uint8Array(enc.tag),
-      encVersion: ENC_VERSION,
-      width: args.width ?? null,
-      height: args.height ?? null,
-      mime: args.mime,
-      sha256: createHash("sha256").update(args.bytes).digest("hex"),
-      expiresAt: new Date(now.getTime() + WA_MEDIA_TTL_MS),
-    },
-    update: {}, // 重送：保持原圖（冪等）
-  });
+  try {
+      await prisma.whatsappMediaEvidence.upsert({
+      where: { messageId: args.messageId },
+      create: {
+        id,
+        messageId: args.messageId,
+        chatJid: args.chatJid,
+        imageBytes: new Uint8Array(enc.bytes),
+        iv: new Uint8Array(enc.iv),
+        tag: new Uint8Array(enc.tag),
+        encVersion: ENC_VERSION,
+        width: args.width ?? null,
+        height: args.height ?? null,
+        mime: args.mime,
+        sha256: createHash("sha256").update(args.bytes).digest("hex"),
+        expiresAt: new Date(now.getTime() + WA_MEDIA_TTL_MS),
+      },
+      update: {}, // 重送：保持原圖（冪等）
+    });
+  } catch (e) {
+    // 兩個 request 並發 upsert 撞 unique（message_id）＝已有人存咗，當已存在；其他錯誤照拋
+    if (e && typeof e === "object" && (e as { code?: string }).code === "P2002") return;
+    throw e;
+  }
 }
 
 /** 解密讀返（OCR／圖片 GET 用）；搵唔到／過期／key 輪換 → null。 */
@@ -132,12 +140,6 @@ export async function loadMediaEvidenceById(id: string, now: Date = new Date()):
   } catch {
     return null;
   }
-}
-
-/** 只回 meta（唔含 bytes）：圖片 id。 */
-export async function mediaEvidenceId(messageId: string): Promise<string | null> {
-  const r = await prisma.whatsappMediaEvidence.findUnique({ where: { messageId }, select: { id: true } });
-  return r?.id ?? null;
 }
 
 export async function deleteMediaEvidence(messageIds: readonly string[]): Promise<number> {

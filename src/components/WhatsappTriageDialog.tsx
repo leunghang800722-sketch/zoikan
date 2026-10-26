@@ -60,7 +60,7 @@ interface WaQuestion {
       replaced_records: Array<{ id: string; site_name: string; shift_code: string; work_date: string; status: string }>;
     } | null;
     cancel_preview: string[];
-    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; none: "expired" | "not_card" | "unreadable" | null } | null;
+    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -78,6 +78,7 @@ const REASON_LABEL: Record<string, string> = {
   card_not_card: "相入面唔係工卡",
   card_unreadable: "工卡讀唔到",
   card_confirm: "工卡相要你確認",
+  card_suspect_second: "疑似同一張相仲有第二張工卡（只一個引擎讀到）",
   card_disputed: "工號讀數唔一致",
   card_arbiter_unavailable: "工號讀數唔一致（仲裁用唔到）",
   card_name_only: "淨係讀到姓名",
@@ -346,6 +347,11 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
                           {q.wa.card.name_en ? ` · ${q.wa.card.name_en}` : ""}
                           <span className="ml-1 text-zk-faint">（{q.wa.card.votes} 票{q.wa.card.arbiter ? "，已用仲裁" : ""}）</span>
                           {q.wa.card.candidates.length > 1 && <div className="text-zk-muted">其他可能：{q.wa.card.candidates.join("、")}</div>}
+                          {(q.wa.card.others?.length ?? 0) > 0 && (
+                            <div className="text-zk-muted" data-testid="wa-card-others">
+                              同一張相仲有：{q.wa.card.others!.map((o) => `${o.staff_no ?? "（讀唔到工號）"}（${o.status === "confirmed" ? "已確認" : "只一個引擎讀到"}）`).join("、")}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

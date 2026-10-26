@@ -1,5 +1,7 @@
 // WA-8 A：工卡相媒體擷取——schema、fetchMedia（SSRF／大小／magic bytes）、加密暫存、ingest（card_photo_mode 開／關、拉唔到＝expired）。合成資料。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture } from "./fixtures/wp2-fixture";
 import { WebhookEnvelopeSchema, normalizeEvent } from "@/lib/whatsapp/schema";
@@ -114,5 +116,52 @@ describe("WA-8 A 媒體擷取", () => {
     const r = await runWhatsappRetention(new Date(Date.now() + 8 * 86_400_000));
     expect(r.summary).toMatchObject({ media_purged: 1 });
     expect(await loadMediaEvidence("wa8-m1")).toBeNull();
+  });
+
+  it("M1 redirect：假 WAHA 回 302 去另一個 server → 唔跟（第二個 server 冇收到任何 request，X-Api-Key 唔外洩），結果 http_error", async () => {
+    const hits: Array<{ key: string | undefined }> = [];
+    const target = http.createServer((req, res) => {
+      hits.push({ key: req.headers["x-api-key"] as string | undefined });
+      res.writeHead(200, { "content-type": "image/jpeg" });
+      res.end(JPEG);
+    });
+    await new Promise<void>((r) => target.listen(0, "127.0.0.1", r));
+    const targetUrl = `http://127.0.0.1:${(target.address() as AddressInfo).port}/steal.jpg`;
+    const fake = http.createServer((_req, res) => {
+      res.writeHead(302, { location: targetUrl });
+      res.end();
+    });
+    await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
+    try {
+      process.env.WAHA_BASE_URL = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
+      const r = await fetchMedia("/api/files/default/a.jpg"); // 真 fetch（冇注入）
+      expect(r).toEqual({ ok: false, error: "http_error" });
+      await new Promise((res) => setTimeout(res, 100));
+      expect(hits).toHaveLength(0);
+    } finally {
+      await new Promise((r) => fake.close(r));
+      await new Promise((r) => target.close(r));
+    }
+  });
+
+  it("S3 並發：兩個 request 同時暫存同一張相（unique 衝突）當已存在，唔標 expired、只得一行", async () => {
+    await prisma.whatsappGroup.create({ data: { groupJid: G, label: "測試工卡群", kind: "multi_site", cardPhotoMode: true, createdBy: "t" } });
+    vi.stubGlobal("fetch", vi.fn(async () => resp(JPEG)));
+    const e = norm({ mimetype: "image/jpeg", url: "http://x/api/files/default/a.jpg" }, "m-race");
+    await Promise.all([ingestEvent(e), ingestEvent(e)]);
+    expect(await prisma.whatsappMediaEvidence.count({ where: { messageId: "m-race" } })).toBe(1);
+    expect((await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: "m-race" } })).mediaState).toBe("stored");
+  });
+
+  it("S3 重送：第一次拉唔到（expired），WAHA 重送今次拉到 → 更正為 stored", async () => {
+    await prisma.whatsappGroup.create({ data: { groupJid: G, label: "測試工卡群", kind: "multi_site", cardPhotoMode: true, createdBy: "t" } });
+    const e = norm({ mimetype: "image/jpeg", url: "http://x/api/files/default/a.jpg" }, "m-retry");
+    vi.stubGlobal("fetch", vi.fn(async () => resp("gone", { status: 404 })));
+    await ingestEvent(e);
+    expect((await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: "m-retry" } })).mediaState).toBe("expired");
+    vi.stubGlobal("fetch", vi.fn(async () => resp(JPEG)));
+    expect(await ingestEvent(e)).toBe("duplicate");
+    expect((await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: "m-retry" } })).mediaState).toBe("stored");
+    expect(await loadMediaEvidence("m-retry")).not.toBeNull();
   });
 });

@@ -25,7 +25,7 @@ export interface CardDeps {
   recentSites(guardId: string, sinceIso: string, beforeIso: string): Promise<Map<string, number>>;
 }
 
-export function prismaCardDeps(): CardDeps {
+function prismaCardDeps(): CardDeps {
   return {
     async scheduled(guardId, dateIso) {
       const rows = await prisma.shiftRecord.findMany({ where: { guardId, workDate: isoToDbDate(dateIso), recordType: "shift", status: { not: "cancelled" } }, select: { siteId: true, shiftTypeId: true }, orderBy: [{ id: "asc" }] });
@@ -84,17 +84,25 @@ async function personFor(card: PhotoCard, ctx: ResolveContext): Promise<{ person
     if (card.name_zh && sysName && normZh(card.name_zh) !== normZh(sysName)) extra.push("card_name_mismatch");
     return { person: { guardId: hit.guardId, reasons: [], candidates: [], basis: "card_staff_no" }, extra };
   }
-  if (card.staff_no) {
-    // review：候選工號 → guard 候選（畀人揀）
-    const ids = [...new Set(card.candidates.concat(card.staff_no).flatMap((n) => { const h = idx.byStaffNumber.get(normalizeStaffNumber(n)); return h ? [h.guardId] : []; }))];
-    if (ids.length > 0) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: ids.slice(0, MAX_SITE_CANDIDATES), basis: "card_candidates" }, extra: ["card_disputed"] };
-    return { person: { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "card_candidates_unmatched" }, extra: ["card_disputed"] };
+  const cands = [...new Set([...(card.staff_no ? [card.staff_no] : []), ...card.candidates])];
+  if (cands.length > 0) {
+    // 疑似第二張卡（只一個引擎讀到，而同一張相已有確認嘅卡）：人配到就一撳確認；系統冇呢個工號 → person_unknown
+    if (card.reasons.includes("card_suspect_second") && card.staff_no) {
+      const hit = idx.byStaffNumber.get(normalizeStaffNumber(card.staff_no)) ?? null;
+      if (hit) return { person: { guardId: hit.guardId, reasons: [], candidates: [], basis: "card_suspect_second" }, extra: ["card_suspect_second", ...(hit.status !== "current" ? ["card_former_number"] : [])] };
+      return { person: { guardId: null, reasons: ["person_unknown", "card_staff_no_unknown"], candidates: [], basis: "card_suspect_second_unmatched" }, extra: ["card_suspect_second"] };
+    }
+    // review：候選工號 → guard 候選（畀人揀；三個讀數都唔同＝一條題列晒全部候選）
+    const ids = [...new Set(cands.flatMap((n) => { const h = idx.byStaffNumber.get(normalizeStaffNumber(n)); return h ? [h.guardId] : []; }))];
+    const code = card.reasons[0] ?? "card_disputed";
+    if (ids.length > 0) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: ids.slice(0, MAX_SITE_CANDIDATES), basis: "card_candidates" }, extra: [code] };
+    return { person: { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "card_candidates_unmatched" }, extra: [code] };
   }
   // 冇工號：姓名 strict 配對（永遠要人確認）
   const zh = card.name_zh ? card.name_zh.normalize("NFKC").trim() : "";
-  const cands = zh ? [...new Set([...(idx.byName.get(zh) ?? []), ...(idx.byAlias.get(zh) ?? [])])] : [];
-  if (cands.length === 1) return { person: { guardId: cands[0]!, reasons: [], candidates: [], basis: "card_name" }, extra: ["card_name_only"] };
-  if (cands.length > 1) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: cands.slice(0, MAX_SITE_CANDIDATES), basis: "card_name_multi" }, extra: ["card_name_only"] };
+  const nameCands = zh ? [...new Set([...(idx.byName.get(zh) ?? []), ...(idx.byAlias.get(zh) ?? [])])] : [];
+  if (nameCands.length === 1) return { person: { guardId: nameCands[0]!, reasons: [], candidates: [], basis: "card_name" }, extra: ["card_name_only"] };
+  if (nameCands.length > 1) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: nameCands.slice(0, MAX_SITE_CANDIDATES), basis: "card_name_multi" }, extra: ["card_name_only"] };
   return { person: { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "card_name_unmatched" }, extra: ["card_name_only"] };
 }
 
@@ -131,7 +139,7 @@ async function siteAndShiftFor(guardId: string | null, ctx: ResolveContext, deps
   return { site: { siteId: null, reasons: ["site_ambiguous"], candidates: ranked.slice(0, MAX_SITE_CANDIDATES), basis: ranked.length ? "recent_60d_multi" : "no_history" }, extra: [] };
 }
 
-function cardEvidence(card: PhotoCard | null, i: number, n: number, mediaId: string | null, arbiter: boolean, none?: WaCardEvidence["none"]): WaCardEvidence {
+function cardEvidence(card: PhotoCard | null, i: number, n: number, mediaId: string | null, arbiter: boolean, none?: WaCardEvidence["none"], all?: readonly PhotoCard[]): WaCardEvidence {
   return {
     media_id: mediaId,
     staff_no_read: card?.staff_no ?? null,
@@ -142,6 +150,8 @@ function cardEvidence(card: PhotoCard | null, i: number, n: number, mediaId: str
     total: n,
     arbiter,
     candidates: card?.candidates ?? [],
+    // 同一張相嘅其他卡（題卡列明「已確認 U01095＋疑似第二張 U01096」）
+    ...(all && all.length > 1 ? { others: all.filter((_, k) => k !== i).map((c) => ({ staff_no: c.staff_no, status: c.status })) } : {}),
     ...(none ? { none } : {}),
   };
 }
@@ -199,7 +209,7 @@ export async function resolveCardPhoto(a: CardResolveArgs): Promise<ResolvedInte
   // resolveIntents 一個 intent 可能展開多行（日期 range）；工卡相只會一日，逐行對返 card 證據
   return resolved.map((r, k) => {
     const ci = Math.min(k, cards.length - 1);
-    const src: IntentSrc = { ...(r.src ?? { person_raw: null, site_raw: null, date_raw: null, shift_raw: null, leave_raw: null, replaced_raw: null }), person_raw: null, card: cardEvidence(cards[ci]!, ci, cards.length, a.mediaId, photo.arbiter_used) };
+    const src: IntentSrc = { ...(r.src ?? { person_raw: null, site_raw: null, date_raw: null, shift_raw: null, leave_raw: null, replaced_raw: null }), person_raw: null, card: cardEvidence(cards[ci]!, ci, cards.length, a.mediaId, photo.arbiter_used, undefined, cards) };
     return { ...r, src };
   });
 }

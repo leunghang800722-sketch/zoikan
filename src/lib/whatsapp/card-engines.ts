@@ -31,11 +31,11 @@ export interface CardEngine {
 }
 
 const DEFAULT_QWEN_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
-export const DEFAULT_QWEN_MODEL = "qwen-vl-ocr";
+const DEFAULT_QWEN_MODEL = "qwen-vl-ocr";
 const DEFAULT_HAIKU_MODEL = "claude-haiku-5-5";
 const CALL_TIMEOUT_MS = 45_000;
 export const qwenModel = (): string => process.env.QWEN_VL_MODEL?.trim() || DEFAULT_QWEN_MODEL;
-export const haikuModel = (): string => process.env.WA_CARD_HAIKU_MODEL?.trim() || DEFAULT_HAIKU_MODEL;
+const haikuModel = (): string => process.env.WA_CARD_HAIKU_MODEL?.trim() || DEFAULT_HAIKU_MODEL;
 
 // ---------------------------------------------------------------------------
 // prompt（LLM 引擎共用）——只要求 JSON；工號為主，姓名輔助；唔准估

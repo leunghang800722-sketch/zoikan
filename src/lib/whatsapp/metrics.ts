@@ -59,7 +59,7 @@ export function parseDays(raw: string | null): number {
   return n;
 }
 
-export interface CardCounts {
+interface CardCounts {
   photos: number;
   ok: number;
   triage: number;

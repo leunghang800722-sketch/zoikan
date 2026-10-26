@@ -2,5 +2,6 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": ["scripts/**/*.{ts,mjs}", "tests/**/*.{ts,tsx}"],
   "project": ["src/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}", "tests/**/*.{ts,tsx}"],
-  "ignoreDependencies": ["eslint-config-next", "tailwindcss"]
+  "ignoreDependencies": ["eslint-config-next", "tailwindcss"],
+  "ignoreBinaries": ["tesseract"]
 }

@@ -13,6 +13,7 @@ import { parseModelJson } from "../../src/lib/guards/ocr/read";
 import { selftestFailLine } from "../../src/lib/guards/ocr/selftest-log";
 import { normalizeField } from "../../src/lib/guards/ocr/normalize";
 import { createEngine, type CardEngineName } from "../../src/lib/whatsapp/card-engines";
+import { sharpLoaded } from "../../src/lib/whatsapp/card-image";
 
 const TIMEOUT_MS = 25_000;
 const HARD_LIMIT_MS = 30_000;
@@ -69,6 +70,7 @@ async function main(): Promise<void> {
   timer.unref();
   const img = readFileSync(join(__dirname, "fixtures", "synthetic-id-card.jpg"));
   // 兩個供應商並行（各自 ≤25 秒），任何一個 fail 都唔影響另一個、唔擋啟動
+  console.log(`[card-ocr] sharp loaded=${await sharpLoaded()}`);
   await Promise.all([runOne("claude", img), runOne("deepseek", img), cardPing("qwen", img), cardPing("deepseek", img), cardPing("haiku", img)]);
 }
 

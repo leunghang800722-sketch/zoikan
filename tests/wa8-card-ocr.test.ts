@@ -67,8 +67,10 @@ describe("策略：成本優先、三取二", () => {
     expect(s2.usage.map((u) => u.engine)).toContain("haiku");
     expect(s2.usage.map((u) => u.engine)).not.toContain("claude");
     const allDiff = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U11111"]), deepseek: okOut("deepseek", ["MP2222"]), claude: okOut("claude", ["MG3333"]) }) });
-    expect(allDiff.cards.every((c) => c.status === "review")).toBe(true);
-    expect(allDiff.cards.flatMap((c) => c.reasons)).toContain("card_disputed");
+    // S4：三個都唔同（各只讀到一張卡）＝同一張卡嘅分歧 → 合併成**一條**，列晒全部候選
+    expect(allDiff.cards).toHaveLength(1);
+    expect(allDiff.cards[0]).toMatchObject({ status: "review", staff_no: null, reasons: ["card_disputed"] });
+    expect([...allDiff.cards[0]!.candidates].sort()).toEqual(["MG3333", "MP2222", "U11111"]);
   });
   it("引擎失敗／唔可用 → 仲裁；仲裁都失敗＝review（card_arbiter_unavailable）；全部失敗＝unreadable", async () => {
     const r = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: failOut(), deepseek: okOut("deepseek", ["U12345"]), claude: failOut() }) });
@@ -77,6 +79,20 @@ describe("策略：成本優先、三取二", () => {
     expect(ok.cards[0]).toMatchObject({ status: "confirmed", votes: 2 });
     const dead = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: failOut(), deepseek: failOut(), claude: failOut() }) });
     expect(dead).toMatchObject({ kind: "unreadable", cards: [] });
+  });
+  it("M2 Opus 真值表：連號工號 B／仲裁漏讀第二張 → 第二張變 review（card_suspect_second），唔准丟；兩引擎都讀到兩張 → 兩張 confirmed；U01095／U01195 同樣", async () => {
+    const miss = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095", "U01096"]), deepseek: okOut("deepseek", ["U01095"]), claude: okOut("claude", ["U01095"]) }) });
+    expect(miss.cards.map((c) => [c.staff_no, c.status, c.reasons[0] ?? null])).toEqual([["U01095", "confirmed", null], ["U01096", "review", "card_suspect_second"]]);
+    expect(miss.cards[1]!.votes).toBe(1);
+    const both = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095", "U01096"]), deepseek: okOut("deepseek", ["U01095", "U01096"]) }) });
+    expect(both.arbiter_used).toBe(false);
+    expect(both.cards.map((c) => [c.staff_no, c.status])).toEqual([["U01095", "confirmed"], ["U01096", "confirmed"]]);
+    const far = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095", "U01195"]), deepseek: okOut("deepseek", ["U01095"]), claude: okOut("claude", ["U01095"]) }) });
+    expect(far.cards.map((c) => [c.staff_no, c.status, c.reasons[0] ?? null])).toEqual([["U01095", "confirmed", null], ["U01195", "review", "card_suspect_second"]]);
+    // 對照：所有引擎都只讀到一張卡 → 單票近似讀數係誤讀，唔另開卡
+    const single = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095"]), deepseek: okOut("deepseek", ["U01096"]), claude: okOut("claude", ["U01096"]) }) });
+    expect(single.cards).toHaveLength(1);
+    expect(single.cards[0]).toMatchObject({ staff_no: "U01096", status: "confirmed", candidates: ["U01095"] });
   });
   it("兩個都讀得到而話冇卡＝not_card（唔仲裁）；多張卡逐張判定；名只讀到姓名＝review（card_name_only）", async () => {
     const none = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", []), deepseek: okOut("deepseek", []) }) });

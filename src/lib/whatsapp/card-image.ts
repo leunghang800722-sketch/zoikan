@@ -17,8 +17,8 @@ let cached: SharpFn | null | undefined;
 async function sharp(): Promise<SharpFn | null> {
   if (cached !== undefined) return cached;
   try {
-    const name = "sharp"; // 變數 import：sharp 係 next 嘅可選 peer，唔入 package.json；冇就降級
-    const m = (await import(/* webpackIgnore: true */ name)) as { default?: SharpFn };
+    // sharp 係正式依賴（WA-8.1）；載入失敗（原生模組缺）就降級：只支援 JPEG、唔縮圖
+    const m = (await import("sharp")) as unknown as { default?: SharpFn };
     cached = (m.default ?? (m as unknown as SharpFn)) as SharpFn;
   } catch {
     cached = null;
@@ -53,4 +53,9 @@ export async function ocrPreprocessed(bytes: Buffer, mode: "gray" | "binary" = "
   } catch {
     return bytes;
   }
+}
+
+/** 自檢用：sharp 有冇載入成功（冇＝只支援 JPEG 且唔縮圖）。 */
+export async function sharpLoaded(): Promise<boolean> {
+  return (await sharp()) !== null;
 }

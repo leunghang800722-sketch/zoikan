@@ -1,9 +1,9 @@
 // WA-8 B：工卡辨識共用純函數——工號格式、容錯解析（JSON 優先；qwen-vl-ocr 等可能回純文字 → 正則抽取）。零 DB／零網絡。
-export const STAFF_NO_RE = /^(?:U\d{5}|MP\d{4}|MG\d{4}|MW\d{4})$/;
+const STAFF_NO_RE = /^(?:U\d{5}|MP\d{4}|MG\d{4}|MW\d{4})$/;
 /** 文字內搵工號：容許空白／連字符，O→0、I/l→1（只喺數字位）。 */
 const TOKEN_RE = /(?<![A-Za-z0-9])(U|MP|MG|MW)\s*[-:]?\s*([0-9OoIl]{4,5})(?![0-9A-Za-z])/gi;
 
-export type CardConfidence = "high" | "medium" | "low";
+type CardConfidence = "high" | "medium" | "low";
 export interface CardRead {
   is_card: boolean;
   staff_no: string | null;
