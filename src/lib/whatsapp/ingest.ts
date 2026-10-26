@@ -68,7 +68,7 @@ async function resolveSenderGuardId(telNorm: string | null): Promise<string | nu
  * WA-8：工卡相——群組開咗 card_photo_mode 先處理圖片（關住＝唔拉、唔存任何圖）。喺 webhook request 內即時拉（WAHA 下載檔只留 180 秒），
  * 成功 → 加密暫存 + media_state='stored'；拉唔到（冇 url／media.error／過期／404…）→ 'expired'。失敗唔阻落庫。
  */
-async function captureCardPhoto(ev: NormalizedWaEvent, now: Date): Promise<"stored" | "expired" | null> {
+async function captureCardPhoto(ev: NormalizedWaEvent): Promise<"stored" | "expired" | null> {
   if (ev.mediaType !== "image" && ev.mediaType !== "unknown") return null;
   const group = await prisma.whatsappGroup.findUnique({ where: { groupJid: ev.chatJid }, select: { cardPhotoMode: true, active: true, kind: true } });
   if (!group?.cardPhotoMode || !group.active || group.kind === "ignored" || group.kind === "office") return null;
@@ -76,7 +76,7 @@ async function captureCardPhoto(ev: NormalizedWaEvent, now: Date): Promise<"stor
   try {
     const r = await fetchMedia(ev.mediaUrl);
     if (!r.ok) return "expired";
-    await storeMediaEvidence({ messageId: ev.messageId, chatJid: ev.chatJid, bytes: r.bytes, mime: r.mime, now });
+    await storeMediaEvidence({ messageId: ev.messageId, chatJid: ev.chatJid, bytes: r.bytes, mime: r.mime }); // TTL 按真實時鐘（唔跟 webhook 事件時間）
     return "stored";
   } catch {
     return "expired";
@@ -89,7 +89,7 @@ async function ingestMessage(ev: NormalizedWaEvent, now: Date): Promise<IngestOu
   const isPrivate = reason === "not_group";
   const telNorm = isPrivate || ev.fromMe ? null : telFromJid(ev.senderJid);
   const senderGuardId = reason ? null : await resolveSenderGuardId(telNorm);
-  const mediaState = isPrivate || reason ? null : await captureCardPhoto(ev, now);
+  const mediaState = isPrivate || reason ? null : await captureCardPhoto(ev);
   const res = await prisma.whatsappMessage.createMany({
     data: [
       {

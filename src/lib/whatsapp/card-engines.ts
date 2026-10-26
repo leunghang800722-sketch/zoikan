@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import OpenAI from "openai";
 import { ClaudeVisionClient } from "@/lib/guards/ocr/claude-vision-client";
+import { ocrModel } from "@/lib/guards/ocr/config";
 import { DeepSeekVisionClient, OcrUnavailableError, openAiClientOptions, type VisionClient } from "@/lib/guards/ocr/vision-client";
 import { modelImageDataUrl, ocrPreprocessed } from "./card-image";
 import { extractNameCandidates, extractStaffNos, parseCardText, type CardRead } from "./card-parse";
@@ -216,7 +217,7 @@ export function createEngine(name: CardEngineName, o: EngineOverrides = {}): Car
     case "tesseract":
       return tesseractEngine();
     case "deepseek":
-      return visionEngine("deepseek", "deepseek", () => o.clients?.deepseek ?? new DeepSeekVisionClient());
+      return visionEngine("deepseek", ocrModel(), () => o.clients?.deepseek ?? new DeepSeekVisionClient());
     case "haiku":
       return visionEngine("haiku", haikuModel(), () => o.clients?.haiku ?? new ClaudeVisionClient({ model: haikuModel() }));
     case "claude":

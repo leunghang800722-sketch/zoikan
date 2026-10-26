@@ -194,6 +194,15 @@ describe("bench（--dry）", () => {
     const txt = lines.join("\n") + JSON.stringify(report);
     expect(txt).not.toMatch(/U12345|MP1234|U22222|MG3333/);
     expect(summaryLines(report).length).toBeGreaterThan(5);
+    // 成本估算：實測 usage × env 單價（唔寫死）；冇設單價＝null
+    expect(report.engines.find((e) => e.engine === "deepseek")!.est_usd_per_photo).toBeNull();
+    process.env.WA_CARD_PRICE_USD_PER_MTOK = JSON.stringify({ deepseek: { in: 1, out: 2 }, claude: { in: 10, out: 20 } });
+    const priced = await run(a);
+    delete process.env.WA_CARD_PRICE_USD_PER_MTOK;
+    expect(priced.report.engines.find((e) => e.engine === "deepseek")!.est_usd_per_photo).toBeCloseTo((300 * 1 + 40 * 2) / 1e6, 7);
+    expect(priced.report.engines.find((e) => e.engine === "haiku")!.est_usd_per_photo).toBeNull(); // 冇設該引擎單價
+    expect(priced.report.strategies.find((x) => x.strategy === "S1")!.est_usd_per_photo).toBeGreaterThan(0);
+    expect(priced.lines.join("\n")).toMatch(/預估 US\$/);
     await expect(run({ ...a, out: "/tmp/x.json" })).rejects.toThrow(/out_not_under_data/);
     expect(dryFixture().photos).toHaveLength(4);
   });

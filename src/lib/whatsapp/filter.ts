@@ -20,6 +20,8 @@ export interface FilterInput {
   threshold?: number | null;
   /** WA-7：媒體類型（image／video／application…；冇媒體＝null）。有媒體而冇文字／caption → reason media_only。 */
   mediaType?: string | null;
+  /** WA-8：群組開咗工卡相模式——圖片訊息（有冇 caption 都得）唔當純圖片略過，交工卡辨識流程。 */
+  cardPhotoMode?: boolean;
 }
 
 export interface FilterResult {
@@ -77,6 +79,11 @@ export function scoreMessage(input: FilterInput): FilterResult {
 
   const text = norm(input.text ?? "");
   // WA-7：有媒體（圖片／影片／文件…）而冇文字／caption → 獨立原因碼 media_only（圖片唔解析，設計如此，要打字），唔再混入 too_short
+  // WA-8：工卡相群組嘅圖片 → 直接過第 0 層（score 100），由 process.ts 走辨識流程
+  if (input.cardPhotoMode && (input.mediaType === "image" || input.mediaType === "unknown")) {
+    reasons.push("card_photo");
+    return { score: 100, reasons, decision: "candidate" };
+  }
   if (input.mediaType && text.length < 2) {
     reasons.push("media_only");
     return { score: 0, reasons, decision: "ignore" };

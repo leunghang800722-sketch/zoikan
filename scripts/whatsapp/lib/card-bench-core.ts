@@ -72,6 +72,8 @@ export interface EngineReport {
   unreadable: number;
   avg_prompt_tokens: number;
   avg_completion_tokens: number;
+  /** 每張相預估成本（USD）：用實測 usage × env 單價；冇設單價＝null */
+  est_usd_per_photo: number | null;
 }
 export interface StrategyReport {
   strategy: string;
@@ -86,6 +88,8 @@ export interface StrategyReport {
   avg_completion_tokens: number;
   /** 按 provider／model 嘅 token 合計 */
   tokens_by_model: Record<string, { prompt: number; completion: number }>;
+  /** 每張相預估成本（USD）：實測 usage × env 單價（WA_CARD_PRICE_USD_PER_MTOK）；冇設＝null */
+  est_usd_per_photo: number | null;
 }
 export interface BenchReport {
   photos: number;
@@ -101,6 +105,8 @@ export interface BenchInput {
   engines: ReadonlyArray<{ key: string; engine: CardEngine }>;
   strategies: readonly CardStrategy[];
   load: (id: string) => Promise<Buffer>;
+  /** 每百萬 token 單價（USD），按引擎名；冇＝唔估成本 */
+  prices?: Record<string, { in: number; out: number }>;
 }
 
 export async function runBench(inp: BenchInput): Promise<BenchReport> {
@@ -120,7 +126,7 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
 
   const engineReports: EngineReport[] = [];
   for (const { key, engine } of inp.engines) {
-    const rep: EngineReport = { engine: key, photos: 0, exact: 0, review: 0, wrong: 0, unreadable: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0 };
+    const rep: EngineReport = { engine: key, photos: 0, exact: 0, review: 0, wrong: 0, unreadable: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0, est_usd_per_photo: null };
     let p = 0;
     let c = 0;
     for (const ph of inp.photos) {
@@ -136,6 +142,8 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
     }
     rep.avg_prompt_tokens = rep.photos ? r2(p / rep.photos) : 0;
     rep.avg_completion_tokens = rep.photos ? r2(c / rep.photos) : 0;
+    const ep = inp.prices?.[inp.engines.find((e) => e.key === key)!.engine.name];
+    rep.est_usd_per_photo = ep && rep.photos ? Math.round(((p * ep.in + c * ep.out) / 1e6 / rep.photos) * 1e7) / 1e7 : null;
     engineReports.push(rep);
   }
 
@@ -145,7 +153,7 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
   for (const s of inp.strategies) {
     const def = CARD_STRATEGIES[s];
     const need = [...def.primary, def.arbiter] as CardEngineName[];
-    const rep: StrategyReport = { strategy: s, photos: 0, exact: 0, review: 0, confirmed_wrong: 0, unreadable: 0, arbiter_triggered: 0, arbiter_rate: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0, tokens_by_model: {} };
+    const rep: StrategyReport = { strategy: s, photos: 0, exact: 0, review: 0, confirmed_wrong: 0, unreadable: 0, arbiter_triggered: 0, arbiter_rate: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0, tokens_by_model: {}, est_usd_per_photo: null };
     const missing = need.filter((n) => !byName.has(n));
     if (missing.length > 0) {
       strategyReports.push({ ...rep, strategy: `${s}（跳過：缺 ${missing.join('+')}）` });
@@ -176,6 +184,14 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
     rep.arbiter_rate = rep.photos ? r2(rep.arbiter_triggered / rep.photos) : 0;
     rep.avg_prompt_tokens = rep.photos ? r2(p / rep.photos) : 0;
     rep.avg_completion_tokens = rep.photos ? r2(c / rep.photos) : 0;
+    if (inp.prices) {
+      let usd = 0;
+      for (const [k, t] of Object.entries(rep.tokens_by_model)) {
+        const pr = inp.prices[k.split(':')[0]!];
+        if (pr) usd += (t.prompt * pr.in + t.completion * pr.out) / 1e6;
+      }
+      rep.est_usd_per_photo = Object.keys(inp.prices).length && rep.photos ? Math.round((usd / rep.photos) * 1e7) / 1e7 : null;
+    }
     strategyReports.push(rep);
   }
   return { photos: inp.photos.length, engines: engineReports, strategies: strategyReports };
@@ -184,10 +200,10 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
 export function summaryLines(r: BenchReport): string[] {
   const out = [`[card-bench] 相片 ${r.photos} 張`];
   for (const e of r.engines) {
-    out.push(e.skipped ? `[card-bench] 引擎 ${e.engine}：${e.skipped}` : `[card-bench] 引擎 ${e.engine}：exact ${e.exact}｜review ${e.review}｜wrong ${e.wrong}｜unreadable ${e.unreadable}｜每張 prompt ${e.avg_prompt_tokens}／completion ${e.avg_completion_tokens} tokens`);
+    out.push(e.skipped ? `[card-bench] 引擎 ${e.engine}：${e.skipped}` : `[card-bench] 引擎 ${e.engine}：exact ${e.exact}｜review ${e.review}｜wrong ${e.wrong}｜unreadable ${e.unreadable}｜每張 prompt ${e.avg_prompt_tokens}／completion ${e.avg_completion_tokens} tokens${e.est_usd_per_photo === null ? '' : `｜預估 US$${e.est_usd_per_photo}／張`}`);
   }
   for (const s of r.strategies) {
-    out.push(`[card-bench] 策略 ${s.strategy}：exact ${s.exact}｜review ${s.review}｜confirmed_wrong ${s.confirmed_wrong}｜unreadable ${s.unreadable}｜仲裁觸發 ${(s.arbiter_rate * 100).toFixed(0)}%｜每張 prompt ${s.avg_prompt_tokens}／completion ${s.avg_completion_tokens} tokens`);
+    out.push(`[card-bench] 策略 ${s.strategy}：exact ${s.exact}｜review ${s.review}｜confirmed_wrong ${s.confirmed_wrong}｜unreadable ${s.unreadable}｜仲裁觸發 ${(s.arbiter_rate * 100).toFixed(0)}%｜每張 prompt ${s.avg_prompt_tokens}／completion ${s.avg_completion_tokens} tokens${s.est_usd_per_photo === null ? '' : `｜預估 US$${s.est_usd_per_photo}／張`}`);
   }
   return out;
 }

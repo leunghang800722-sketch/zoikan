@@ -60,6 +60,7 @@ interface WaQuestion {
       replaced_records: Array<{ id: string; site_name: string; shift_code: string; work_date: string; status: string }>;
     } | null;
     cancel_preview: string[];
+    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -71,7 +72,18 @@ interface Impact {
   notes: string[];
 }
 
+const CARD_NONE_TEXT: Record<string, string> = { expired: "相片已過期（系統冇收到圖），請叫對方再 send 一次", not_card: "相入面睇落唔係工卡（例如打卡機螢幕、自拍）", unreadable: "相太暗／太糊／反光，工號讀唔到" };
 const REASON_LABEL: Record<string, string> = {
+  card_media_expired: "相片已過期",
+  card_not_card: "相入面唔係工卡",
+  card_unreadable: "工卡讀唔到",
+  card_confirm: "工卡相要你確認",
+  card_disputed: "工號讀數唔一致",
+  card_arbiter_unavailable: "工號讀數唔一致（仲裁用唔到）",
+  card_name_only: "淨係讀到姓名",
+  card_name_mismatch: "卡上姓名同系統唔夾",
+  card_former_number: "工號係已取消嘅舊號",
+  card_staff_no_unknown: "系統冇呢個工號",
   site_ambiguous: "盤口唔肯定",
   person_ambiguous: "人名對到多位保安員",
   person_unknown: "搵唔到呢位保安員",
@@ -318,6 +330,26 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
                     </div>
                     <div className="mt-1 whitespace-pre-wrap text-zk-base" data-testid="wa-original-text">{q.wa.text_redacted ? "（原文已超過保留期，已清除）" : (q.wa.text ?? "")}</div>
                   </div>
+                  {q.wa.card && (
+                    <div className="rounded-lg border border-zk-border bg-zk-surface p-3 space-y-2" data-testid="wa-card">
+                      <div className="text-zk-xs text-zk-faint">工卡相{q.wa.card.total > 1 ? `（第 ${q.wa.card.index}／${q.wa.card.total} 張卡）` : ""}</div>
+                      {q.wa.card.media_url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={q.wa.card.media_url} alt="工卡相" className="max-h-72 w-auto max-w-full rounded border border-zk-border bg-white object-contain" data-testid="wa-card-image" />
+                      )}
+                      {q.wa.card.none ? (
+                        <div className="text-zk-sm text-zk-warning" data-testid="wa-card-none">{CARD_NONE_TEXT[q.wa.card.none]}</div>
+                      ) : (
+                        <div className="text-zk-sm" data-testid="wa-card-read">
+                          讀到：工號 {q.wa.card.staff_no ?? "（讀唔到）"}
+                          {q.wa.card.name_zh ? ` · ${q.wa.card.name_zh}` : ""}
+                          {q.wa.card.name_en ? ` · ${q.wa.card.name_en}` : ""}
+                          <span className="ml-1 text-zk-faint">（{q.wa.card.votes} 票{q.wa.card.arbiter ? "，已用仲裁" : ""}）</span>
+                          {q.wa.card.candidates.length > 1 && <div className="text-zk-muted">其他可能：{q.wa.card.candidates.join("、")}</div>}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {(q.wa.source_changed || q.wa.source_revoked) && (
                     <Banner kind="warning" data-testid="wa-source-changed">⚠ 原訊息已被發訊人{q.wa.source_revoked ? "撤回" : "修改"}，呢題可能已經唔適用。</Banner>
                   )}

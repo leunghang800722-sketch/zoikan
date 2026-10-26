@@ -115,7 +115,9 @@ export async function run(args: Args, cwd: string = process.cwd()): Promise<{ li
       load: async (id) => readFile(path.join(dir, byId.get(id)!)),
     };
   }
-  const report = await runBench(input);
+  const { waCardPrices } = await import('@/lib/whatsapp/card-prices');
+  const prices = waCardPrices();
+  const report = await runBench({ ...input, ...(Object.keys(prices).length ? { prices } : {}) });
   const lines = summaryLines(report);
   if (args.out) {
     const p = resolveOut(args.out, cwd);

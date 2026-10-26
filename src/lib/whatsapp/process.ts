@@ -17,6 +17,10 @@ import { TRIAGE_LOCK } from "@/lib/triage/session";
 import { ensureSystemUser } from "@/lib/system-user";
 import { journalAutoCardUsesSafe, type AutoCardUse } from "@/lib/pricing/auto-card-journal";
 import { autoWriteIntentsTx } from "./autowrite";
+import { readCardPhoto, cardStrategyFromEnv } from "./card-ocr";
+import type { CardEngine, CardEngineName } from "./card-engines";
+import { resolveCardPhoto, type CardInput } from "./card-resolve";
+import { deleteMediaEvidence, loadMediaEvidence } from "./media";
 import { applySourceChangeTx, staleEditedPendingIds } from "./source-change";
 
 const WA_MAX_ATTEMPTS = 3;
@@ -27,6 +31,8 @@ export interface RunContext {
   index: GuardMatchIndex;
   /** 測試／特殊用途注入；冇就用 waLlmChain()。 */
   llm?: LlmClient[];
+  /** WA-8：測試注入工卡辨識引擎（冇＝createEngine 真引擎） */
+  cardEngines?: Partial<Record<CardEngineName, CardEngine>>;
 }
 
 export type ProcessOutcome = "skipped" | "ignored" | "routed" | "retry" | "error" | "stale";
@@ -175,6 +181,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     senderKnown: msg.senderGuardId !== null,
     threshold: group?.filterThreshold ?? null,
     mediaType: msg.mediaType ?? null,
+    cardPhotoMode: group?.cardPhotoMode ?? false,
   });
   if (filtered.decision === "ignore") {
     const reason = filtered.reasons.includes("group_unbound") ? "group_unbound" : filtered.reasons.includes("group_ignored") ? "group_ignored" : "filtered_out";
@@ -182,66 +189,126 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
   }
   if (!group) return ignoreNow("group_unbound", 0, ["group_unbound"]);
 
-  // ---- 第 1 層：LLM
-  const shiftTable: Array<{ code: string; label: string | null; time: string | null }> = [];
-  if (group.kind === "site" && group.siteId) {
-    const types = await prisma.shiftType.findMany({ where: { siteId: group.siteId, voidedAt: null }, select: { code: true, label: true, startTime: true, endTime: true }, orderBy: [{ code: "asc" }] });
-    for (const t of types) {
-      const slot = shiftTypeTimeSlot(t.startTime, t.endTime);
-      shiftTable.push({ code: t.code, label: t.label, time: slot ? `${slot.slice(0, 2)}:${slot.slice(2, 4)}-${slot.slice(5, 7)}:${slot.slice(7, 9)}` : null });
-    }
-  }
-  const leaveWordMap = (group.leaveWordMap && typeof group.leaveWordMap === "object" && !Array.isArray(group.leaveWordMap) ? group.leaveWordMap : {}) as Record<string, string>;
-  const wordMap = (group.shiftWordMap && typeof group.shiftWordMap === "object" && !Array.isArray(group.shiftWordMap) ? group.shiftWordMap : {}) as Record<string, string>;
-
-  let parsed;
-  try {
-    parsed = await parseMessage({ text: msg.text, ts: msg.ts, groupKind: group.kind, shiftTable, wordMap, quotedText }, ctx.llm);
-  } catch (e) {
-    return failAttempt(msg.id, rev, e instanceof LlmUnavailableError ? "llm_unavailable" : "parse_failed");
-  }
-  stats.llmIn += parsed.usage.tokensIn;
-  stats.llmOut += parsed.usage.tokensOut;
-  const llmFields = { llmProvider: parsed.usage.provider, llmModel: parsed.usage.model, llmTokensIn: parsed.usage.tokensIn, llmTokensOut: parsed.usage.tokensOut };
-
-  if (parsed.ok && parsed.output.noise && parsed.output.intents.length === 0) {
-    return ignoreNow("llm_noise", filtered.score, filtered.reasons, { ...llmFields, parsedJson: toJson(parsed.output) });
-  }
-
-  // ---- 程式碼配對
+  // ---- WA-8：工卡相（群組開咗 card_photo_mode + 圖片訊息）：辨識 → 歸屬（唔經 LLM 解析文字）
+  const cardMode = group.cardPhotoMode && (msg.mediaType === "image" || msg.mediaType === "unknown");
   let resolved: ResolvedIntent[];
-  try {
-    const intents: ParsedIntent[] = parsed.ok ? parsed.output.intents : [];
-    const resolveCtx = {
-      ts: msg.ts,
-      group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wordMap, leaveWordMap, autoWrite: group.autoWrite },
-      senderGuardId: msg.senderGuardId,
-      senderTelNorm: msg.senderTelNorm,
-      sites: ctx.sites,
-      index: ctx.index,
-      repo: createPrismaResolveRepo(staleIds),
-    };
-    if (!parsed.ok || intents.length === 0) {
-      const reason = parsed.ok ? "llm_no_intent" : "llm_bad_output";
-      resolved = [
-        {
-          kind: "unclear",
-          workDate: null,
-          siteId: null,
-          guardId: null,
-          shiftTypeId: null,
-          leaveCode: null,
-          hours: null,
-          confidence: 0,
-          resolution: { type: "unclear", reasons: ["unclear"], notes: [reason], basis: {}, candidates: {}, group_id: group.id, group_auto_write: group.autoWrite },
-          routed: "triage",
+  let parsedJson: Prisma.InputJsonValue;
+  let llmFields: Prisma.WhatsappMessageUncheckedUpdateManyInput = {};
+  if (cardMode) {
+    try {
+      const wm = (group.shiftWordMap && typeof group.shiftWordMap === "object" && !Array.isArray(group.shiftWordMap) ? group.shiftWordMap : {}) as Record<string, string>;
+      const lw = (group.leaveWordMap && typeof group.leaveWordMap === "object" && !Array.isArray(group.leaveWordMap) ? group.leaveWordMap : {}) as Record<string, string>;
+      const evd = msg.mediaState === "stored" ? await loadMediaEvidence(msg.messageId) : null;
+      let input: CardInput;
+      let meta: Record<string, unknown>;
+      let tin = 0;
+      let tout = 0;
+      const strategy = cardStrategyFromEnv();
+      if (!evd) {
+        input = { kind: "dead", why: "expired" };
+        meta = { kind: "expired" };
+      } else {
+        const photo = await readCardPhoto(evd.bytes, { strategy, ...(ctx.cardEngines ? { engines: ctx.cardEngines } : {}) });
+        input = { kind: "photo", photo };
+        for (const u of photo.usage) {
+          tin += u.promptTokens;
+          tout += u.completionTokens;
+        }
+        // 只記計數／引擎名／token——絕不記工號、姓名、圖片內容
+        meta = {
+          kind: photo.kind,
+          strategy,
+          cards: photo.cards.length,
+          confirmed: photo.cards.filter((c) => c.status === "confirmed").length,
+          review: photo.cards.filter((c) => c.status === "review").length,
+          arbiter: photo.arbiter_used ? strategy : null,
+          engines: photo.engines,
+          usage: photo.usage.map((u) => ({ engine: u.engine, model: u.model, prompt: u.promptTokens, completion: u.completionTokens })),
+        };
+      }
+      stats.llmIn += tin;
+      stats.llmOut += tout;
+      llmFields = { llmProvider: "card", llmModel: strategy, llmTokensIn: tin, llmTokensOut: tout };
+      parsedJson = toJson({ card: meta });
+      resolved = await resolveCardPhoto({
+        ctx: {
+          ts: msg.ts,
+          group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wm, leaveWordMap: lw, autoWrite: group.autoWrite },
+          senderGuardId: msg.senderGuardId,
+          senderTelNorm: msg.senderTelNorm,
+          sites: ctx.sites,
+          index: ctx.index,
+          repo: createPrismaResolveRepo(staleIds),
         },
-      ];
-    } else {
-      resolved = await resolveIntents(intents, resolveCtx);
+        input,
+        mediaId: evd?.id ?? null,
+      });
+    } catch {
+      return failAttempt(msg.id, rev, "card_failed");
     }
-  } catch {
-    return failAttempt(msg.id, rev, "resolve_failed");
+  } else {
+    // ---- 第 1 層：LLM
+    const shiftTable: Array<{ code: string; label: string | null; time: string | null }> = [];
+    if (group.kind === "site" && group.siteId) {
+      const types = await prisma.shiftType.findMany({ where: { siteId: group.siteId, voidedAt: null }, select: { code: true, label: true, startTime: true, endTime: true }, orderBy: [{ code: "asc" }] });
+      for (const t of types) {
+        const slot = shiftTypeTimeSlot(t.startTime, t.endTime);
+        shiftTable.push({ code: t.code, label: t.label, time: slot ? `${slot.slice(0, 2)}:${slot.slice(2, 4)}-${slot.slice(5, 7)}:${slot.slice(7, 9)}` : null });
+      }
+    }
+    const leaveWordMap = (group.leaveWordMap && typeof group.leaveWordMap === "object" && !Array.isArray(group.leaveWordMap) ? group.leaveWordMap : {}) as Record<string, string>;
+    const wordMap = (group.shiftWordMap && typeof group.shiftWordMap === "object" && !Array.isArray(group.shiftWordMap) ? group.shiftWordMap : {}) as Record<string, string>;
+
+    let parsed;
+    try {
+      parsed = await parseMessage({ text: msg.text, ts: msg.ts, groupKind: group.kind, shiftTable, wordMap, quotedText }, ctx.llm);
+    } catch (e) {
+      return failAttempt(msg.id, rev, e instanceof LlmUnavailableError ? "llm_unavailable" : "parse_failed");
+    }
+    stats.llmIn += parsed.usage.tokensIn;
+    stats.llmOut += parsed.usage.tokensOut;
+    llmFields = { llmProvider: parsed.usage.provider, llmModel: parsed.usage.model, llmTokensIn: parsed.usage.tokensIn, llmTokensOut: parsed.usage.tokensOut };
+    parsedJson = parsed.ok ? toJson(parsed.output) : toJson({ error: parsed.error });
+
+    if (parsed.ok && parsed.output.noise && parsed.output.intents.length === 0) {
+      return ignoreNow("llm_noise", filtered.score, filtered.reasons, { ...llmFields, parsedJson: toJson(parsed.output) });
+    }
+
+    // ---- 程式碼配對
+    try {
+      const intents: ParsedIntent[] = parsed.ok ? parsed.output.intents : [];
+      const resolveCtx = {
+        ts: msg.ts,
+        group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wordMap, leaveWordMap, autoWrite: group.autoWrite },
+        senderGuardId: msg.senderGuardId,
+        senderTelNorm: msg.senderTelNorm,
+        sites: ctx.sites,
+        index: ctx.index,
+        repo: createPrismaResolveRepo(staleIds),
+      };
+      if (!parsed.ok || intents.length === 0) {
+        const reason = parsed.ok ? "llm_no_intent" : "llm_bad_output";
+        resolved = [
+          {
+            kind: "unclear",
+            workDate: null,
+            siteId: null,
+            guardId: null,
+            shiftTypeId: null,
+            leaveCode: null,
+            hours: null,
+            confidence: 0,
+            resolution: { type: "unclear", reasons: ["unclear"], notes: [reason], basis: {}, candidates: {}, group_id: group.id, group_auto_write: group.autoWrite },
+            routed: "triage",
+          },
+        ];
+      } else {
+        resolved = await resolveIntents(intents, resolveCtx);
+      }
+    } catch {
+      return failAttempt(msg.id, rev, "resolve_failed");
+    }
+
   }
 
   // ---- 落結果（單一 transaction；訊息期間被編輯／撤回 → stale，下一輪用新 revision 重來）
@@ -259,7 +326,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
         ignoreReason: null,
         filterScore: filtered.score,
         filterReasons: filtered.reasons,
-        parsedJson: parsed.ok ? toJson(parsed.output) : toJson({ error: parsed.error }),
+        parsedJson,
         parseAttempts: 0,
         error: null,
         ...llmFields,
@@ -301,6 +368,8 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     return "routed" as const;
   });
   if (outcome === "routed" && autoCardUses.length > 0) await journalAutoCardUsesSafe(autoCardUses);
+  // WA-8：工卡相——冇任何分流題（全部自動寫入／已存在）就即時刪加密暫存圖；有題先留畀人睇（答完／TTL 先刪）
+  if (outcome === "routed" && cardMode && !resolved.some((r) => r.routed === "triage")) await deleteMediaEvidence([msg.messageId]).catch(() => 0);
   const made = tri as WaTriageResult | null;
   if (outcome === "routed" && made && made.created > 0 && made.sessionId && made.ownerUserId) await notifyWaTriage(made.ownerUserId, made.sessionId, made.created, msg.ts);
   if (outcome === "routed") {
