@@ -12,6 +12,7 @@ import { kickerFor } from "@/lib/nav/schema";
 interface Metrics {
   received: number;
   filtered: number;
+  filtered_media_only: number;
   parsed: number;
   auto_judged: number;
   auto_written: number;
@@ -41,6 +42,7 @@ interface MetricsRes {
 const FIELDS: Array<[keyof Metrics, string]> = [
   ["received", "收訊"],
   ["filtered", "過濾"],
+  ["filtered_media_only", "其中純圖片"],
   ["parsed", "解析"],
   ["auto_judged", "建議自動"],
   ["auto_written", "實際自動寫入"],

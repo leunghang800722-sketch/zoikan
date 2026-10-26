@@ -12,6 +12,8 @@ const MAX_GROUPS = 30;
 interface WaMetrics {
   received: number;
   filtered: number;
+  /** WA-7：filtered 之中純圖片（media_only） */
+  filtered_media_only: number;
   parsed: number;
   /** 解析後判定「建議自動」嘅 intent 數 */
   auto_judged: number;
@@ -53,6 +55,7 @@ function pick(s: WaStats, tokens: { in: number; out: number }, triage: { opened:
   return {
     received: s.received,
     filtered: s.filtered,
+    filtered_media_only: s.filtered_media_only,
     parsed: s.parsed,
     auto_judged: s.auto_write,
     auto_written: s.auto_results.written,

@@ -133,7 +133,7 @@ describe("W5 健康 job：WAHA session 狀態", () => {
   });
 });
 
-describe("W5 健康 job：工作日冇訊息（S1：只計工作時段）", () => {
+describe("W5 健康 job：工作日冇訊息（WA-7：自當日 07:00、每日一次、標題按 WAHA 狀態）", () => {
   beforeEach(async () => {
     delete process.env.WAHA_BASE_URL;
     await prisma.whatsappGroup.createMany({
@@ -143,30 +143,46 @@ describe("W5 健康 job：工作日冇訊息（S1：只計工作時段）", () =
       ],
     });
   });
-  const run = (now: Date) => runWhatsappHealth(now, { force: true });
-  const silent = async () => (await alerts()).filter((n) => n.title.includes("可能斷線"));
+  const run = (now: Date, fetchImpl?: typeof fetch) => runWhatsappHealth(now, { force: true, ...(fetchImpl ? { fetchImpl } : {}) });
+  const silent = async () => (await alerts()).filter((n) => n.title.includes("今日靜默") || n.title.includes("橋接異常"));
   const hk = (d: string, hhmm: string) => new Date(`${d}T${hhmm}:00+08:00`);
 
-  it("星期一 22:00 最後訊息 → 星期二 07:00／12:00 唔報、13:00 報；同一次故障唔重覆；有新訊息再靜 6h 再報", async () => {
+  it("昨晚有訊息、今日 07:00 後冇 → 13:00 前唔報、13:00 報；同日唔重覆；明日（仍冇訊息）再報一次", async () => {
     await mkMsg(G1, "w5-s1", { createdAt: hk("2026-10-19", "22:00") });
     for (const t of ["07:00", "09:00", "12:00", "12:59"]) expect((await run(hk("2026-10-20", t))).summary, t).toMatchObject({ silence_alerted: false });
     expect((await run(hk("2026-10-20", "13:00"))).summary).toMatchObject({ silence_alerted: true });
-    expect((await run(hk("2026-10-20", "13:15"))).summary).toMatchObject({ silence_alerted: false });
-    expect((await run(hk("2026-10-20", "18:00"))).summary).toMatchObject({ silence_alerted: false });
+    for (const t of ["13:15", "18:00", "22:45"]) expect((await run(hk("2026-10-20", t))).summary, t).toMatchObject({ silence_alerted: false });
     expect(await silent()).toHaveLength(1);
-    // 15:00 有訊息到達 → 重設；之後 21:00 前仍有訊息在 6h 內（since＝15:00）唔報
-    await mkMsg(G1, "w5-s2", { createdAt: hk("2026-10-20", "15:00") });
-    expect((await run(hk("2026-10-20", "20:59"))).summary).toMatchObject({ silence_alerted: false });
-    expect((await run(hk("2026-10-20", "21:01"))).summary).toMatchObject({ silence_alerted: true });
-    expect((await run(hk("2026-10-20", "22:00"))).summary).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-21", "14:00"))).summary).toMatchObject({ silence_alerted: true });
     expect(await silent()).toHaveLength(2);
   });
 
-  it("當日 07:00 後已有訊息 → 13:00 唔報；since＝max(當日 07:00, now−6h)", async () => {
+  it("去掉 now−6h：07:30 已有訊息 → 下晝即使隔咗 6 小時以上都唔報（早上報完更下晝靜默唔誤報）", async () => {
     await mkMsg(G1, "w5-a", { createdAt: hk("2026-10-20", "07:30") });
-    expect((await run(hk("2026-10-20", "13:00"))).summary).toMatchObject({ silence_alerted: false });
-    expect((await run(hk("2026-10-20", "13:29"))).summary).toMatchObject({ silence_alerted: false });
-    expect((await run(hk("2026-10-20", "13:31"))).summary).toMatchObject({ silence_alerted: true });
+    for (const t of ["13:00", "13:31", "15:00", "22:59"]) expect((await run(hk("2026-10-20", t))).summary, t).toMatchObject({ silence_alerted: false });
+    expect(await silent()).toHaveLength(0);
+    // 07:00 之前（昨晚）嘅訊息唔算今日
+    expect((await run(hk("2026-10-21", "14:00"))).summary).toMatchObject({ silence_alerted: true });
+  });
+
+  it("標題按 WAHA 狀態：WORKING＝「WhatsApp 群組今日靜默」（講 WAHA 正常）；唔係 WORKING＝「WhatsApp 橋接異常」；查唔到＝靜默但唔講 WAHA 正常", async () => {
+    process.env.WAHA_BASE_URL = "http://waha.test:3000";
+    process.env.WAHA_API_KEY = "fake-waha-key";
+    process.env.WAHA_SESSION = "default";
+    await run(hk("2026-10-20", "14:45"), wahaFetch("WORKING"));
+    const ok = (await silent())[0]!;
+    expect(ok.title).toBe("WhatsApp 群組今日靜默");
+    expect(ok.title).not.toContain("斷線");
+    expect(ok.body).toContain("WAHA 正常");
+    expect(ok.body).toContain("只係今日");
+    await run(hk("2026-10-21", "14:45"), wahaFetch("FAILED"));
+    const bad = (await silent()).find((n) => n.title === "WhatsApp 橋接異常" && n.body.includes("今日 07:00 起未收到"));
+    expect(bad).toBeTruthy();
+    delete process.env.WAHA_BASE_URL;
+    await run(hk("2026-10-22", "14:45"));
+    const unknown = (await silent()).find((n) => n.body.includes("未能確認 WAHA 狀態"))!;
+    expect(unknown.title).toBe("WhatsApp 群組今日靜默");
+    expect(unknown.body).not.toContain("WAHA 正常");
   });
 
   it("任何狀態嘅訊息都算；只有「略過」群有訊息唔算；停用／冇綁定群 → 唔檢查", async () => {
@@ -178,16 +194,10 @@ describe("W5 健康 job：工作日冇訊息（S1：只計工作時段）", () =
     expect((await run(hk("2026-10-22", "14:00"))).summary).toMatchObject({ silence_alerted: false });
   });
 
-  it("從未收過訊息 → 每日一次（13:00 起）", async () => {
-    expect((await run(hk("2026-10-20", "13:00"))).summary).toMatchObject({ silence_alerted: true });
-    expect((await run(hk("2026-10-20", "15:00"))).summary).toMatchObject({ silence_alerted: false });
-    expect((await run(hk("2026-10-21", "13:00"))).summary).toMatchObject({ silence_alerted: true });
-  });
-
-  it("星期日、23:00 後、13:00 前唔檢查", async () => {
+  it("星期日、23:00 後、13:00 前唔檢查；星期六照檢查", async () => {
     for (const t of [hk("2026-10-18", "14:00"), hk("2026-10-20", "23:00"), hk("2026-10-20", "12:59"), hk("2026-10-20", "07:00")]) expect((await run(t)).summary).toMatchObject({ silence_alerted: false });
     expect(await silent()).toHaveLength(0);
-    expect((await run(hk("2026-10-17", "14:00"))).summary).toMatchObject({ silence_alerted: true }); // 星期六照檢查
+    expect((await run(hk("2026-10-17", "14:00"))).summary).toMatchObject({ silence_alerted: true });
   });
 });
 

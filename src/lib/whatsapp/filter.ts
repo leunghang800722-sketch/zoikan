@@ -18,6 +18,8 @@ export interface FilterInput {
   senderKnown?: boolean;
   /** 群組層覆寫閾值；冇就預設 40。 */
   threshold?: number | null;
+  /** WA-7：媒體類型（image／video／application…；冇媒體＝null）。有媒體而冇文字／caption → reason media_only。 */
+  mediaType?: string | null;
 }
 
 export interface FilterResult {
@@ -74,6 +76,11 @@ export function scoreMessage(input: FilterInput): FilterResult {
   }
 
   const text = norm(input.text ?? "");
+  // WA-7：有媒體（圖片／影片／文件…）而冇文字／caption → 獨立原因碼 media_only（圖片唔解析，設計如此，要打字），唔再混入 too_short
+  if (input.mediaType && text.length < 2) {
+    reasons.push("media_only");
+    return { score: 0, reasons, decision: "ignore" };
+  }
   if (text.length < 2) {
     reasons.push("too_short");
     return { score: 0, reasons, decision: "ignore" };

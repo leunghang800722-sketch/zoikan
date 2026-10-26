@@ -6,6 +6,7 @@ import { ok, withApiError } from "@/lib/api/http";
 import { BadRequest } from "@/lib/api/errors";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import type { Prisma } from "@prisma/client";
+import { hkDateOf } from "@/lib/whatsapp/dates";
 
 const STATUSES = ["received", "filtered", "parsed", "routed", "done", "ignored", "error", "revoked"] as const;
 type Status = (typeof STATUSES)[number];
@@ -32,13 +33,19 @@ export async function GET(req: Request) {
       orderBy: [{ ts: "desc" }, { id: "asc" }],
       take,
       select: {
-        id: true, chatJid: true, ts: true, status: true, ignoreReason: true, filterScore: true, revision: true, editedAt: true, revokedAt: true,
+        id: true, chatJid: true, ts: true, status: true, ignoreReason: true, filterScore: true, filterReasons: true, revision: true, editedAt: true, revokedAt: true,
         redactedAt: true, mediaType: true, senderTelNorm: true, text: true, senderGuard: { select: { nameZh: true } },
       },
     });
     const jids = [...new Set(rows.map((r) => r.chatJid))];
     const groups = await prisma.whatsappGroup.findMany({ where: { groupJid: { in: jids } }, select: { id: true, groupJid: true, label: true } });
     const gBy = new Map(groups.map((g) => [g.groupJid, g]));
+    // WA-7：分流行 →「去答題」：session（sourceType whatsapp、sourceRef `<group_jid>:<YYYY-MM>`，月＝訊息香港日所屬月）；冇「導入分診」view 權就唔回 id
+    const refOf = (r: { chatJid: string; ts: Date }) => `${r.chatJid}:${hkDateOf(r.ts).slice(0, 7)}`;
+    const routedRefs = [...new Set(rows.filter((r) => r.status === "routed").map(refOf))];
+    const canTriage = routedRefs.length > 0 && (await hasPermission(actor, "導入分診", "view"));
+    const sessions = canTriage ? await prisma.triageSession.findMany({ where: { sourceType: "whatsapp", sourceRef: { in: routedRefs } }, select: { id: true, sourceRef: true } }) : [];
+    const sBy = new Map(sessions.map((s) => [s.sourceRef, s.id]));
     const out = rows.map((r) => {
       const tail = r.senderTelNorm ? r.senderTelNorm.slice(-4) : null;
       const sender = showNames && r.senderGuard ? r.senderGuard.nameZh : tail ? `…${tail}` : "未知";
@@ -51,6 +58,8 @@ export async function GET(req: Request) {
         sender,
         status: r.status,
         ignore_reason: r.ignoreReason,
+        filter_reasons: Array.isArray(r.filterReasons) ? (r.filterReasons as unknown[]).filter((x): x is string => typeof x === "string") : [],
+        triage_session_id: r.status === "routed" ? (sBy.get(refOf(r)) ?? null) : null,
         filter_score: r.filterScore,
         revision: r.revision,
         edited: r.editedAt !== null,

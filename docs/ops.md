@@ -468,7 +468,7 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 
 **告警（`whatsapp_health` job，每 15 分鐘，`/settings/jobs` 可見；通知類別「WhatsApp 橋接異常／斷線／積壓」，通知設定可關 email）**
 - 「WhatsApp 橋接異常：…」＝WAHA session 唔係 WORKING。同一次故障同一狀態 6 小時最多提醒一次；恢復後會有一條「已恢復」，之後再出事（即使喺 6 小時內）會再提醒。
-- 「WhatsApp 橋接可能斷線」＝週一至六香港 13:00–23:00 先檢查：所有已綁定（啟用、非「略過」）群，自「當日 07:00 同現在減 6 小時之中較遲者」起冇收到任何訊息。即係只計工作時段內嘅靜默，前一晚到早上嘅無訊息唔會誤報。每次故障只報一條，有新訊息到達即重設，下次再靜就再報。
+- 「WhatsApp 群組今日靜默」／「WhatsApp 橋接異常」（WA-7 起取代「橋接可能斷線」，口徑見文末 WA-7 一節）：週一至六香港 13:00–23:00 先檢查，自當日 07:00 起冇收到任何訊息；每日最多一條。
 - 「WhatsApp 解析積壓」＝待解析超過 200 條，或最舊一條等超過 30 分鐘：先睇「WhatsApp 報更解析＋自動寫入」job 有冇出錯（`/settings/jobs`）、AI 服務（`DEEPSEEK_API_KEY`／AI Hub）連唔連得到；job 每分鐘自動重試，3 次失敗嘅訊息會標「錯誤」。
 
 **被封號／session 失敗（FAILED）後點做**
@@ -642,3 +642,9 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **(c)** 併入說明按實際 pagesByKind 寫，例：「由 2 頁銀行文件產生嘅空記錄，已自動併入 U01095」。
 - 舊題收題由 proposals import **拆出**：`POST /api/triage/sessions/:id/ghost-close`——**預設 dry run**（只回 `question_ids`／`count`），`?dry_run=0` 先真收（標 `superseded`）；每條被收嘅題逐條 audit `triage_ghost_close`（`question_id`、`person_key`、`rule=ghost_staffno_shared_v2`）。proposals import 唔再收題（`ghost_questions_closed` 已移除）。同一套 (a)(b) 限制：舊題 evidence 冇 `listHkids` 就唔收。
 - 舊題（options 冇 `enter_hkid`）揀 keep：reason_text＝「請揀『唔係呢個人嘅（剔走）』，或者喺人卡補身份證後重新導入」。
+
+### WA-7：WhatsApp 運維微調
+
+- **訊息清單**（`/whatsapp`）：狀態篩選加「分流／已過濾／已解析／已完成」（`status=routed|filtered|parsed|done`）；分流行出「去答題」→ `/triage?open=<session>`（session＝`sourceType=whatsapp`、`sourceRef=<group_jid>:<YYYY-MM>`，月＝訊息香港日所屬月；API `triage_session_id`，要有「導入分診」view 權先回）；略過行顯示原因中文（`filter_reasons`：`media_only`／`too_short`／`emoji_only`／`group_unbound`／`group_ignored`；`ignore_reason`：`llm_noise`、`filtered_out` 等）。
+- **圖片訊息獨立原因碼 `media_only`**：訊息有媒體（image／video／document／audio…，`media_type` 非空）而冇文字／caption → 過濾層 reason `media_only`（score 0、ignore），唔再混入 `too_short`。指標 `filtered_media_only`（整體＋按群）；指標頁「其中純圖片」。**圖片唔解析（設計），保安員要打字報更**；系統冇發訊／自動回覆能力，維持被動，唔提示發訊人。
+- **靜默告警口徑（`whatsapp_health`）**：條件改為「自當日 07:00（香港）起已綁定群組冇任何訊息」（去掉 now−6h，避免早上報完更、下晝靜默誤報）；香港週一至六 13:00–23:00 檢查；**每日最多一條**（dedupe key＝香港日期）。標題：WAHA＝WORKING →「WhatsApp 群組今日靜默」，內文「WAHA 正常，只係今日未收到任何訊息，如果群組有人發過訊息請檢查…」；WAHA 唔係 WORKING →「WhatsApp 橋接異常」；查唔到 WAHA 狀態 → 「群組今日靜默」但唔講 WAHA 正常。
