@@ -665,3 +665,13 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 開咗：webhook 落庫嗰個 request 內即時 `fetchMedia`（timeout 10 秒、≤8MB、只收 JPEG／PNG magic bytes；失敗唔阻落庫、照回 200），bytes 即時 AES-256-GCM 加密寫入 `whatsapp_media_evidence`（key 同 triage 證據圖一樣由 SESSION_SECRET HKDF；TTL 7 日；`whatsapp_retention` 每日清過期；答題後刪）。唔寫檔案系統、唔 log、圖片內容唔入 audit。
 - 拉唔到（冇 `media.url`／`media.error`／過期／404／唔係圖）→ 訊息 `media_state='expired'`，之後出分流題「相片已過期，請再 send」。成功 → `media_state='stored'`。
 - DB 只存加密圖同 `media_state`；`media.url`／檔名唔落 DB。
+
+### WA-8 B：工卡辨識引擎與策略（成本優先，Claude 唔做主力）
+
+- **引擎**（`src/lib/whatsapp/card-engines.ts`，同一介面：一張相 → 0..n 張卡 `{is_card, staff_no, name_zh, name_en, confidence}`，另回 token usage）：
+  `tesseract`（本機 child_process，零成本；Dockerfile runner 階段已 `apt-get install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng`；冇 binary → unavailable；env `TESSERACT_BIN`／`TESSERACT_LANGS`；前處理：自動旋轉、放大到長邊 1600、灰階＋正規化、二值化後再用 A-Z0-9 白名單第二次 OCR 專攻工號）｜`deepseek`（deepseek-flash）｜`haiku`（Claude Haiku 5.5，env `WA_CARD_HAIKU_MODEL` 預設 `claude-haiku-5-5`）｜`qwen`（阿里 Model Studio，OpenAI 相容；env `QWEN_API_KEY`、`QWEN_BASE_URL` 預設 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`、`QWEN_VL_MODEL` 預設 `qwen-vl-ocr`；輸出可能係純文字 → 容錯解析：先 JSON，失敗用正則抽工號；純文字冇工號唔當工卡）｜`claude`（Opus，只做仲裁）。
+  送模型嘅圖統一壓到長邊 ≤1000（sharp 可選；冇 sharp 且係 JPEG 就原圖，唔係 JPEG 就該引擎 failed）。key 只由 env 讀，唔寫檔案／log；冇 key＝unavailable。
+- **工號格式**：`U\d{5}｜MP\d{4}｜MG\d{4}｜MW\d{4}`；不合格式一律當讀唔到（唔猜）。
+- **策略**（env `WA_CARD_OCR_STRATEGY`，預設 `S1`；bench 結果出咗再定）：S1 tesseract+deepseek→claude｜S2 tesseract+deepseek→haiku｜S3 deepseek+haiku→claude｜S4 tesseract+qwen→haiku｜S5 qwen+deepseek→claude。
+  兩個便宜引擎各讀一次：工號一致 → confirmed（零仲裁成本）；唔一致／其中一個失敗 → 仲裁引擎讀一次（三取二，≥2 票 confirmed）；單票或三個都唔同 → review（出分流題，帶候選工號）；兩個都話冇卡 → `not_card`（唔仲裁）；單票讀數同已確認工號只差 ≤2 位數字（同前綴同長度）視為同一張卡嘅誤讀，唔另開卡。一張相多張卡逐個工號判定。冇工號但讀到姓名 → review（`card_name_only`）。完全冇 caption 以外嘅文字推斷（辨識唔睇 caption）。
+- **基準測試**（離線、只讀、唔寫 DB）：`npx tsx scripts/whatsapp/card-ocr-bench.ts --dir <相片夾> --truth <truth.csv> --engines tesseract,deepseek,haiku,qwen,claude --qwen-models qwen-vl-ocr,qwen3-vl-plus [--strategies S1,S2,S3,S4,S5] [--out data/…/report.json]`；`--dry` 用合成 fixture（假引擎）。truth.csv：`file,staff_nos`（多張卡用 `|`；空＝相入面冇卡）。每個引擎出 exact／review／wrong／unreadable＋每張平均 prompt／completion tokens；每個策略出 exact／review／confirmed_wrong／unreadable＋仲裁觸發比例＋token（按 provider:model）。輸出淨係計數，唔印工號／姓名／檔名。**上線門檻：工號 exact ≥90%、confirmed-but-wrong 0。**

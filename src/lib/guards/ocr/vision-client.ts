@@ -16,6 +16,8 @@ export interface VisionRequest {
   boxFields?: readonly string[];
   /** OCR-5.6：覆蓋預設 output token 上限（撞頂重試用；Claude client 忽略） */
   maxTokens?: number;
+  /** WA-8：Claude structured output 用嘅自訂 JSON schema（工卡辨識）；冇＝用證件欄位 schema。DeepSeek 忽略。 */
+  jsonSchema?: Record<string, unknown>;
 }
 export interface VisionResponse {
   text: string;

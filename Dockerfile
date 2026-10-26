@@ -18,6 +18,8 @@ RUN npx prisma generate && npm run build
 
 FROM base AS runner
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080 HOSTNAME=0.0.0.0
+# WA-8：工卡相本機 OCR（tesseract；零成本引擎）。冇 binary 時引擎回 unavailable，不影響其他功能。
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng && rm -rf /var/lib/apt/lists/*
 # runtime 只需要 standalone 輸出＋prisma CLI 做 migrate deploy
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
