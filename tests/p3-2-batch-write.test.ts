@@ -1,5 +1,6 @@
 // P3-2.5：shift-records/batch 批量化——結果／audit 內容同逐格寫法一致；查詢數唔隨格數增長；
 // payload 重複格行返舊路徑；quota 警示 groupBy 同逐個 count 一致。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const queries = await vi.hoisted(async () => {
@@ -127,7 +128,7 @@ describe("P3-2.5 shift-records/batch 批量寫入", () => {
 
   it("settlement broker fallback：prefetch（DISTINCT ON）同逐個 resolve 逐級一致", async () => {
     const mkGuard = (name: string, extra: Record<string, unknown> = {}) =>
-      prisma.guard.create({ data: { nameZh: name, tel: `65${Math.floor(Math.random() * 1e6)}`, createdBy: "t", employmentType: "cash_casual", ...extra } as never });
+      prisma.guard.create({ data: { nameZh: name, tel: fakeTel(), createdBy: "t", employmentType: "cash_casual", ...extra } as never });
     const ltBroker = await prisma.broker.create({ data: { code: "LTX", name: "LT", kind: "internal_longterm", isInternal: true, settlementType: "autopay", createdBy: "t" } as never });
     const otherSite = await prisma.site.create({ data: { canonicalName: "另一個盤", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
     const otherSt = await prisma.shiftType.create({ data: { siteId: otherSite.id, code: "N", createdBy: "t" } });

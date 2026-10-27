@@ -7,7 +7,7 @@ import { rosterFileNameStem, matchSiteByFileName, resolveRosterUploadSite, type 
 describe("WP-UPLOAD-AUTOFIX 個案 1：rosterFileNameStem()", () => {
   it("6 種真實檔名格式都正規化得啱", () => {
     expect(rosterFileNameStem("Roster - 3172 殷樺花園 - Aug 2026.xlsx")).toBe("3172 殷樺花園");
-    expect(rosterFileNameStem("Roster - CTB 6907 莫測試 U09999 Aug 2026.xlsx")).toBe("CTB 6907 莫測試 U09999");
+    expect(rosterFileNameStem("Roster - CTB 6907 莫測試 U99999 Aug 2026.xlsx")).toBe("CTB 6907 莫測試 U99999");
     expect(rosterFileNameStem("Roster - 免稅店 Aug 2026.xlsx")).toBe("免稅店");
     expect(rosterFileNameStem("Roster - 7754  Weave OL - Aug 2026.xlsx")).toBe("7754 Weave OL");
     expect(rosterFileNameStem("Roster - Wilson Patrol -  Aug 2026.xlsx")).toBe("Wilson Patrol");
@@ -22,7 +22,7 @@ describe("WP-UPLOAD-AUTOFIX 個案 1：matchSiteByFileName()", () => {
   ];
 
   it("檔名 stem 含鍵（唔分大小寫）→ 用嗰個盤", () => {
-    expect(matchSiteByFileName("Roster - CTB 6907 莫測試 U09999 Aug 2026.xlsx", candidates)).toBe("site-ic");
+    expect(matchSiteByFileName("Roster - CTB 6907 莫測試 U99999 Aug 2026.xlsx", candidates)).toBe("site-ic");
     expect(matchSiteByFileName("Roster - ctb 6907 Aug 2026.xlsx", candidates)).toBe("site-ic");
   });
 
@@ -43,7 +43,7 @@ describe("Opus 5.5 驗收：檔名鍵字詞邊界／全形／最長鍵贏／設�
     const c = [mk("s615", ["615"]), mk("s6907", ["6907"])];
     expect(matchSiteByFileName("Roster - 9615 數碼港 - Aug 2026.xlsx", c)).toBeNull();
     expect(matchSiteByFileName("Roster - 9615 數碼港 CP5 數據中心 - Aug 2026.xlsx", c)).toBeNull();
-    expect(matchSiteByFileName("Roster - CTB 6907 莫測試 U09999 Aug 2026.xlsx", c)).toBe("s6907");
+    expect(matchSiteByFileName("Roster - CTB 6907 莫測試 U99999 Aug 2026.xlsx", c)).toBe("s6907");
     expect(matchSiteByFileName("Roster - 615 測試盤 - Aug 2026.xlsx", c)).toBe("s615");
   });
 

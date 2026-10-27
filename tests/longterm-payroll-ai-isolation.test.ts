@@ -4,6 +4,7 @@
 //   (2) `ai.audit_log` 排除呢六個 table_name（原本冇排除——合約 audit 嘅
 //       before/after 有月薪，AI 讀得到；migration
 //       20260927190000_wp_ltpay_ai_audit_log_exclude 修正）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "pg";
 import { prisma, clearAll } from "./lib/db";
@@ -51,7 +52,7 @@ describe("WP-LTPAY：AI 隔離（zoikan_ai_ro 真連線）", () => {
   it("寫咗合約／人手輸入／重算之後，ai.audit_log 睇唔到呢六個 table_name 嘅行（主連線 public.audit_log 有）", async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     const guard = await prisma.guard.create({ data: { nameZh: "測試長工-AI隔離", employmentType: "longterm_autopay", hireDate: new Date("2024-01-01"), createdBy: "test" } });
     await prisma.guardLongtermContract.create({ data: { guardId: guard.id, monthlySalary: 15500, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: user.id } });
     await prisma.auditLog.create({ data: { actorUserId: user.id, tableName: "guard_longterm_contracts", rowId: guard.id, action: "create", after: { monthlySalary: 15500 } } });

@@ -1,4 +1,5 @@
 // EMP-P3 第 2／3 部分：人卡鏡像 syncLegacyGuardEmploymentColumns（三條規則）＋ Maxwell 導入開 MG 卡（兩情況＋離職名單）＋ 長工 gate 延伸到 staffHire.MG*。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -140,7 +141,7 @@ describe("EMP-P3 Maxwell 導入開 MG 卡", () => {
   beforeEach(async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    actor = (await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } })).id;
+    actor = (await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } })).id;
     await prisma.staffScheme.upsert({ where: { code: "MG" }, update: { isLongterm: true }, create: { code: "MG", labelZh: "MG", isLongterm: true, isFrontline: false, sort: 3 } });
   });
 

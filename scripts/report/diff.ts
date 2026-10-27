@@ -64,7 +64,7 @@ function leadingNumber(v: unknown): number {
 // 呢個 site 嘅成本／盈利同 P0 呢兩個歷史數之間必然多咗 21,250（25更×850）
 // ——呢個係「DB 啱、P0 漏」，降級做 known，唔算 fail；差額唔啱好呢個
 // 精確數值就照舊 fail（唔會因為呢個表就盲目放過殷樺花園其他唔相關嘅差異）。
-const YINWAH_K_MISSING_COST = 21250; // 25 更 × 850（P0-執行計劃.md §8；master_posts.csv MP0244）
+const YINWAH_K_MISSING_COST = 21250; // 25 更 × 850（P0-執行計劃.md §8；master_posts.csv 崗位碼）
 const YINWAH_K_NOTE =
   "P0 漏價，總表外判價 850 補（2026-09-13 老闆質詢後修正：殷樺花園 K 雞頭 25 更 × 850 = 21,250，master_posts.csv property=殷樺 block「城巴車廠 12hrs (N/S)」Night，P0 糧明細/月結從未計入呢筆成本，見 scripts/seed/lib/extra-rate-cards.ts）";
 const KNOWN_MONTHLY_CLOSE_GAP: Record<string, number> = {

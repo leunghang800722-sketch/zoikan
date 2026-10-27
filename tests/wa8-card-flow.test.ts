@@ -44,6 +44,7 @@ const json = async (r: Response) => (await r.json()) as Record<string, any>;
 const openQs = (mid: string) => prisma.triageQuestion.findMany({ where: { status: "open", session: { sourceType: "whatsapp" }, evidenceJson: { path: ["message", "message_id"], equals: mid } } });
 
 beforeEach(async () => {
+  process.env.WA_CARD_OCR_STRATEGY = "S1"; // 預設已改 S6；呢批測試注入 tesseract+deepseek，釘返 S1
   await clearAll();
   await prisma.triageQuestion.deleteMany({});
   await prisma.triageSession.deleteMany({});
@@ -127,7 +128,7 @@ describe("WA-8 D 工卡相端到端", () => {
     expect((m.parsedJson as { card: { arbiter: string } }).card.arbiter).toBe("S1");
     // 第二張：三個都唔同
     await feed("c4", { ts: new Date(T0.getTime() + 5000) });
-    await run(engines(["U90001"], ["MP9999"], ["MG8888"]));
+    await run(engines(["U90001"], ["MP9999"], ["MG9888"]));
     const [q] = await openQs("c4");
     expect(["wa_person_ambiguous", "wa_person_unknown"]).toContain(q!.kind);
     expect(await recs()).toHaveLength(1);

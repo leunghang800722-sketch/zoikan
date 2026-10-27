@@ -1,4 +1,5 @@
 // TE-13 追加：ghost person（由銀行戶口等文件產生嘅空記錄）自動併入真人。全部合成資料。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser } from "./fixtures/wp2-fixture";
@@ -112,7 +113,7 @@ describe("apply／舊題收題", () => {
     await prisma.triageQuestion.deleteMany({});
     await prisma.triageSession.deleteMany({});
     const fx = await seedWp2Fixture();
-    const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+    const tel = fakeTel();
     const u = await prisma.user.create({ data: { name: "測試會計新", tel, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } });
     accountant = await sessionCookieForUser(u.id);
     owner = await sessionCookieForUser(fx.userIds["老闆"]);

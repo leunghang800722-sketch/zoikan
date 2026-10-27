@@ -3,7 +3,7 @@
 // 冇電話全號：發訊人只記保安員 id＋電話尾 4 位。
 import type { QuestionKind, QuestionOption } from "@/lib/triage/types";
 
-export type WaKind = Extract<QuestionKind, "wa_person_ambiguous" | "wa_person_unknown" | "wa_site_ambiguous" | "wa_date_ambiguous" | "wa_shift_conflict" | "wa_unparsed" | "wa_cover" | "wa_cancel" | "wa_card_confirm">;
+export type WaKind = Extract<QuestionKind, "wa_person_ambiguous" | "wa_person_unknown" | "wa_site_ambiguous" | "wa_date_ambiguous" | "wa_shift_conflict" | "wa_unparsed" | "wa_cover" | "wa_cancel" | "wa_card_confirm" | "wa_roster_mismatch">;
 export type WaIntentKind = "shift" | "leave" | "cover" | "cancel" | "unclear" | "question_only";
 
 /** WA-8：工卡相辨識資料（DB 內；工號／姓名係 PII-ish → API 層按「保安員:view」遮罩）。 */
@@ -22,6 +22,15 @@ export interface WaCardEvidence {
   arbiter: boolean;
   /** review 時畀人揀嘅候選工號 */
   candidates: string[];
+  /** WA-9：相片文件類型／相入面讀到嘅打卡時間 */
+  doc_type?: string | null;
+  time_on?: string | null;
+  time_off?: string | null;
+  /** 已確認姓名卡以外嘅單票姓名讀數（畀審核人見；唔參與配對） */
+  name_alt?: string[];
+  /** 值勤表：工號欄原樣（Wilson 純數字／手寫 L13xxxx 等，唔係 U 格式）＋行號 */
+  wilson_no?: string | null;
+  row_no?: number | null;
   /** 同一張相嘅其他卡（疑似第二張卡題用） */
   others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>;
   /** 無圖原因：expired｜not_card｜unreadable */
@@ -90,6 +99,10 @@ export interface WaEvidence {
   cover?: WaCoverEvidence;
   /** WA-8：只喺工卡相來源有 */
   card?: WaCardEvidence;
+  /** WA-9：名單／相片差異（一日一條合併題；姓名只存 DB，API 層按「保安員:view」遮罩） */
+  mismatch?: { day: string; roster_only: string[]; photo_only: string[] };
+  /** WA-9 (7)：固定 groupKey 嘅題（名單配唔到嘅名）；round 1 先用 */
+  dedupe_key?: string;
   /** 工作月（YYYY-MM-01）；鎖月檢查／session 月份用。未知日期就用訊息月。 */
   month: string;
 }
@@ -115,7 +128,7 @@ const SOFT_REASONS = new Set(["low_confidence", "daily_cap", "auto_disabled"]);
 /** WA-8：工卡相冇資料可用（過期／唔係工卡／讀唔到）→ 只可人手／忽略。 */
 const CARD_DEAD_REASONS = new Set(["card_media_expired", "card_not_card", "card_unreadable"]);
 /** WA-8：辨識／歸屬都有結果，但要人一撳確認嘅提示碼。 */
-const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "card_former_number", "card_name_only", "card_suspect_second"]);
+const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "card_former_number", "card_name_only", "card_suspect_second", "row_low_confidence", "row_misread_suspect"]);
 
 /**
  * 優先次序：unparsed > site > person > date > conflict（低信心單獨出現 → unparsed＋「照解析入更」）。
@@ -125,6 +138,7 @@ const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "car
 export function pickWaKind(reasons: readonly string[], intentKind?: WaIntentKind): WaKind {
   const has = (set: Set<string>) => reasons.some((r) => set.has(r));
   // WA-8：工卡相——冇可用資料，或者辨識全齊淨係等人一撳確認 → wa_card_confirm
+  if (reasons.includes("roster_mismatch")) return "wa_roster_mismatch";
   if (has(CARD_DEAD_REASONS)) return "wa_card_confirm";
   if (has(CARD_CONFIRM_REASONS) && reasons.every((r) => SOFT_REASONS.has(r) || CARD_CONFIRM_REASONS.has(r))) return "wa_card_confirm";
   if (has(UNPARSED_REASONS)) return "wa_unparsed";
@@ -142,6 +156,8 @@ export function pickWaKind(reasons: readonly string[], intentKind?: WaIntentKind
   return "wa_unparsed"; // low_confidence 或其他未列明
 }
 
+/** WA-9：名單／相片差異題＝一個群一日一條（唔按訊息） */
+export const rosterMismatchKey = (groupId: string, day: string): string => `rm:${groupId}:${day}`;
 export const groupKeyOf = (messageId: string, revision: number, idx: number, round: number): string => `${messageId}:${revision}:${idx}${round > 1 ? `:r${round}` : ""}`;
 
 /** 用 UTC 分鐘數做排序（舊訊息先），喺 int32 範圍內。 */
@@ -191,6 +207,8 @@ export function optionsForWa(kind: WaKind, ev: Pick<WaEvidence, "candidates" | "
         { id: "wa_manual", label: "人手處理（去排更頁）" },
         SKIP,
       ];
+    case "wa_roster_mismatch":
+      return [{ id: "wa_manual", label: "去排更頁核對（名單／相片有差異）" }, { id: "wa_ignore", label: "已核對，冇問題" }, SKIP];
     case "wa_card_confirm": {
       if (ev.reasons.some((r) => CARD_DEAD_REASONS.has(r))) return [{ id: "wa_manual", label: "人手入更（去排更頁）" }, { id: "wa_ignore", label: "忽略（唔入更）" }, SKIP];
       return [{ id: "wa_accept", label: "確認入更（待批核）" }, { id: "wa_manual", label: "人手入更（去排更頁）" }, { id: "wa_ignore", label: "忽略（唔入更）" }, SKIP];

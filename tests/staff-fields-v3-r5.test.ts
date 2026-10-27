@@ -1,5 +1,6 @@
 // WP-STAFF-FIELDS 第二階段：導入包 v3（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人／逐工號入職日期）。
 // 全部合成資料（合法 check digit hkid 由 helper 計、9100xxxx 電話、「測試」姓名、00000 開頭戶口）；唔讀 data/。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -78,7 +79,7 @@ describe("WP-STAFF-FIELDS 第五輪覆核（簡化：作廢＋重新出題，冇
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
     const mkUser = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     fx.userIds["會計"] = await mkUser("會計");
@@ -134,12 +135,12 @@ describe("WP-STAFF-FIELDS 第五輪覆核（簡化：作廢＋重新出題，冇
   });
 
   it("F3：有身份證→冇身份證淨靠工號：舊題答唔到（409），唔寫舊值", async () => {
-    const g = await mkG({ hkid: H[0]!, dateOfBirth: dobD, staffNumbers: { create: [{ scheme: "U", number: "U63001" }] } });
-    const withHk = (v: string, gen: string) => ({ ...pkg3([person({ nos: [{ n: "U63001" }], sia: { no: v, a: "2027-03-04", b: "2028-01-02", st: "review" } })]), generatedAt: gen });
+    const g = await mkG({ hkid: H[0]!, dateOfBirth: dobD, staffNumbers: { create: [{ scheme: "U", number: "U93001" }] } });
+    const withHk = (v: string, gen: string) => ({ ...pkg3([person({ nos: [{ n: "U93001" }], sia: { no: v, a: "2027-03-04", b: "2028-01-02", st: "review" } })]), generatedAt: gen });
     await applyPkg(owner, withHk("K-200001-1-001", "2026-10-01T00:00:00.000Z"));
     const old = (await prisma.triageQuestion.findMany({ where: { kind: "ext_field_review" } }))[0]!;
     const noHk = (() => {
-      const p = person({ nos: [{ n: "U63001" }], sia: { no: "K-300001-1-001", a: "2027-03-04", b: "2028-01-02", st: "review" } }) as unknown as Record<string, unknown>;
+      const p = person({ nos: [{ n: "U93001" }], sia: { no: "K-300001-1-001", a: "2027-03-04", b: "2028-01-02", st: "review" } }) as unknown as Record<string, unknown>;
       p.hkid = { value: null, status: "missing" };
       return { ...pkg3([p as never]), generatedAt: "2026-10-02T00:00:00.000Z" };
     })();
@@ -233,7 +234,7 @@ describe("WP-STAFF-FIELDS 第五輪覆核（簡化：作廢＋重新出題，冇
       const mkUser = async (role: "會計" | "主管") => (await prisma.user.create({ data: { name: `測試${role}新`, tel: `6${String(Math.floor(rnd() * 1e7)).padStart(7, "0")}`, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
       fx.userIds["會計"] = await mkUser("會計");
       owner = await sessionCookieForUser(fx.userIds["老闆"]); accountant = await sessionCookieForUser(fx.userIds["會計"]);
-      const g = await prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), createdBy: "t", staffNumbers: { create: [{ scheme: "U", number: "U63001" }, { scheme: "MP", number: "MP63001" }] } } as never });
+      const g = await prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), createdBy: "t", staffNumbers: { create: [{ scheme: "U", number: "U93001" }, { scheme: "MP", number: "MP93001" }] } } as never });
       type LV = { sia: string | null; en: string | null; linked: boolean; v3?: boolean; dup?: boolean };
       let latest: LV | null = null; let latestV3: LV | null = null;
       let gen = 0;
@@ -246,7 +247,7 @@ describe("WP-STAFF-FIELDS 第五輪覆核（簡化：作廢＋重新出題，冇
         const bank = v3 && rnd() < 0.35;
         const en = rnd() < 0.6 ? pick(EN) : null;
         const mkP = (k: string) => {
-          const p = person({ key: k, hkid: H[0]!, nos: keyMode === "nohk1" ? [{ n: "U63001" }] : [{ n: "U63001" }, { n: "MP63001" }], ...(sia ? { sia: { no: sia, a: "2027-03-04", b: "2028-01-02", st: "review" } } : {}), ...(bank ? { bank: { acct: "000099990001", st: "review" } } : {}) }) as unknown as Record<string, unknown>;
+          const p = person({ key: k, hkid: H[0]!, nos: keyMode === "nohk1" ? [{ n: "U93001" }] : [{ n: "U93001" }, { n: "MP93001" }], ...(sia ? { sia: { no: sia, a: "2027-03-04", b: "2028-01-02", st: "review" } } : {}), ...(bank ? { bank: { acct: "000099990001", st: "review" } } : {}) }) as unknown as Record<string, unknown>;
           if (keyMode !== "hk") p.hkid = { value: null, status: "missing" };
           p.nameEn = en ? { value: en, status: "review" } : { value: null, status: "missing" };
           return p;

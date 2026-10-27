@@ -77,7 +77,10 @@ async function hasRecentDuplicate(tx: Tx, msg: AutoWriteMsg, row: Pick<WhatsappI
       guardId: row.guardId,
       workDate: row.workDate,
       kind: row.kind,
-      message: { chatJid: msg.chatJid, senderJid: msg.senderJid, messageId: { not: msg.messageId }, ts: { gte: since, lte: msg.ts } },
+      // 已撤回／已被新 revision 取代嘅 intent 唔算重複（撤回後重發要可以再寫）
+      revokedAt: null,
+      supersededByRevision: null,
+      message: { chatJid: msg.chatJid, senderJid: msg.senderJid, revokedAt: null, messageId: { not: msg.messageId }, ts: { gte: since, lte: msg.ts } },
     },
     select: { shiftTypeId: true, leaveCode: true },
   });

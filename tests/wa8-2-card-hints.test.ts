@@ -42,6 +42,7 @@ const json = async (r: Response) => (await r.json()) as Record<string, any>;
 const openQs = (mid: string) => prisma.triageQuestion.findMany({ where: { status: "open", session: { sourceType: "whatsapp" }, evidenceJson: { path: ["message", "message_id"], equals: mid } } });
 
 beforeEach(async () => {
+  process.env.WA_CARD_OCR_STRATEGY = "S1"; // 預設已改 S6；呢批測試注入 tesseract+deepseek，釘返 S1
   await clearAll();
   await prisma.triageQuestion.deleteMany({});
   await prisma.triageSession.deleteMany({});
@@ -78,14 +79,14 @@ const doAnswer = async (qid: string, ans: Record<string, unknown>) => {
 
 describe("WA-8.2 提示判定（純函數）", () => {
   it("similarStaffNos：同前綴同長度差 ≤2 位＝相似；hasDistinctCandidates：有一對互不相似先提示", () => {
-    expect(similarStaffNos("U01095", "U01096")).toBe(true);
-    expect(similarStaffNos("U01095", "U01195")).toBe(true); // 差 1 位
-    expect(similarStaffNos("U01095", "U02196")).toBe(false); // 差 3 位
-    expect(similarStaffNos("U01095", "MP1095")).toBe(false);
-    expect(hasDistinctCandidates(["U01095", "U01096"])).toBe(false);
-    expect(hasDistinctCandidates(["U01095"])).toBe(false);
-    expect(hasDistinctCandidates(["U01095", "U01096", "MP9002"])).toBe(true);
-    expect(hasDistinctCandidates(["U01095", "bad"])).toBe(false);
+    expect(similarStaffNos("U91095", "U91096")).toBe(true);
+    expect(similarStaffNos("U91095", "U91195")).toBe(true); // 差 1 位
+    expect(similarStaffNos("U91095", "U92196")).toBe(false); // 差 3 位
+    expect(similarStaffNos("U91095", "MP9095")).toBe(false);
+    expect(hasDistinctCandidates(["U91095", "U91096"])).toBe(false);
+    expect(hasDistinctCandidates(["U91095"])).toBe(false);
+    expect(hasDistinctCandidates(["U91095", "U91096", "MP9002"])).toBe(true);
+    expect(hasDistinctCandidates(["U91095", "bad"])).toBe(false);
   });
 });
 
@@ -133,7 +134,7 @@ describe("WA-8.2 題卡提示＋加多一位", () => {
   });
 
   it("wa_card_confirm（疑似第二張，工號唔相似）亦有提示；加多一位對象係同相另一位", async () => {
-    await prisma.guardStaffNumber.create({ data: { guardId: ids.gB, scheme: "U", number: "U55555", status: "current" } });
+    await prisma.guardStaffNumber.create({ data: { guardId: ids.gB, scheme: "U", number: "U95555", status: "current" } });
     await feed("h3");
     // 引擎 A 見到兩張卡（U90001＋MP9002），B／仲裁只見 U90001 → MP9002 疑似第二張
     await run(engines(["U90001", "MP9002"], ["U90001"], ["U90001"]));

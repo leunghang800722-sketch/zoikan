@@ -3,6 +3,7 @@
 // W1 只「判定」，唔執行寫入／唔開 Triage 題。resolution 只含原因碼、id 列表、basis 代碼——唔含訊息原文。
 // 取捨（簡報未講清，採保守）：routed=auto_write 只睇 §6.1 第 1–6 項；第 7 項（群組 auto_write 開關）記入
 // resolution.group_auto_write，供 W3 真正寫入時再把關（dry-run 期間試點群開關通常仍係關）。
+import { foldVariants } from "@/lib/names/variants";
 import { classifySiteName, type SiteNameCandidate } from "@/lib/month-close/auto/site-match";
 import type { GuardMatchIndex } from "@/lib/roster-upload/match";
 import { normalizeTelHk } from "@/lib/guards/identity";
@@ -46,6 +47,9 @@ export interface ResolveRepo {
   monthLocked(dateIso: string): Promise<boolean>;
 }
 
+/** 盤名候選＋所屬客戶（client_group 優先，冇就 client_name；用嚟判斷兄弟盤）。 */
+export type WaSite = SiteNameCandidate & { client?: string | null };
+
 export interface ResolveContext {
   ts: Date;
   group: { id: string; kind: "site" | "multi_site" | "broker" | "office" | "ignored"; siteId: string | null; brokerId: string | null; shiftWordMap: Record<string, string>; /** W5：群組請假詞覆寫（優先於內建）；冇就用內建 */ leaveWordMap?: Record<string, string>; autoWrite: boolean };
@@ -53,7 +57,7 @@ export interface ResolveContext {
   senderTelNorm: string | null;
   /** WA-8：intents[idx] 嘅覆寫（冇＝照舊） */
   overrides?: ReadonlyMap<number, IntentOverride>;
-  sites: readonly SiteNameCandidate[];
+  sites: readonly WaSite[];
   index: GuardMatchIndex;
   repo: ResolveRepo;
 }
@@ -87,6 +91,8 @@ export interface ResolvedIntent {
   confidence: number;
   resolution: Resolution;
   routed: Routed;
+  /** WA-9 (7)：呢行對應輸入 intents 嘅 index（一個 intent 可展開多行；roster/caption 對返來源用，唔落 DB） */
+  intentIdx?: number;
   /** W2：LLM 抽出嘅原始片段（記憶體限定，唔落 whatsapp_intents；Triage 題 evidence 用，含人名＝PII，只存 DB）。 */
   src?: IntentSrc;
 }
@@ -104,6 +110,10 @@ export interface IntentOverride {
 export interface IntentSrc {
   /** WA-8：工卡相辨識資料（evidence 用，DB 內） */
   card?: WaCardEvidence;
+  /** WA-9：名單／相片差異（一日一條合併題） */
+  mismatch?: { day: string; roster_only: string[]; photo_only: string[] };
+  /** WA-9 (7)：名單配唔到嘅名——(群,日,名) 固定 groupKey（重發唔再開題） */
+  dedupe_key?: string;
   person_raw: string | null;
   site_raw: string | null;
   date_raw: string | null;
@@ -120,6 +130,26 @@ interface SiteRes {
   basis: string;
 }
 
+// 盤名／別名先做字形折疊（簡繁、異體字：「厚徳」＝「厚德」）再配對；ids 不變
+const foldedSites = new WeakMap<ResolveContext["sites"], ResolveContext["sites"]>();
+function foldSites(sites: ResolveContext["sites"]): ResolveContext["sites"] {
+  let f = foldedSites.get(sites);
+  if (!f) {
+    f = sites.map((s) => ({ ...s, canonicalName: foldVariants(s.canonicalName), aliases: s.aliases.map((a) => foldVariants(a)) }));
+    foldedSites.set(sites, f);
+  }
+  return f;
+}
+
+/** 文字（已折疊）命中邊啲盤：盤名／別名（≥2 字）等於文字，或文字包含該名。owners＝掛住同一個名嘅盤數（1＝獨有，≥2＝多盤共用）。 */
+function siteTextHits(rawF: string, sites: ResolveContext["sites"]): Array<{ siteId: string; name: string; owners: number }> {
+  const ownersOf = new Map<string, Set<string>>();
+  for (const s of sites) for (const n of [s.canonicalName, ...s.aliases]) if (n && n.length >= 2) ownersOf.set(n, new Set([...(ownersOf.get(n) ?? []), s.id]));
+  const out: Array<{ siteId: string; name: string; owners: number }> = [];
+  for (const [name, ids] of ownersOf) if (rawF === name || rawF.includes(name)) for (const id of ids) out.push({ siteId: id, name, owners: ids.size });
+  return out;
+}
+
 function resolveSite(siteRaw: string | null | undefined, ctx: ResolveContext): SiteRes {
   const groupSite = ctx.group.kind === "site" ? ctx.group.siteId : null;
   const raw = (siteRaw ?? "").trim();
@@ -127,11 +157,34 @@ function resolveSite(siteRaw: string | null | undefined, ctx: ResolveContext): S
     if (groupSite) return { siteId: groupSite, reasons: [], candidates: [], basis: "group" };
     return { siteId: null, reasons: ["site_ambiguous"], candidates: [], basis: "none_in_multi_site" };
   }
-  const c = classifySiteName(raw, ctx.sites);
-  if ((c.level === "exact" || c.level === "auto") && c.siteId) {
-    if (groupSite && c.siteId !== groupSite) {
-      return { siteId: c.siteId, reasons: ["site_ambiguous"], candidates: [groupSite, c.siteId], basis: "other_site_than_group" };
+  const rawF = foldVariants(raw);
+  if (groupSite) {
+    // 盤口群（群組已綁定盤）分層（兄弟盤調人係常態，唔可以一刀切）：
+    //  0. 文字命中群盤自己 → 群盤。
+    //  1. 命中**同客戶兄弟盤獨有**嘅名／別名（只掛喺一個盤）→ 出 site_ambiguous 題（候選＝群盤＋該盤；預設群盤，唔自動寫）。
+    //  2. 只命中**多盤共用**嘅區域名／客戶名（別名掛喺 ≥2 個盤，例：「數碼港」）→ 群盤，唔出題（basis group_over_alias）。
+    //  3. 命中**唔同客戶**嘅盤獨有嘅名 → 群盤，但要確認（site_ambiguous，唔自動寫）。
+    //  4. 完全唔識／模糊 → 照舊（落到下面 classifySiteName）。
+    const hits = siteTextHits(rawF, foldSites(ctx.sites));
+    if (hits.length > 0) {
+      if (hits.some((h) => h.siteId === groupSite)) return { siteId: groupSite, reasons: [], candidates: [], basis: "text_exact" };
+      const unique = hits.filter((h) => h.owners === 1);
+      if (unique.length === 0) {
+        // 多盤共用嘅名只限掛住嘅盤**全部同一客戶**先當區域名（群盤唔出題）；橫跨唔同客戶（或客戶未知）→ 出題，候選＝群盤＋該些盤
+        const clientOf = (id: string): string | null => ctx.sites.find((x) => x.id === id)?.client ?? null;
+        const shared = [...new Set(hits.map((h) => h.siteId))];
+        const clients = new Set(shared.map(clientOf));
+        if (clients.size > 1 || clients.has(null)) return { siteId: groupSite, reasons: ["site_ambiguous"], candidates: [groupSite, ...shared], basis: "shared_name_cross_client" };
+        return { siteId: groupSite, reasons: [], candidates: [], basis: "group_over_alias" };
+      }
+      const groupClient = ctx.sites.find((x) => x.id === groupSite)?.client ?? null;
+      const sibling = unique.filter((h) => groupClient !== null && (ctx.sites.find((x) => x.id === h.siteId)?.client ?? null) === groupClient);
+      if (sibling.length > 0) return { siteId: groupSite, reasons: ["site_ambiguous"], candidates: [groupSite, ...new Set(sibling.map((h) => h.siteId))], basis: "sibling_site_text" };
+      return { siteId: groupSite, reasons: ["site_ambiguous"], candidates: [groupSite, ...new Set(unique.map((h) => h.siteId))], basis: "other_client_site" };
     }
+  }
+  const c = classifySiteName(rawF, foldSites(ctx.sites));
+  if ((c.level === "exact" || c.level === "auto") && c.siteId) {
     return { siteId: c.siteId, reasons: [], candidates: [], basis: c.level === "exact" ? "text_exact" : "text_auto" };
   }
   if (c.level === "propose") {
@@ -317,7 +370,9 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
     return t;
   };
 
+  const starts: number[] = [];
   for (const [intentIdx, it] of intents.entries()) {
+    starts.push(out.length);
     const ov = ctx.overrides?.get(intentIdx);
     const kind = it.type as IntentKind;
     const conf = it.confidence;
@@ -515,5 +570,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
       }
     }
   }
+  starts.push(out.length);
+  for (let k = 0; k < intents.length; k++) for (let j = starts[k]!; j < starts[k + 1]!; j++) out[j]!.intentIdx = k;
   return out;
 }

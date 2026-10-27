@@ -67,7 +67,7 @@ describe("doc-index", () => {
     expect(m.fileName).toBe("測試保安員甲");
     expect(m.tag).toBe("試用");
     expect(m.conforming).toBe(true);
-    expect(parseDocFileName("MP1234 測試保安員乙.pdf").tag).toBeNull();
+    expect(parseDocFileName("MP9234 測試保安員乙.pdf").tag).toBeNull();
     const bad = parseDocFileName("掃描檔1.pdf");
     expect(bad.conforming).toBe(false);
     expect(bad.staffNo).toBeNull();
@@ -327,7 +327,7 @@ describe("交叉核對評級", () => {
     expect(c.reasons).toContain("mismatch_hkid");
   });
   it("用 hkid 搵行時 hkid 欄唔計互證（避免循環）", () => {
-    const u = ref("utem", { staffNos: ["U00000"], hkid: "A1234563", dob: "1980-02-01" });
+    const u = ref("utem", { staffNos: ["U90000"], hkid: "A1234563", dob: "1980-02-01" });
     const c = crosscheck(doc(), "U99999", null, idx([u]));
     expect(c.refs.utem.basis).toBe("hkid");
     expect(c.cmp.hkid.utem).toBe("no_reference");
@@ -346,7 +346,7 @@ describe("交叉核對評級", () => {
 describe("對齊計劃（§26.2.4）", () => {
   const guards: DbGuard[] = [
     { id: "g1", nameZh: "測試保安員", hkid: "A1234563", tels: ["91234567"], staffNos: ["U99999"] },
-    { id: "g2", nameZh: "測試保安員乙", hkid: null, tels: ["92345678"], staffNos: ["U88888"] },
+    { id: "g2", nameZh: "測試保安員乙", hkid: null, tels: ["92345678"], staffNos: ["U98888"] },
     { id: "g3", nameZh: "同名人", hkid: null, tels: [], staffNos: ["MG1"] },
   ];
   const db = buildDbIndex(guards);
@@ -361,13 +361,13 @@ describe("對齊計劃（§26.2.4）", () => {
     expect(p.autoApply).toBe(true);
   });
   it("工號相同、DB 冇 hkid → link；review 級唔自動套用", () => {
-    const p = run(input({ hkid: "C1234560", staffNos: ["U88888"], grade: "review" }));
+    const p = run(input({ hkid: "C1234560", staffNos: ["U98888"], grade: "review" }));
     expect(p.action).toBe("link");
     expect(p.guardId).toBe("g2");
     expect(p.autoApply).toBe(false);
   });
   it("hkid 同工號指向唔同人 → conflict", () => {
-    const p = run(input({ staffNos: ["U88888"] }));
+    const p = run(input({ staffNos: ["U98888"] }));
     expect(p.action).toBe("conflict");
     expect(p.reasons).toContain("hkid_vs_staffno_differ");
   });
@@ -377,7 +377,7 @@ describe("對齊計劃（§26.2.4）", () => {
     expect(p.reasons).toContain("guard_hkid_differs");
   });
   it("電話撞另一人 → conflict；電話＋姓名相同 → link；淨電話 → needs_review", () => {
-    expect(run(input({ hkid: "C1234560", phone: "91234567", staffNos: ["U88888"] })).action).toBe("conflict");
+    expect(run(input({ hkid: "C1234560", phone: "91234567", staffNos: ["U98888"] })).action).toBe("conflict");
     const same = run(input({ hkid: "C1234560", phone: "92345678", nameZh: "測試保安員乙" }));
     expect(same.action).toBe("link");
     expect(same.basis).toEqual(["tel", "name"]);

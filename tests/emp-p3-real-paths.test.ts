@@ -1,5 +1,6 @@
 // EMP-P3.1：長工糧 10 月數字經「真實寫入路徑」驗證（POST／PATCH／換號／Maxwell 導入），唔直接 prisma 建卡繞過鏡像。
 // 例外：「生產現狀」（舊 MG 卡只抄咗號碼冇日期、人卡舊日期）用 prisma 直接起——因為嗰啲資料本來就係鏡像上線前寫入嘅。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -121,7 +122,7 @@ describe("EMP-P3.1 M3 Maxwell 離職名單 vs 再入職者", () => {
   it("離職名單嘅最後一日（上一段 3/31）早過現行聘用段起點／卡 valid_from → 唔結束張 MG 卡、加 leaver_date_before_segment 警告；10 月照出糧", async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const actor = (await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "t" } })).id;
+    const actor = (await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "t" } })).id;
     await prisma.staffScheme.upsert({ where: { code: "MG" }, update: { isLongterm: true }, create: { code: "MG", labelZh: "MG", isLongterm: true, isFrontline: false, sort: 3 } });
     const site = await prisma.site.create({ data: { canonicalName: `測試P31M3-${Math.random().toString(36).slice(2, 7)}`, clientName: "測試客", billingModel: "per_shift", createdBy: "t" } });
     const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "t" } });
@@ -161,7 +162,7 @@ describe("EMP-P3.2 M1' 離職名單：導入入職日同卡／人卡／合約鏈
   const setup = async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const actor = (await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "t" } })).id;
+    const actor = (await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "t" } })).id;
     await prisma.staffScheme.upsert({ where: { code: "MG" }, update: { isLongterm: true }, create: { code: "MG", labelZh: "MG", isLongterm: true, isFrontline: false, sort: 3 } });
     const site = await prisma.site.create({ data: { canonicalName: `測試P32-${Math.random().toString(36).slice(2, 7)}`, clientName: "測試客", billingModel: "per_shift", createdBy: "t" } });
     const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "t" } });

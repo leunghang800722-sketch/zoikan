@@ -30,11 +30,11 @@ describe("matchGuard：match_basis 與電話層", () => {
       { guardId: "g1", tel: "91234567" },
       { guardId: "g2", tel: "61234567" },
     ],
-    [{ number: "U00001", guardId: "g3", status: "current" }],
+    [{ number: "U90001", guardId: "g3", status: "current" }],
   );
 
   it("工號優先：basis=staff_no", () => {
-    expect(matchGuard({ staffNoRaw: "U00001", nameRaw: "測試保安員丙", telRaw: "91234567" }, idx)).toMatchObject({ guardId: "g3", matchBasis: "staff_no" });
+    expect(matchGuard({ staffNoRaw: "U90001", nameRaw: "測試保安員丙", telRaw: "91234567" }, idx)).toMatchObject({ guardId: "g3", matchBasis: "staff_no" });
   });
   it("電話唯一 + 姓名夾：basis=name_tel；別名夾：alias", () => {
     expect(matchGuard({ staffNoRaw: null, nameRaw: "測試保安員甲", telRaw: "9123 4567" }, idx)).toMatchObject({ guardId: "g1", guardMatch: "by_name_tel", matchBasis: "name_tel" });

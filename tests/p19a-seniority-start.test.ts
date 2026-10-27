@@ -1,4 +1,5 @@
 // P19a：長工年資起點＝最早一段未作廢長工合約生效日（MPF 僱員供款豁免、法定假 3 個月規則）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, afterAll } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { buildLongtermPayrollInputs, continuousChainStart } from "@/lib/longterm-payroll/aggregate";
@@ -16,7 +17,7 @@ async function base() {
   const site = await prisma.site.create({ data: { canonicalName: `測試盤-${Math.random().toString(36).slice(2, 8)}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
   const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "test" } });
   const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-  const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+  const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
   return { site, st, actorUserId: user.id };
 }
 async function sh(guardId: string, site: { id: string }, st: { id: string }, date: string) {

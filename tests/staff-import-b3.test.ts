@@ -67,15 +67,15 @@ describe("masking／package／match 純函數", () => {
   });
   it("decideMatch：hkid→工號→電話→姓名；理由碼", () => {
     const dbg: DbGuard[] = [
-      { id: "g1", nameZh: "測試甲", hkid: H1, tels: ["91234567"], staffNos: ["U00001"] },
-      { id: "g2", nameZh: "測試乙", hkid: null, tels: ["61234567"], staffNos: ["U00002"] },
+      { id: "g1", nameZh: "測試甲", hkid: H1, tels: ["91234567"], staffNos: ["U90001"] },
+      { id: "g2", nameZh: "測試乙", hkid: null, tels: ["61234567"], staffNos: ["U90002"] },
       { id: "g3", nameZh: "測試丙", hkid: H3, tels: [], staffNos: [] },
     ];
     const db = buildDbIndex(dbg);
     const base: MatchInput = { staffNos: [], hkid: null, hkidValid: true, nameZh: null, phone: null, grade: "auto_ok", gradeReasons: [] };
     expect(decideMatch({ ...base, hkid: H1 }, db)).toMatchObject({ action: "link", guardId: "g1" });
-    expect(decideMatch({ ...base, hkid: H2, staffNos: ["u00002"] }, db)).toMatchObject({ action: "link", guardId: "g2" });
-    expect(decideMatch({ ...base, hkid: H1, staffNos: ["U00002"] }, db)).toMatchObject({ action: "conflict", reasons: ["hkid_vs_staffno_differ"] });
+    expect(decideMatch({ ...base, hkid: H2, staffNos: ["u90002"] }, db)).toMatchObject({ action: "link", guardId: "g2" });
+    expect(decideMatch({ ...base, hkid: H1, staffNos: ["U90002"] }, db)).toMatchObject({ action: "conflict", reasons: ["hkid_vs_staffno_differ"] });
     expect(decideMatch({ ...base, hkid: H4, phone: "91234567" }, db)).toMatchObject({ action: "conflict", reasons: ["tel_guard_has_other_hkid"] });
     expect(decideMatch({ ...base, hkid: H2, phone: "61234567", nameZh: "測試乙" }, db)).toMatchObject({ action: "link", guardId: "g2" });
     expect(decideMatch({ ...base, hkid: H4, nameZh: "測試乙" }, db)).toMatchObject({ action: "needs_review", reasons: ["name_only_candidate"] });
@@ -336,11 +336,11 @@ describe("導入 API", () => {
 
   it("hkid status≠confirmed：唔做 hkid 層 link；同 hkid 嘅現有 guard 唔會被 link，無其他鍵 → needs_review", async () => {
     await prisma.guard.create({ data: { nameZh: "導入測試現有", employmentType: "cash_casual", hkid: H1, createdBy: "t" } });
-    const dbg: DbGuard[] = [{ id: "g1", nameZh: "導入測試現有", hkid: H1, tels: [], staffNos: ["U00001"] }];
+    const dbg: DbGuard[] = [{ id: "g1", nameZh: "導入測試現有", hkid: H1, tels: [], staffNos: ["U90001"] }];
     const db = buildDbIndex(dbg);
     const base: MatchInput = { staffNos: [], hkid: H1, hkidValid: true, hkidConfirmed: false, nameZh: null, phone: null, grade: "auto_ok", gradeReasons: [] };
     expect(decideMatch(base, db)).toMatchObject({ action: "needs_review", reasons: ["hkid_not_confirmed_no_other_key"] });
-    expect(decideMatch({ ...base, staffNos: ["U00001"] }, db)).toMatchObject({ action: "link", guardId: "g1", basis: ["staff_no"] });
+    expect(decideMatch({ ...base, staffNos: ["U90001"] }, db)).toMatchObject({ action: "link", guardId: "g1", basis: ["staff_no"] });
   });
 
   it("person_keys 限定範圍", async () => {

@@ -1,4 +1,5 @@
 // P16b：對數工具細修——批量輸入 note 計入重複判斷、銀行檔第二表頭行跳過、同日多來源更表紀錄衝突提示。合成資料。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import * as XLSX from "xlsx";
 import { prisma, clearAll } from "./lib/db";
@@ -119,7 +120,7 @@ describe("P16b.3 同日多來源更表紀錄衝突提示", () => {
     const st2 = await prisma.shiftType.create({ data: { siteId: site.id, code: "D", hours: 12, createdBy: "test" } });
     const b07 = await prisma.broker.create({ data: { code: `T-B07-${Math.random().toString(36).slice(2, 6)}`, name: "測試內部長工桶", kind: "internal_longterm", settlementType: "salary", createdBy: "test" } });
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     const g = await prisma.guard.create({ data: { nameZh: "測試長工-衝突", employmentType: "longterm_autopay", hireDate: new Date("2020-01-01"), createdBy: "test" } });
     await prisma.guardLongtermContract.create({ data: { guardId: g.id, monthlySalary: 15500, effectiveFrom: new Date("2020-01-01"), effectiveTo: null, source: "manual", createdBy: user.id } });
     for (let day = 1; day <= 10; day++) await prisma.shiftRecord.create({ data: { workDate: d(day), siteId: site.id, shiftTypeId: st.id, guardId: g.id, settlementBrokerId: b07.id, operationalBrokerId: b07.id, recordType: "shift", source: "roster_upload", createdBy: "test" } });

@@ -99,6 +99,11 @@ async function main(): Promise<void> {
   const img = readFileSync(join(__dirname, "fixtures", "synthetic-id-card.jpg"));
   // 兩個供應商並行（各自 ≤25 秒），任何一個 fail 都唔影響另一個、唔擋啟動
   console.log(`[card-ocr] sharp loaded=${await sharpLoaded()}`);
+  // WA-9：預設策略 S6 要 QWEN_API_KEY＋Anthropic key（CLAUDE_API_KEY）；qwen 或 haiku 冇設定會 fallback deepseek（只得一個引擎有 key 就冇「兩讀」）。只印布林，唔印 key
+  const strat = (process.env.WA_CARD_OCR_STRATEGY ?? "").trim().toUpperCase() || "S6";
+  const have = { qwen: !!process.env.QWEN_API_KEY, claude: !!process.env.CLAUDE_API_KEY, deepseek: !!process.env.DEEPSEEK_API_KEY };
+  const warn = strat === "S6" ? [!have.qwen ? "QWEN_API_KEY 未設定（qwen 由 deepseek 頂上）" : "", !have.claude ? "CLAUDE_API_KEY 未設定（haiku／仲裁唔可用）" : "", !have.deepseek ? "DEEPSEEK_API_KEY 未設定（後備唔可用）" : ""].filter(Boolean) : [];
+  console.log(`[card-ocr] strategy=${strat} qwen_key=${have.qwen} claude_key=${have.claude} deepseek_key=${have.deepseek}${warn.length ? ` WARN=${warn.join("；")}` : ""}`);
   await Promise.all([runOne("claude", img), runOne("deepseek", img), cardPing("qwen", img), cardPing("deepseek", img), cardPing("haiku", img), tesseractPing(img)]);
 }
 

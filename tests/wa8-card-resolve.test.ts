@@ -110,11 +110,12 @@ describe("WA-8 C 歸屬", () => {
     const [unk] = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc({ staff_no: "U98888", status: "review", votes: 1, candidates: ["U98888"] })]), mediaId: null, deps: deps() });
     expect(pickWaKind(unk!.resolution.reasons, "shift")).toBe("wa_person_unknown");
   });
-  it("冇工號只有姓名：唯一 → 一撳確認；同名多人 → 揀人；永遠唔自動", async () => {
-    const [one] = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc({ staff_no: null, name_zh: "測試乙", status: "review", votes: 0, reasons: ["card_name_only"] })]), mediaId: null, deps: deps() });
+  it("冇工號只有姓名（讀數未確認）：範圍內唯一 → 一撳確認；同名多人 → 揀人；永遠唔自動", async () => {
+    const inScope = { ...repo(), recentGuardIdsAtSite: async () => new Set(["g2", "g3", "g4"]) };
+    const [one] = await resolveCardPhoto({ ctx: ctx({ repo: inScope }, { 開工: "D" }), input: photo([pc({ staff_no: null, name_zh: "測試乙", status: "review", votes: 0, reasons: ["card_name_only"] })]), mediaId: null, deps: deps() });
     expect(one).toMatchObject({ guardId: "g2", routed: "triage" });
     expect(pickWaKind(one!.resolution.reasons, "shift")).toBe("wa_card_confirm");
-    const [multi] = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc({ staff_no: null, name_zh: "測試同名", status: "review", votes: 0 })]), mediaId: null, deps: deps() });
+    const [multi] = await resolveCardPhoto({ ctx: ctx({ repo: inScope }, { 開工: "D" }), input: photo([pc({ staff_no: null, name_zh: "測試同名", status: "review", votes: 0 })]), mediaId: null, deps: deps() });
     expect(multi!.resolution.candidates.guard_ids).toEqual(expect.arrayContaining(["g3", "g4"]));
     expect(pickWaKind(multi!.resolution.reasons, "shift")).toBe("wa_person_ambiguous");
   });
@@ -129,7 +130,7 @@ describe("WA-8 C 歸屬", () => {
     expect(rs[0]!.src?.card?.others).toEqual([{ staff_no: "MP9002", status: "review" }]);
     const unknown = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc(), pc({ staff_no: "U98888", status: "review", votes: 1, reasons: ["card_suspect_second"] })]), mediaId: null, deps: deps() });
     expect(unknown[1]!.resolution.reasons).toEqual(expect.arrayContaining(["person_unknown", "card_staff_no_unknown", "card_suspect_second"]));
-    const merged = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc({ staff_no: null, status: "review", votes: 1, reasons: ["card_disputed"], candidates: ["U90001", "MP9002", "MG8888"] })]), mediaId: null, deps: deps() });
+    const merged = await resolveCardPhoto({ ctx: ctx({}, { 開工: "D" }), input: photo([pc({ staff_no: null, status: "review", votes: 1, reasons: ["card_disputed"], candidates: ["U90001", "MP9002", "MG9888"] })]), mediaId: null, deps: deps() });
     expect(merged).toHaveLength(1);
     expect(merged[0]!.resolution.candidates.guard_ids).toEqual(expect.arrayContaining(["g1", "g2"]));
     expect(pickWaKind(merged[0]!.resolution.reasons, "shift")).toBe("wa_person_ambiguous");

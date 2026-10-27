@@ -1,4 +1,5 @@
 // P9.2 三個細補：AI 每日額度原子（並發不超限）、POST /api/users 擋系統帳號電話、Maxwell 導入遇鎖月逐行跳過。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -88,7 +89,7 @@ describe("P9.2 Maxwell 導入遇鎖月逐行跳過", () => {
   it("鎖月嗰行跳過（summary 列 N 行），其餘照導入", async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     await prisma.monthClose.create({ data: { month: new Date(Date.UTC(2026, 5, 1)), lockedAt: new Date(), lockedBy: user.id, createdBy: "test" } });
     const mk = async (no: string, name: string, from: string) => {
       const g = await prisma.guard.create({ data: { nameZh: name, employmentType: "longterm_autopay", staffNoMw: no, createdBy: "test" } });

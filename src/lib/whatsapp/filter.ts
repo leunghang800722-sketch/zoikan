@@ -2,6 +2,10 @@
 // 打分 0–100，≥ 閾值（預設 40，群組可覆寫 filter_threshold）先交 AI。
 // 問號規則（老闆 2026-10-17 補充）：日期 token＋（更別詞或請假詞）同時命中＝「帶問句嘅指令」，問號不減分；
 // 只有純疑問句（冇該組合）先減分。reasons 只係固定代碼，唔含原文。
+import { detectRosterList, detectRosterPlan } from "./roster-list";
+import { foldVariants } from "@/lib/names/variants";
+import { classifyText, normalizeReportText, STAFF_TOKEN_RE, TIME_RANGE_RE } from "./report-kinds";
+
 export const FILTER_DEFAULT_THRESHOLD = 40;
 
 export interface FilterInput {
@@ -20,6 +24,10 @@ export interface FilterInput {
   threshold?: number | null;
   /** WA-7：媒體類型（image／video／application…；冇媒體＝null）。有媒體而冇文字／caption → reason media_only。 */
   mediaType?: string | null;
+  /** WA-9：訊息時間（文字名單偵測推算日期用） */
+  ts?: Date;
+  /** WA-9 (7)：訊息內有已知保安員姓名（呼叫方有 GuardMatchIndex 先填；判頭群 assume_today 用） */
+  nameHit?: boolean;
   /** WA-8：群組開咗工卡相模式——圖片訊息（有冇 caption 都得）唔當純圖片略過，交工卡辨識流程。 */
   cardPhotoMode?: boolean;
 }
@@ -34,7 +42,7 @@ export interface FilterResult {
 const DATE_RE = /(大後日|後日|聽日|明日|今日|今晚|今朝|今早|今夜|今個更|今更|而家|聽晚|聽朝|琴日|尋日|昨日|前日|星期[一二三四五六日天]|禮拜[一二三四五六日天]|週[一二三四五六日]|周[一二三四五六日]|\d{1,2}\s*[/／.]\s*\d{1,2}|\d{1,2}\s*月\s*\d{1,2}|\d{1,2}\s*[號号日])/;
 // W4：補返 RD／SH／NPL 嘅口語（例假／公假／休假／公眾假期／法定假），否則「我21號例假」會被過濾層丟棄
 const LEAVE_RE = /(病假|\bSL\b|\bAL\b|\bNL\b|\bNPL\b|\bRD\b|\bSH\b|年假|放假|休假|例假|公假|公眾假期|法定假|唔返|返唔到|請假|告假|事假|病咗|病倒)/i;
-const SHIFT_RE = /([早中夜]更|通宵|[ABCN]\s*更|返工|開工|\bOT\b|加班|頂|替|換更|補更|返[早中夜]|[早中夜晚]班|[早夜])/i;
+const SHIFT_RE = /([早中夜日]更|通宵|[ABCN]\s*更|返工|開工|收工|上班|\bOT\b|加班|頂|替|換更|補更|返[早中夜]|[早中夜晚日]班|[早夜])/i;
 const ACK_RE = /^(?:謝謝|多謝|唔該|收到|ok|okay|好的|好呀|好啊|好|明白|了解|知道|得|ok啦|㊗)[\s!！.。~～]*$/i;
 const URL_RE = /https?:\/\/|www\./i;
 const QUESTION_RE = /[?？]|邊個|幾點|點解|有冇人|得唔得|可唔可以|係咪|咩事|幾時/;
@@ -77,8 +85,29 @@ export function scoreMessage(input: FilterInput): FilterResult {
     return { score: 0, reasons, decision: "ignore" };
   }
 
-  const text = norm(input.text ?? "");
+  const rawText = norm(input.text ?? "");
+  // 工號／日期 token 內數字 0 打成英文 O、時間範圍連字號（一／至／—）統一，之後先打分
+  const text = normalizeReportText(rawText);
   // WA-7：有媒體（圖片／影片／文件…）而冇文字／caption → 獨立原因碼 media_only（圖片唔解析，設計如此，要打字），唔再混入 too_short
+  // WA-9：文字名單（「1/10/2026 孫測壹 陳測貳 …」）——純 code 偵測，唔經閾值、唔 call LLM
+  if (input.ts && !input.mediaType) {
+    const roster = detectRosterList(text, input.ts);
+    if (roster) {
+      reasons.push("roster_list");
+      return { score: 100, reasons, decision: "candidate" };
+    }
+    if (detectRosterPlan(text, input.ts)) {
+      reasons.push("roster_plan"); // 預定更表（日序名單）：只記錄，唔建 shift
+      return { score: 100, reasons, decision: "candidate" };
+    }
+  }
+  // WA-9 (7)：純 code 短訊分類（相 caption「X報開工／收工」、X代Y、多日假期、月度考勤摘要、純問句）——有冇媒體都得
+  const kind = classifyText(text);
+  if (kind) {
+    const reason = { name_caption: "name_shift_caption", substitution: "substitution_notice", leave_notice: "leave_notice", attendance_summary: "attendance_summary", plain_question: "plain_question" }[kind.kind];
+    reasons.push(reason);
+    return kind.kind === "plain_question" ? { score: 0, reasons, decision: "ignore" } : { score: 100, reasons, decision: "candidate" };
+  }
   // WA-8：工卡相群組嘅圖片 → 直接過第 0 層（score 100），由 process.ts 走辨識流程
   if (input.cardPhotoMode && (input.mediaType === "image" || input.mediaType === "unknown")) {
     reasons.push("card_photo");
@@ -129,8 +158,9 @@ export function scoreMessage(input: FilterInput): FilterResult {
     reasons.push("quoted_shift_word");
   }
 
-  const haystack = `${text}\n${quoted}`.toLowerCase();
-  if ((input.siteAliases ?? []).some((a) => a && norm(a).length >= 2 && haystack.includes(norm(a).toLowerCase()))) {
+  const haystack = foldVariants(`${text}\n${quoted}`).toLowerCase();
+  const siteHit = (input.siteAliases ?? []).some((a) => a && norm(a).length >= 2 && haystack.includes(foldVariants(norm(a)).toLowerCase()));
+  if (siteHit) {
     score += W_SITE;
     reasons.push("site_alias");
   }
@@ -146,6 +176,14 @@ export function scoreMessage(input: FilterInput): FilterResult {
   if (directive) {
     score += W_COMBO;
     reasons.push("date_plus_shift_or_leave");
+  }
+
+  // WA-9 (7)：判頭群「冇日期＝今日」報工——(盤別名｜員工編號 token｜已知姓名) ＋ (更次詞｜HHMM-HHMM 時間範圍) 而冇日期 → 保底過閾值；
+  // process 對呢類訊息缺日期嘅 intent 補「今日」（凌晨沿用 resolveDates 降級）
+  if (input.groupKind === "broker" && !ownDate && (siteHit || STAFF_TOKEN_RE.test(text) || input.nameHit) && (ownShift || TIME_RANGE_RE.test(text))) {
+    if (TIME_RANGE_RE.test(text) && !ownShift) reasons.push("time_range");
+    reasons.push("assume_today");
+    score = Math.max(score, threshold);
   }
 
   // 減分

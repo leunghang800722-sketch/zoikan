@@ -25,7 +25,7 @@ export interface CardDeps {
   recentSites(guardId: string, sinceIso: string, beforeIso: string): Promise<Map<string, number>>;
 }
 
-function prismaCardDeps(): CardDeps {
+export function prismaCardDeps(): CardDeps {
   return {
     async scheduled(guardId, dateIso) {
       const rows = await prisma.shiftRecord.findMany({ where: { guardId, workDate: isoToDbDate(dateIso), recordType: "shift", status: { not: "cancelled" } }, select: { siteId: true, shiftTypeId: true }, orderBy: [{ id: "asc" }] });
@@ -53,9 +53,11 @@ export interface CardResolveArgs {
 const DEAD_REASON = { expired: "card_media_expired", not_card: "card_not_card", unreadable: "card_unreadable" } as const;
 
 /** ts 落喺各更開始前後 ±2 小時（24h 環形）→ 候選更別；唯一最近者先採用。 */
-export function shiftBySlot(types: readonly ShiftTypeLite[], ts: Date): { shiftTypeId: string | null; reasons: string[]; candidates: string[]; basis: string } {
+export function shiftBySlot(types: readonly ShiftTypeLite[], ts: Date, timeOn?: string | null): { shiftTypeId: string | null; reasons: string[]; candidates: string[]; basis: string } {
   const p = hkParts(ts);
-  const h = p.hour + p.minute / 60;
+  // WA-9：相入面讀到嘅打卡時間（HH:MM）優先於訊息送出時間
+  const tm = timeOn ? /^(\d{2}):(\d{2})$/.exec(timeOn) : null;
+  const h = tm ? Number(tm[1]) + Number(tm[2]) / 60 : p.hour + p.minute / 60;
   const near = types
     .filter((t) => t.startHour !== null)
     .map((t) => {
@@ -70,7 +72,7 @@ export function shiftBySlot(types: readonly ShiftTypeLite[], ts: Date): { shiftT
   return { shiftTypeId: null, reasons: ["shift_unmapped"], candidates: [], basis: "time_slot_none" };
 }
 
-async function personFor(card: PhotoCard, ctx: ResolveContext): Promise<{ person: NonNullable<IntentOverride["person"]>; extra: string[] }> {
+async function personFor(card: PhotoCard, ctx: ResolveContext, scope: ReadonlySet<string> | null): Promise<{ person: NonNullable<IntentOverride["person"]>; extra: string[] }> {
   const idx: GuardMatchIndex = ctx.index;
   const extra: string[] = [];
   if (card.staff_no && card.status === "confirmed") {
@@ -97,18 +99,34 @@ async function personFor(card: PhotoCard, ctx: ResolveContext): Promise<{ person
     // review：候選工號 → guard 候選（畀人揀；三個讀數都唔同＝一條題列晒全部候選）
     const ids = [...new Set(cands.flatMap((n) => { const h = idx.byStaffNumber.get(normalizeStaffNumber(n)); return h ? [h.guardId] : []; }))];
     const code = card.reasons[0] ?? "card_disputed";
+    // 值勤表逐行：候選只有一位 → 人配到，淨係要一撳確認（低信心／分歧行）
+    if (card.doc_type === "attendance_sheet" && ids.length === 1) return { person: { guardId: ids[0]!, reasons: [], candidates: [], basis: "card_row_candidate" }, extra: ["card_confirm", ...card.reasons.filter((r) => r === "row_low_confidence")] };
     if (ids.length > 0) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: ids.slice(0, MAX_SITE_CANDIDATES), basis: "card_candidates" }, extra: [code] };
     return { person: { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "card_candidates_unmatched" }, extra: [code] };
   }
-  // 冇工號：姓名 strict 配對（永遠要人確認）
-  const zh = card.name_zh ? card.name_zh.normalize("NFKC").trim() : "";
-  const nameCands = zh ? [...new Set([...(idx.byName.get(zh) ?? []), ...(idx.byAlias.get(zh) ?? [])])] : [];
-  if (nameCands.length === 1) return { person: { guardId: nameCands[0]!, reasons: [], candidates: [], basis: "card_name" }, extra: ["card_name_only"] };
-  if (nameCands.length > 1) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: nameCands.slice(0, MAX_SITE_CANDIDATES), basis: "card_name_multi" }, extra: ["card_name_only"] };
+  // WA-9：冇工號 → 姓名身份（打卡紙手寫／簽到表印刷／app「歡迎，X！」）。盤口群＝該盤近 60 日有更嘅 guard、判頭群＝該判頭旗下 guard 範圍內 strict 同名；
+  // 範圍內唯一（而且兩個引擎讀到同一姓名）＝配到人；範圍內多個／冇 → 揀人題（候選：同名者＋同範圍 guard 按字形接近排序）。
+  const norm = (n: string): string => n.normalize("NFKC").replace(/\s+/g, "");
+  const names = (card.name_candidates?.length ? card.name_candidates : card.name_zh ? [card.name_zh] : []).map(norm).filter(Boolean);
+  const global = [...new Set(names.flatMap((n) => [...(idx.byName.get(n) ?? []), ...(idx.byAlias.get(n) ?? [])]))];
+  const inScope = scope ? global.filter((g) => scope.has(g)) : global;
+  const strong = card.status === "confirmed" && names.length === 1; // 兩個引擎讀到同一姓名
+  if (inScope.length === 1) return { person: { guardId: inScope[0]!, reasons: [], candidates: [], basis: scope ? "card_name_in_scope" : "card_name" }, extra: [...(strong && scope ? [] : ["card_name_only"]), ...card.reasons.filter((r) => r === "row_low_confidence")] };
+  const pool = new Set<string>(global);
+  if (scope && names.length > 0) {
+    const chars = new Set([...names.join("")]);
+    const overlap = (g: string): number => [...(idx.nameByGuardId.get(g) ?? "")].filter((c) => chars.has(c)).length;
+    for (const g of [...scope].sort((a, b) => overlap(b) - overlap(a) || a.localeCompare(b))) {
+      if (pool.size >= MAX_SITE_CANDIDATES) break;
+      if (overlap(g) > 0) pool.add(g);
+    }
+  }
+  const ids = [...pool].slice(0, MAX_SITE_CANDIDATES);
+  if (ids.length > 0) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: ids, basis: inScope.length > 1 ? "card_name_multi" : "card_name_out_of_scope" }, extra: ["card_name_only"] };
   return { person: { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "card_name_unmatched" }, extra: ["card_name_only"] };
 }
 
-async function siteAndShiftFor(guardId: string | null, ctx: ResolveContext, deps: CardDeps): Promise<{ site: NonNullable<IntentOverride["site"]>; shift?: NonNullable<IntentOverride["shift"]>; extra: string[] }> {
+export async function siteAndShiftFor(guardId: string | null, ctx: ResolveContext, deps: CardDeps, timeOn: string | null = null): Promise<{ site: NonNullable<IntentOverride["site"]>; shift?: NonNullable<IntentOverride["shift"]>; extra: string[] }> {
   const g = ctx.group;
   const day = hkDateOf(ctx.ts);
   const types = async (siteId: string) => ctx.repo.shiftTypes(siteId);
@@ -117,7 +135,7 @@ async function siteAndShiftFor(guardId: string | null, ctx: ResolveContext, deps
     const ts = await types(siteId);
     // 群組「開工」口語對照（日更群→D、夜更群→N）優先
     if (Object.prototype.hasOwnProperty.call(g.shiftWordMap, "開工")) return resolveShift("開工", null, ts, g.shiftWordMap);
-    return shiftBySlot(ts, ctx.ts);
+    return shiftBySlot(ts, ctx.ts, timeOn);
   };
   if (g.kind === "site" && g.siteId) {
     return { site: { siteId: g.siteId, reasons: [], candidates: [], basis: "group" }, shift: await pickShift(g.siteId, null), extra: [] };
@@ -152,7 +170,13 @@ function cardEvidence(card: PhotoCard | null, i: number, n: number, mediaId: str
     total: n,
     arbiter,
     candidates: card?.candidates ?? [],
-    // 同一張相嘅其他卡（題卡列明「已確認 U01095＋疑似第二張 U01096」）
+    ...(card?.doc_type ? { doc_type: card.doc_type } : {}),
+    ...(card?.time_on ? { time_on: card.time_on } : {}),
+    ...(card?.time_off ? { time_off: card.time_off } : {}),
+    ...(card?.name_alt?.length ? { name_alt: card.name_alt } : {}),
+    ...(card?.wilson_staff_no_raw ? { wilson_no: card.wilson_staff_no_raw } : {}),
+    ...(card?.row_no ? { row_no: card.row_no } : {}),
+    // 同一張相嘅其他卡（題卡列明「已確認 U91095＋疑似第二張 U91096」）
     ...(all && all.length > 1 ? { others: all.filter((_, k) => k !== i).map((c) => ({ staff_no: c.staff_no, status: c.status })) } : {}),
     ...(none ? { none } : {}),
   };
@@ -185,15 +209,22 @@ export async function resolveCardPhoto(a: CardResolveArgs): Promise<ResolvedInte
   const intents: ParsedIntent[] = [];
   const overrides = new Map<number, IntentOverride>();
   const cards = photo.cards;
+  // 姓名身份嘅範圍：盤口群＝該盤近 60 日有更嘅 guard；判頭群＝該判頭旗下近 60 日有更嘅 guard；大群＝冇範圍
+  let scope: ReadonlySet<string> | null = null;
+  if (cards.some((c) => !c.staff_no)) {
+    const since = addDays(hkDateOf(ctx.ts), -RECENT_DAYS);
+    if (ctx.group.kind === "site" && ctx.group.siteId) scope = await ctx.repo.recentGuardIdsAtSite(ctx.group.siteId, since);
+    else if (ctx.group.kind === "broker" && ctx.group.brokerId) scope = await ctx.repo.recentGuardIdsOfBroker(ctx.group.brokerId, since);
+  }
   for (const [i, card] of cards.entries()) {
-    const { person, extra: pExtra } = await personFor(card, ctx);
-    const { site, shift, extra: sExtra } = await siteAndShiftFor(person.guardId, ctx, deps);
+    const { person, extra: pExtra } = await personFor(card, ctx, scope);
+    const { site, shift, extra: sExtra } = await siteAndShiftFor(person.guardId, ctx, deps, card.time_on ?? null);
     const extraReasons = [...pExtra, ...sExtra];
     // 辨識全齊、人配到，但群組冇開自動寫入 → 一撳確認（開咗自動寫入先走 pending_approval 自動流程）
     if (card.status === "confirmed" && person.guardId && !ctx.group.autoWrite && !extraReasons.includes("card_confirm")) extraReasons.push("card_confirm");
     intents.push({
       type: "shift",
-      date: { raw: "今日", kind: "relative" },
+      date: card.row_date ? { raw: `${Number(card.row_date.slice(5, 7))}月${Number(card.row_date.slice(8, 10))}日`, kind: "absolute" } : { raw: "今日", kind: "relative" },
       site_raw: null,
       persons: [],
       self_reference: false,

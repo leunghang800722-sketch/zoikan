@@ -11,7 +11,7 @@ import { ensureSystemUser } from "@/lib/system-user";
 import { TRIAGE_OWNER_ROLES, TRIAGE_LOCK } from "@/lib/triage/session";
 import { hkDateOf } from "./dates";
 import type { IntentSrc } from "./resolve";
-import { groupKeyOf, maxRoundsOf, optionsForWa, pickWaKind, sortOfTs, type WaEvidence, type WaIntentKind, type WaKind, type WaQuestionDraft } from "./triage-types";
+import { groupKeyOf, rosterMismatchKey, maxRoundsOf, optionsForWa, pickWaKind, sortOfTs, type WaEvidence, type WaIntentKind, type WaKind, type WaQuestionDraft } from "./triage-types";
 
 type Tx = Prisma.TransactionClient;
 type Db = Tx | typeof prisma;
@@ -91,6 +91,8 @@ function draftFromIntent(msg: WaMessageCtx, group: WaGroupCtx, row: WaIntentRow,
     intent: { kind: row.kind, work_date: workDate, site_id: row.siteId, guard_id: row.guardId, shift_type_id: row.shiftTypeId, leave_code: row.leaveCode, confidence: row.confidence },
     src: src ?? EMPTY_SRC,
     ...(src?.card ? { card: src.card } : {}),
+    ...(src?.mismatch ? { mismatch: src.mismatch } : {}),
+    ...(src?.dedupe_key ? { dedupe_key: src.dedupe_key } : {}),
     reasons,
     notes: strArr(res.notes),
     candidates: { guard_ids: strArr(cands.guard_ids), site_ids: strArr(cands.site_ids), dates: strArr(cands.dates), shift_type_ids: strArr(cands.shift_type_ids), existing_record_ids: strArr((res as { existing_record_ids?: unknown }).existing_record_ids) },
@@ -117,7 +119,7 @@ export function buildDraft(ev: WaEvidence, group: Pick<WaGroupCtx, "label">, ts:
   const title = `${group.label || "WhatsApp 群組"}｜${hk.slice(5, 10)} ${hk.slice(11, 16)}`;
   return {
     kind,
-    groupKey: groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
+    groupKey: kind === "wa_roster_mismatch" && ev.mismatch ? rosterMismatchKey(ev.group.id, ev.mismatch.day) : ev.dedupe_key && ev.round === 1 ? ev.dedupe_key : groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
     sort: sortOfTs(ts), // 同一訊息嘅跟進輪次維持原次序
     title,
     evidence: ev,
@@ -160,8 +162,9 @@ export interface InsertedQuestion {
 /** 冪等插入題目（同 session 已有同 groupKey → 唔再建）。 */
 export async function insertWaQuestions(tx: Tx, sessionId: string, drafts: readonly WaQuestionDraft[]): Promise<{ created: InsertedQuestion[]; existing: Map<string, string> }> {
   const keys = drafts.map((d) => d.groupKey);
-  const prior = keys.length ? await tx.triageQuestion.findMany({ where: { sessionId, groupKey: { in: keys } }, select: { id: true, groupKey: true } }) : [];
-  const existing = new Map(prior.map((p) => [p.groupKey, p.id]));
+  const prior = keys.length ? await tx.triageQuestion.findMany({ where: { sessionId, groupKey: { in: keys } }, select: { id: true, groupKey: true, status: true } }) : [];
+  // 名單「配唔到」題（rn:）撤回後 superseded → 重發同一個名要可以再開（唔計 superseded）
+  const existing = new Map(prior.filter((p) => !(p.status === "superseded" && p.groupKey.startsWith("rn:"))).map((p) => [p.groupKey, p.id]));
   const fresh = drafts.filter((d) => !existing.has(d.groupKey));
   const created: InsertedQuestion[] = [];
   if (fresh.length > 0) {
@@ -190,6 +193,7 @@ export async function supersedeWaQuestions(tx: Tx, messageId: string, belowRevis
     FROM triage_sessions s
     WHERE s.id = q.session_id AND s.source_type = 'whatsapp' AND q.status = 'open'
       AND q.evidence_json->'message'->>'message_id' = ${messageId}
+      AND q.evidence_json->>'dedupe_key' IS NULL
       AND (q.evidence_json->'message'->>'revision')::int < ${belowRevision}::int
     RETURNING q.session_id`;
   const ids = [...new Set(rows.map((r) => r.session_id))];
@@ -215,7 +219,9 @@ export async function createWaQuestionsTx(tx: Tx, args: { msg: WaMessageCtx; gro
   if (triageRows.length === 0) return { sessionId: null, ownerUserId: null, created: 0, newSession: false };
   const ym = hkMonthOf(args.msg.ts);
   const { session, created: newSession } = await getOrCreateWaSession(tx, { groupJid: args.msg.chatJid, ym, siteId: args.group.siteId ?? triageRows.find((r) => r.siteId)?.siteId ?? null });
-  const drafts = triageRows.map((r) => draftFromIntent(args.msg, args.group, r, args.srcs[args.rows.indexOf(r)]));
+  const allDrafts = triageRows.map((r) => draftFromIntent(args.msg, args.group, r, args.srcs[args.rows.indexOf(r)]));
+  // WA-9：名單／相片差異題一日一條，之後新差異按「輪」處理（見 settleMismatchTx）；其餘題照舊冪等插入
+  const drafts = allDrafts.filter((d) => !(d.kind === "wa_roster_mismatch" && d.evidence.mismatch));
   const { created, existing } = await insertWaQuestions(tx, session.id, drafts);
   for (const c of created) await tx.whatsappIntent.update({ where: { id: c.intentId }, data: { resultRef: c.id } });
   // 已存在嘅題（重送／重跑）：result_ref 補返
@@ -223,8 +229,49 @@ export async function createWaQuestionsTx(tx: Tx, args: { msg: WaMessageCtx; gro
     const qid = existing.get(d.groupKey);
     if (qid) await tx.whatsappIntent.update({ where: { id: d.evidence.message.intent_id }, data: { resultRef: qid } });
   }
+  let madeMismatch = 0;
+  for (const d of allDrafts.filter((x) => x.kind === "wa_roster_mismatch" && x.evidence.mismatch)) {
+    const r = await settleMismatchTx(tx, session.id, d);
+    if (r.id) await tx.whatsappIntent.update({ where: { id: d.evidence.message.intent_id }, data: { resultRef: r.id } });
+    if (r.created) madeMismatch += 1;
+  }
   await refreshWaSession(tx, session.id);
-  return { sessionId: session.id, ownerUserId: session.ownerUserId, created: created.length, newSession };
+  return { sessionId: session.id, ownerUserId: session.ownerUserId, created: created.length + madeMismatch, newSession };
+}
+
+/**
+ * WA-9：同群同日嘅名單／相片差異題（base groupKey `rm:<群>:<日>`；後續輪次 `…:r2`、`…:r3`）。
+ *  - 有 open 嘅題 → 將新差異併入（聯集），唔另開；
+ *  - 冇 open 但之前輪次已答／跳過／superseded：只有「之前所有輪次都冇出現過」嘅新差異先另開下一輪（groupKey 加 :r<n>）；
+ *  - 同一差異重跑 → 冪等（之前輪次已出現過就唔再開）。
+ */
+async function settleMismatchTx(tx: Tx, sessionId: string, draft: WaQuestionDraft): Promise<{ id: string | null; created: boolean }> {
+  const m = draft.evidence.mismatch!;
+  const base = draft.groupKey;
+  const rows = await tx.triageQuestion.findMany({ where: { sessionId, OR: [{ groupKey: base }, { groupKey: { startsWith: `${base}:r` } }] }, select: { id: true, status: true, evidenceJson: true, createdAt: true }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
+  const seenPhoto = new Set<string>(rows.flatMap((q) => (q.evidenceJson as unknown as WaEvidence).mismatch?.photo_only ?? []));
+  const seenRoster = new Set<string>(rows.flatMap((q) => (q.evidenceJson as unknown as WaEvidence).mismatch?.roster_only ?? []));
+  const newPhoto = m.photo_only.filter((n) => !seenPhoto.has(n));
+  const newRoster = m.roster_only.filter((n) => !seenRoster.has(n));
+  if (rows.length === 0) {
+    const r = await insertWaQuestions(tx, sessionId, [draft]);
+    return { id: r.created[0]?.id ?? r.existing.get(base) ?? null, created: r.created.length > 0 };
+  }
+  const open = [...rows].reverse().find((q) => q.status === "open");
+  if (open) {
+    if (newPhoto.length > 0 || newRoster.length > 0) {
+      const ev = open.evidenceJson as unknown as WaEvidence;
+      const cur = ev.mismatch ?? { day: m.day, roster_only: [], photo_only: [] };
+      const next = { day: m.day, roster_only: [...new Set([...cur.roster_only, ...newRoster])], photo_only: [...new Set([...cur.photo_only, ...newPhoto])] };
+      await tx.triageQuestion.update({ where: { id: open.id }, data: { evidenceJson: JSON.parse(JSON.stringify({ ...ev, mismatch: next })) as Prisma.InputJsonValue } });
+    }
+    return { id: open.id, created: false };
+  }
+  if (newPhoto.length === 0 && newRoster.length === 0) return { id: rows[rows.length - 1]!.id, created: false };
+  const round = rows.length + 1;
+  const next: WaQuestionDraft = { ...draft, groupKey: `${base}:r${round}`, evidence: { ...draft.evidence, mismatch: { day: m.day, roster_only: newRoster, photo_only: newPhoto } } };
+  const r = await insertWaQuestions(tx, sessionId, [next]);
+  return { id: r.created[0]?.id ?? r.existing.get(next.groupKey) ?? null, created: r.created.length > 0 };
 }
 
 /** 撤回：呢個 job tick 將「訊息已撤回」嘅 open 題 superseded（一條 SQL，冪等）。回受影響題數。 */

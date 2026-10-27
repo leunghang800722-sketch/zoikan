@@ -2,6 +2,7 @@
 // needs_boss 嘅身份改做保守預設（按更表姓名建獨立保安員、cash_casual、無
 // 工號），工號衝突嗰類寫 guard_match_overrides 令 reparse 配得返。
 // 合成 fixture：名用「測試…」、工號 U9xxx、電話 6xxxxxxx。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { buildGuardFixPlan } from "@/lib/guard-fix/plan";
@@ -18,7 +19,7 @@ describe("guard-fix 保守預設（needs_boss → 建獨立保安員）", () => 
 
   async function setup() {
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     await prisma.broker.create({ data: { code: "Y", name: "測試Y", kind: "internal_cash", settlementType: "cash", createdBy: "test" } });
     const site = await prisma.site.create({ data: { canonicalName: "測試保守盤", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
     const upload = await prisma.rosterUpload.create({

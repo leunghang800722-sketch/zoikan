@@ -32,6 +32,18 @@ interface Metrics {
   card_fail: number;
   card_arbiter: number;
   card_cost_est: number | null;
+  roster_list_msgs: number;
+  roster_names: number;
+  roster_names_matched: number;
+  roster_names_triage: number;
+  roster_days: number;
+  roster_names_new: number;
+  roster_names_already: number;
+  roster_names_unmatched: number;
+  roster_plans: number;
+  dm_media: number;
+  assume_today_routed: number;
+  assume_today_llm_hit: number;
 }
 interface GroupMetrics extends Metrics {
   group_id: string | null;
@@ -68,6 +80,18 @@ const FIELDS: Array<[keyof Metrics, string]> = [
   ["card_fail", "工卡失敗"],
   ["card_arbiter", "Claude 仲裁次數"],
   ["card_cost_est", "預估成本（USD）"],
+  ["roster_list_msgs", "文字名單訊息"],
+  ["roster_names", "名單姓名數"],
+  ["roster_names_matched", "名單配到人"],
+  ["roster_names_triage", "名單出分流題"],
+  ["roster_days", "名單處理日數"],
+  ["roster_names_new", "名單新建"],
+  ["roster_names_already", "名單已有（跳過）"],
+  ["roster_names_unmatched", "名單配唔到（新題）"],
+  ["roster_plans", "預定更表（日序名單）"],
+  ["dm_media", "私訊機械人嘅媒體"],
+  ["assume_today_routed", "判頭群冇日期報工（送 LLM）"],
+  ["assume_today_llm_hit", "其中抽到更／假"],
 ];
 
 function show(k: keyof Metrics, v: number | null): string {

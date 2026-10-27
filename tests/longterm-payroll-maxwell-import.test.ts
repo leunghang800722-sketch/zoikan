@@ -137,7 +137,7 @@ describe("matchMaxwellRows", () => {
   });
 
   it("完全對唔到 → unmatched", () => {
-    const row = { staffNo: "MG0000", name: "完全冇呢個人" } as unknown as Parameters<typeof matchMaxwellRows>[0][number];
+    const row = { staffNo: "MG9000", name: "完全冇呢個人" } as unknown as Parameters<typeof matchMaxwellRows>[0][number];
     const [result] = matchMaxwellRows([row], candidates);
     expect(result.status).toBe("unmatched");
   });

@@ -2,6 +2,7 @@
 // （唔用真名/真工號/真月薪），驗證：①配對到嘅保安員建新合約、補齊
 // hireDate/probationMonths；②已有人手合約嘅保安員跳過（唔覆蓋）；③重複
 // 導入同一份名單（數值冇變）唔會重複建行；④對唔到嘅行喺 summary 列出。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -32,7 +33,7 @@ describe("importMaxwellContracts", () => {
   beforeEach(async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     actorUserId = user.id;
   });
 
@@ -102,10 +103,10 @@ describe("importMaxwellContracts", () => {
   });
 
   it("對唔到嘅行喺 summary.unmatched 列出，唔會建錯人", async () => {
-    const buf = await buildWorkbook([{ staffNo: "MG0000", name: "完全冇呢個人", basic: 15000, commencement: "2024-01-01" }]);
+    const buf = await buildWorkbook([{ staffNo: "MG9000", name: "完全冇呢個人", basic: 15000, commencement: "2024-01-01" }]);
     const summary = await importMaxwellContracts(buf, actorUserId, null);
     expect(summary.unmatched.length).toBe(1);
-    expect(summary.unmatched[0].staffNo).toBe("MG0000");
+    expect(summary.unmatched[0].staffNo).toBe("MG9000");
     expect(summary.contractsCreated).toBe(0);
   });
 

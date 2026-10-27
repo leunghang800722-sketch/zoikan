@@ -624,7 +624,7 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 ### TE-13 追加：ghost person 自動併入
 
 - **ghost**＝由銀行戶口等文件產生嘅空記錄：`rating=fail` 或 reasons 含 `no_id_page`、七個個人欄全部 missing、冇 ext（牌照／平安咭／QAS／銀行／緊急聯絡人／入職日期）、有工號，而且**每個工號都只同同一個身份已確認（hkid confirmed 且有效）嘅包內 person 共用**，該工號喺打字名單嘅 HKID（package person 可選欄 `listHkids`：`{工號: canonical HKID}`，由 `package-v3.ts` 按 typed-sources 填；冇就當無矛盾）同真人一致（`findGhostPersons`，`src/lib/guards/import/package.ts`）。
-- 效果：`packageConflicts` 唔再計 ghost 工號為共用；preview 評估 reasons 加 `dropped_ghost`（「由文件產生嘅空記錄，已自動併入…」）；apply 唔處理 ghost（唔建人、`persons_total` 唔計）；分診 generator 唔為 ghost 出題，真人嘅題 evidence 帶 `note`（「由銀行戶口文件產生嘅空記錄，已自動併入 U01095」）同合併後嘅 `docInfo`（頁數／各類頁數）。兩個真人共用、名單 HKID 唔一致、真人身份未確認 → 照舊出題（用新題卡列晒共用者）。
+- 效果：`packageConflicts` 唔再計 ghost 工號為共用；preview 評估 reasons 加 `dropped_ghost`（「由文件產生嘅空記錄，已自動併入…」）；apply 唔處理 ghost（唔建人、`persons_total` 唔計）；分診 generator 唔為 ghost 出題，真人嘅題 evidence 帶 `note`（「由銀行戶口文件產生嘅空記錄，已自動併入 U91095」）同合併後嘅 `docInfo`（頁數／各類頁數）。兩個真人共用、名單 HKID 唔一致、真人身份未確認 → 照舊出題（用新題卡列晒共用者）。
 - **production 舊題收題**：`POST /api/triage/sessions/:id/proposals`（含 `?dry_run=1`）開頭會對 session 內仍 open 嘅 `staffno_shared_by_persons` 題跑同一條 ghost 規則（用題目 evidence 內嘅 person；舊題冇 `listHkids` 就當無矛盾），符合嘅 ghost 題同「淨係因 ghost 而共用」嘅真人題標 `superseded`；回應 counts 加 `ghost_questions_closed`（dry＝會收嘅題數，唔寫 DB）。真人另有其他衝突（電話共用／重複身份證等）就唔郁。亦可重新上載同一個包（新規則下會作廢舊題）。
 - `24-open-gap-audit` 暫未加 ghost 分類（audit 輸入冇值，睇唔到個人欄／ghost 狀態）；要睇有幾多條會被收，用 proposals dry run 嘅 `ghost_questions_closed`。
 
@@ -639,7 +639,7 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 - **(a)** ghost 嘅 `docInfo.pagesByKind` 必須有資料而且**只有非身份文件**（bank／blank／sia_permit／safety_card；**TE-13.3：`printed` 已剔走**——printed 類可能係印刷版證件副本（QAS 證書／印刷身份證影印），保守起見有 printed 頁一律唔當 ghost）；有 id_card／application_form（入職表）／address_proof 即唔係 ghost（真新人工號錯配）；冇 docInfo 亦唔當 ghost。
 - **(b)** **冇名單 HKID 佐證一律唔自動併入**：ghost 每個工號都要有 `listHkids`（ghost 或真人其中一邊帶）而且同真人 HKID 一致；舊包／舊題 evidence 冇 `listHkids` → 唔併，照出共用題，ghost 嗰條 evidence `note`＝「疑似空記錄（只有 N 頁銀行文件）：冇打字名單身份證佐證，未自動併入，請核對」（題卡顯示）。名單 HKID 係另一人 → 完全唔係 ghost。
-- **(c)** 併入說明按實際 pagesByKind 寫，例：「由 2 頁銀行文件產生嘅空記錄，已自動併入 U01095」。
+- **(c)** 併入說明按實際 pagesByKind 寫，例：「由 2 頁銀行文件產生嘅空記錄，已自動併入 U91095」。
 - 舊題收題由 proposals import **拆出**：`POST /api/triage/sessions/:id/ghost-close`——**預設 dry run**（只回 `question_ids`／`count`），`?dry_run=0` 先真收（標 `superseded`）；每條被收嘅題逐條 audit `triage_ghost_close`（`question_id`、`person_key`、`rule=ghost_staffno_shared_v2`）。proposals import 唔再收題（`ghost_questions_closed` 已移除）。同一套 (a)(b) 限制：舊題 evidence 冇 `listHkids` 就唔收。
 - 舊題（options 冇 `enter_hkid`）揀 keep：reason_text＝「請揀『唔係呢個人嘅（剔走）』，或者喺人卡補身份證後重新導入」。
 
@@ -672,7 +672,7 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
   `tesseract`（本機 child_process，零成本；Dockerfile runner 階段已 `apt-get install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng`；冇 binary → unavailable；env `TESSERACT_BIN`／`TESSERACT_LANGS`；前處理：自動旋轉、放大到長邊 1600、灰階＋正規化、二值化後再用 A-Z0-9 白名單第二次 OCR 專攻工號）｜`deepseek`（deepseek-flash）｜`haiku`（Claude Haiku 5.5，env `WA_CARD_HAIKU_MODEL` 預設 `claude-haiku-5-5`）｜`qwen`（阿里 Model Studio，OpenAI 相容；env `QWEN_API_KEY`、`QWEN_BASE_URL` 預設 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`、`QWEN_VL_MODEL` 預設 `qwen-vl-ocr`；輸出可能係純文字 → 容錯解析：先 JSON，失敗用正則抽工號；純文字冇工號唔當工卡）｜`claude`（Opus，只做仲裁）。
   送模型嘅圖統一壓到長邊 ≤1000（sharp 可選；冇 sharp 且係 JPEG 就原圖，唔係 JPEG 就該引擎 failed）。key 只由 env 讀，唔寫檔案／log；冇 key＝unavailable。
 - **工號格式**：`U\d{5}｜MP\d{4}｜MG\d{4}｜MW\d{4}`；不合格式一律當讀唔到（唔猜）。
-- **策略**（env `WA_CARD_OCR_STRATEGY`，預設 `S1`；bench 結果出咗再定）：S1 tesseract+deepseek→claude｜S2 tesseract+deepseek→haiku｜S3 deepseek+haiku→claude｜S4 tesseract+qwen→haiku｜S5 qwen+deepseek→claude。
+- **策略**（env `WA_CARD_OCR_STRATEGY`，**WA-9 起預設 `S6`**）：S6 qwen-vl-ocr+haiku 兩讀→分歧先 claude（Opus）仲裁，haiku 唔可用（冇 key／失敗）→ deepseek 頂上，tesseract 唔使（可選，S1/S2/S4 先用）｜S1 tesseract+deepseek→claude｜S2 tesseract+deepseek→haiku｜S3 deepseek+haiku→claude｜S4 tesseract+qwen→haiku｜S5 qwen+deepseek→claude。
   兩個便宜引擎各讀一次：工號一致 → confirmed（零仲裁成本）；唔一致／其中一個失敗 → 仲裁引擎讀一次（三取二，≥2 票 confirmed）；單票或三個都唔同 → review（出分流題，帶候選工號）；兩個都話冇卡 → `not_card`（唔仲裁）；單票讀數同已確認工號只差 ≤2 位數字（同前綴同長度）視為同一張卡嘅誤讀，唔另開卡。一張相多張卡逐個工號判定。冇工號但讀到姓名 → review（`card_name_only`）。完全冇 caption 以外嘅文字推斷（辨識唔睇 caption）。
 - **基準測試**（離線、只讀、唔寫 DB）：`npx tsx scripts/whatsapp/card-ocr-bench.ts --dir <相片夾> --truth <truth.csv> --engines tesseract,deepseek,haiku,qwen,claude --qwen-models qwen-vl-ocr,qwen3-vl-plus [--strategies S1,S2,S3,S4,S5] [--out data/…/report.json]`；`--dry` 用合成 fixture（假引擎）。truth.csv：`file,staff_nos`（多張卡用 `|`；空＝相入面冇卡）。每個引擎出 exact／review／wrong／unreadable＋每張平均 prompt／completion tokens；每個策略出 exact／review／confirmed_wrong／unreadable＋仲裁觸發比例＋token（按 provider:model）。輸出淨係計數，唔印工號／姓名／檔名。**上線門檻：工號 exact ≥90%、confirmed-but-wrong 0。**
 
@@ -697,7 +697,7 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 ### WA-8.1（Opus 驗收修正）
 
 - **M1 redirect**：`fetchMedia` 用 `redirect: "manual"`，任何 3xx 一律當 `http_error`（唔跟、唔會將 `X-Api-Key` 送去第三方）。
-- **M2 多卡**：單票讀數**唔准靜靜丟**。只有「所有讀得到嘅引擎都只讀到 ≤1 張卡」先當同一張卡嘅誤讀（併入候選）；只要有任何一個引擎見到 ≥2 張卡，單票讀數就變 review 卡（`card_suspect_second`）→ `wa_card_confirm` 題，題卡列明「同一張相仲有：U01095（已確認）」同疑似嗰張（只一個引擎讀到），畀人剔。同事連號工號（U01095／U01096）一齊影相、其中一個引擎漏讀第二張，唔會再冇記錄冇題。
+- **M2 多卡**：單票讀數**唔准靜靜丟**。只有「所有讀得到嘅引擎都只讀到 ≤1 張卡」先當同一張卡嘅誤讀（併入候選）；只要有任何一個引擎見到 ≥2 張卡，單票讀數就變 review 卡（`card_suspect_second`）→ `wa_card_confirm` 題，題卡列明「同一張相仲有：U91095（已確認）」同疑似嗰張（只一個引擎讀到），畀人剔。同事連號工號（U91095／U91096）一齊影相、其中一個引擎漏讀第二張，唔會再冇記錄冇題。
 - **S4**：所有引擎各讀到唔同嘅單張卡（三個都唔同）→ **一條**題列全部候選（`wa_person_ambiguous`），唔出三條。
 - **S2 sharp**：`sharp` 已加做正式依賴（`package.json`／lock）；啟動自檢多一行 `[card-ocr] sharp loaded=<bool>`。冇 sharp（載入失敗）時只支援 JPEG 且唔縮圖，PNG 只有 tesseract 可用。
 - **S3 media_state**：以暫存表有冇資料為準——`upsert` 成功先標訊息 `media_state='stored'`；兩個 request 並發撞 unique 當已存在（唔標 expired）；WAHA 重送時之前標咗 expired 嘅，今次拉到會更正為 stored。**WAHA webhook timeout 要 ≥15 秒**（我哋 request 內最多 10 秒拉圖＋落庫）。
@@ -708,3 +708,114 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 兩引擎各只讀到一張唔同嘅卡而仲裁失敗，會合併成一條 review 題（`wa_person_ambiguous`，列晒候選）。審核人揀咗一位，另一位未必有記錄——所以題卡（`wa_card_confirm`／`wa_person_ambiguous`）當候選工號 ≥2 而且當中有兩個**互不相似**（唔係同前綴同長度差 ≤2 位）時，顯示提示「相入面可能有多過一張工卡：如果係兩個人，請分別確認」（DTO `wa.card.multi_hint`，純 bool，唔含工號值）。候選工號差 ≤2 位多數係同一張卡嘅誤讀，唔提示。
 - **「加多一位」**：答案可帶 `also_guard_id`（只限工卡相題、選項 `wa_pick_guard`／`wa_accept`／`wa_force_write`、報更類；對象必須係題目候選之一，而且唔可以同今條揀嘅人一樣）。答完今條後，同一事務內為對方另開一條確認題（新 intent idx、保留盤／日子／更別、`card_confirm`，通常係 `wa_card_confirm`），所以暫存圖仍有 open 題而保留，全部答完先刪。預覽會提示「另外會開一條確認題」。UI：題卡提示下面有「加多一位（同一相另開確認題）」下拉。
 - **tesseract 自檢**（`scripts/ai/guard-ocr-selftest.ts`）：多兩行 log——`[card-ocr] tesseract available=<bool> version=<--version 第一行> langs=<chi_tra,eng 有邊啲>`（spawn 失敗／ENOENT → `available=false`，唔阻網站起）；同 `[card-ocr] tesseract read ok=<bool> ms=<n>`（用合成卡圖跑一次引擎，唔印讀到嘅文字）。deploy 後可確認容器有冇 binary 同 `chi_tra` 語言包。
+
+### WA-9（真相 bench 後）(1) claude 引擎診斷
+
+- 真相 bench 見 claude 引擎 0/4（haiku 4/4）。引擎層面原本將所有失敗吞成 `unreadable`，睇唔到係 refusal／max_tokens／API 錯定係讀到空。現改為：引擎失敗時回固定類別碼 `reason`（`refusal`｜`max_tokens`｜`api_error_<status>`｜`auth_<status>`｜`rate_limit_<status>`｜`connection`｜`bad_image`｜`no_image`｜`error`），bench 報表每引擎加 `failures`（類別 × 張數）同 `empty_but_truth_has_cards`（有回應但讀到空而 truth 有卡）；console 行會印「失敗 refusal×2」「讀到空 1」。用 `--engines claude` 跑 bt-cards 即見原因。
+- 懷疑點之一：Opus 在 `effort: "low"` 下轉錄細字手寫容易草草收工。工卡辨識改為 env `WA_CARD_CLAUDE_EFFORT`（`low`｜`medium`｜`high`，**預設 medium**）；其他 OCR 路徑嘅 effort 預設不變（low）；Haiku 唔帶 effort。**呢個係推測，未用真 API 驗證**（開發環境冇 key，亦冇用老闆樣本相打任何 API）——請用 bench 重跑 `--engines claude`，睇 `failures`／`讀到空` 決定係咪 refusal（身份類圖片被拒）、max_tokens 定其他。
+
+### WA-9 (2) 文件類型分類＋姓名身份
+
+真相 bench：數碼港群嘅相係 Comix 打卡紙（手寫姓名、冇工號）、Wilson 每月簽到表（印刷姓名＋手寫時間）、考勤 app 截圖（「歡迎，<姓名>！」＋時間）——身份只有中文姓名。
+- **分類**：引擎輸出 `doc_type`：`work_card`｜`punch_card`｜`signin_sheet`｜`attendance_sheet`｜`app_screenshot`｜`other`（多數票；`parsed_json.card.doc_type` 記，唔含值）；每張卡另讀 `time_on`／`time_off`（HH:MM）。簽到表揀「今日」（訊息香港日，經 `today` 提示傳畀引擎）嗰一行。
+- **姓名身份**（冇任何工號時）：≥2 個引擎讀到同一姓名＝confirmed；分歧 → 仲裁；三個都唔同 → 合併成一條題列全部姓名候選。有工號仍然以工號為主。
+- **配對**：盤口群＝該盤近 60 日有更嘅 guard；判頭群＝該判頭旗下近 60 日有更嘅 guard；喺範圍內 strict（NFKC＋去空白）同名而且**唯一**（讀數 confirmed）＝配到人；範圍內多個／冇 → `wa_person_ambiguous` 揀人題，候選＝同名者＋同範圍按字形接近排序嘅 guard（上限 8）。大群（multi_site）冇範圍：配到但要一撳確認（`card_name_only`）。範圍內唯一但讀數未確認 → 一撳確認。
+- **更別**：相上讀到嘅打卡時間（`time_on`）優先於訊息送出時間，用嚟對該盤更開始時間（±2 小時）；群組「開工」對照仍然優先。
+
+### WA-9 (3) 多人值勤／出勤記錄表逐行抽取（判頭群，例：柴灣車廠崗位表）
+
+- 引擎輸出 `doc_type=attendance_sheet` ＋ `rows:[{row, date(YYYY-MM-DD), name_zh, staff_no_raw, time_on, time_off, confidence}]`（`staff_no_raw`＝工號欄原樣，U 格式／Wilson 純數字／手寫 L13xxxx、413xxxx 都照抄）。
+- **逐行判定**：兩個引擎逐行（同姓名＋同日期）完全一致 → 全部 confirmed，唔仲裁；有分歧／漏行／單引擎失敗 → 仲裁引擎讀一次，逐行三取二（時間、工號欄取多數）；只一票、欄位分歧、或任何一個讀數信心 low → review 行（`card_disputed`／`row_low_confidence`）。單票行若同已確認行**同行號同日期**＝同一行嘅誤讀，唔另開；冇行號／姓名相近一律唔丟（免漏人）。同一人同日喺表內出現兩次合成一行。
+- **每行獨立 resolve**：U 格式工號 → 工號卡；Wilson 純數字／手寫碼只暫存（證據 `wilson_no`），身份用姓名喺盤／判頭範圍內配對；每行用自己嘅日期（`row_date`）同相上時間定更；一張相出 N 條記錄（同一 `message_id` 追溯），低信心行／配唔到人出題（一撳確認或揀人），其餘照現有 autowrite／pending 流程；日期喺窗口外 → `date_out_of_range`。
+- **bench**：truth CSV 擴展 `file,staff_nos,rows`，rows 用 `|` 分隔每行 `姓名~工號`（工號可省）；報表加每引擎／策略 `row_recall`／`row_precision`（策略只計 confirmed 行，review 行另計 `rows_review`）。
+- **做唔到**：手寫 L13xxxx／413xxxx 編號難讀 → 唔用嚟配對（只暫存），靠姓名；姓名讀錯一字 → 範圍內配唔到 → 揀人題；表太長令引擎漏行 → 漏行出 review 或冇出（單票），請睇 bench 嘅 recall。
+
+### WA-9 (4) 文字名單路徑（數碼港日／夜群主流程；純 code，零 LLM 成本）
+
+- **背景**：數碼港群 10 月起置頂規矩——每日有人打字接龍交齊當日全部返工保安員中文全名（例：「1/10/2026 孫測壹 陳測貳 許測叁 …」），同日再 send 簽到表／打卡相。呢類訊息原本因「有日期、冇更碼字眼」低過過濾閾值，整批被當噪音（日更群 108 條全部 filtered）。
+- **偵測**（`src/lib/whatsapp/roster-list.ts` 純函數 `detectRosterList(text, ts)`）：有日期 token（d/m/yyyy、yyyy-mm-dd、d月d日、d/m〔日/月〕、今日／聽日…相對詞）＋ ≥2 個 CJK 姓名 token（2–4 字；5–6 字姓氏開頭亦算；分隔：空格／全形空格／換行／、，；:／）；名後可帶更碼（「張三 D」「李四(夜)」「王五[N]」），名單前可有整句更碼（「夜更：…」）；沒有請假／取消／替更字眼、冇問號；姓名樣 token 要有 ≥70%（至少 2 個）以常見姓氏開頭（避免「開會 準時」之類普通詞），非姓名雜質 ≤30%。名單成立後所有姓名樣 token 一律保留（偏門姓氏唔會被靜靜丟走）。上限 40 個名（唔經 LLM parse schema）。
+- **過濾**：命中 → decision `candidate`、reason `roster_list`、score 100（唔經閾值）；請假句照舊 LLM 路徑。
+- **處理**（`roster-resolve.ts`，`process.ts`）：唔 call LLM，直接砌 N 條 shift intents（date＝名單日期；凌晨「今日」等沿用日期降級出題）。每個名 strict（NFKC 去空白）配對：範圍＝該盤近 60 日有更／判頭旗下／該群曾配對過嘅 guard；範圍內唯一→配到；範圍內冇而全體唯一→配到（擴到全部）；同名多人→`wa_person_ambiguous`（候選列同名者）；配唔到→候選列同範圍字形接近嘅 guard（冇就 `wa_person_unknown`）。**只有呢啲名先出題**，其餘照現有 autowrite／pending_approval／分流流程；同日同人同更去重沿用（另一條訊息重貼同一名單＝已存在 no-op）。更別：名單內該名更碼 → 群「開工」對照 → 該盤只有一個更別 → 否則 `shift_unmapped` 出題。N 條記錄用同一 `message_id` 追溯；編輯＝整批取消再重做；撤回＝整批退回（沿用既有 source-change 邏輯）。`parsed_json.roster` 只記計數（冇姓名）。
+- **指標**（`/whatsapp/metrics`）：`roster_list_msgs`／`roster_names`／`roster_names_matched`／`roster_names_triage`。
+- **數碼港盤設計（永久，老闆確認）**：工卡／打卡紙一直都冇工號，**身份識別＝中文姓名，工號唔會出現喺相**。每日文字接龍名單係主要來源；相（簽到表／打卡紙／app 截圖）只做交叉核實（見 (5)）；當日冇文字名單先用相上姓名 OCR 做後備識別。
+
+## WA-9 (5)(6)：相片交叉核實＋預設策略 S6＋三個群組實際流程
+
+### 數碼港盤（永久設計）
+**數碼港盤：身份識別＝中文姓名，工號唔會出現喺相**（老闆確認：數碼港卡同打卡紙從來冇工號）。所以數碼港嘅主路徑係「文字名單」，相只做交叉核實；相入面讀到嘅姓名只喺「當日冇文字名單」時先做主要識別。
+- 當日有名單（同群、香港同一日、`llm_provider='roster'`、冇撤回）：
+  - 相（簽到表／打卡紙／app 截圖）辨識出嘅人，對得到名單 → 將相入面讀到嘅 `reported_time_on/off` 補入名單嗰條記錄嘅 `provenance`（`message_id` + guard 定位），**唔改更、唔另寫記錄**。
+  - 相有、名單冇（或相入面姓名配唔到人）→ 計入差異。差異**一個群一日一條合併題 `wa_roster_mismatch`**（groupKey `rm:<group_id>:<日期>`，同日第二張相嘅差異併入同一條 open 題；唔逐名出題）。選項：去排更頁核對／已核對冇問題／跳過。
+  - 名單有而相冇嘅人：`roster-crosscheck.rosterOnly()` 提供（日終比對用）；逐張相唔報，免得未收齊就洗版。**相唔係寫入必要條件**——冇相照樣寫。
+  - 全部對到＝唔出題，暫存圖即刪。指標 `parsed_json.card.roster_crosscheck {matched, photo_only}`（只計數，冇姓名）。
+- 當日冇名單：照舊 WA-9 (2)(3) 嘅姓名 OCR 識別流程（範圍內唯一先自動寫，否則揀人題）。
+
+### 三個群組實際流程
+1. **數碼港盤**（文字名單＋相）：名單訊息 → 純 code 拆名 → N 條 pending_approval 記錄；相 → 交叉核實（見上）；冇名單嗰日 → 相入面姓名做識別。
+2. **有工號嘅工卡群**（卡面有 U／MP／MG 工號）：工號為主（WA-8 流程不變，S6 兩讀＋Claude 仲裁）；姓名只核對。
+3. **值勤／出勤表群**（多人表）：逐行抽取（日期、行號、姓名／工號欄原樣、上下班時間）；手寫 L13xxxx／413xxxx 唔係 U 格式工號，只暫存、**唔用嚟配對**，由姓名／候選出題。
+
+### 做唔到嘅情況
+- 手寫 Wilson 編號（L13xxxx／413xxxx）讀唔清 → 出題，唔自動配。
+- 同名多人、姓名配唔到、相片過期（>7 日）或唔係工卡 → 出題／忽略，唔猜。
+- 引擎全部 unavailable（冇 key）→ `card_unreadable` 題。
+- 真相片 bench 未喺本環境跑（冇 API key）；claude 引擎 0/4 嘅根因未證實（只加咗 effort 預設同失敗原因碼診斷），上線後要用 bench 驗證。
+
+
+## WA-9 (7)：真數據強化（數碼港累積名單、相 caption、判頭群、其他短訊）
+
+真數據（10/18–10/27，三個群 366 條）顯示 (4) 嘅單日名單假設大出入，所以 detect/resolve 重寫。**全部純 code（零 LLM）**；離線評估 `scripts/whatsapp/roster-text-eval.ts --dir <wa-export>`（只印計數）。
+
+### 數碼港累積名單（`roster_list`）
+- 置頂名單係「多日累積版」：標題行 → 逐日「一行日期＋一行人名」，每位保安員報到就編輯／重發整條（每日 6–9 次，月尾 27 日、55 行、~2,200 字）。
+- 解析：NFKC；剝轉發前綴 `[d/m hh:mm] …: `、粗體 `*`、尾空格；日期行容許 `d/m/yyyy`、`dd/mm/yyyy`、`d/m`、`d月d日`、全形斜線、`2O26`／`1O`（數字上下文 O→0，只改日期 token）；標題行（第一個日期行之前）忽略；同一日期出現多次（轉發拼埋）以最後一段為準；上限 8,000 字、≤31 日、每日 ≤40 名；含請假／替更／問號嘅**日子**唔當名單（其餘日子照用）。
+- 名行清潔：尾句號、雙空格、同日重複名去重；1 字 token 接 1–3 字 token（姓同名分開）合併；5–8 字黏名 token 要用已知姓名集（`GuardMatchIndex` 名集，`name-index.ts`）先拆，拆唔到原樣出揀人題；簡繁用 `src/lib/names/variants.ts` 正規化後比對（簡體姓亦當姓氏）。
+- **幂等（重發 6–9 次唔重複）**：只處理 日期 ≤ 今日、喺日期窗口（今日 −2 內）、唔屬鎖月嘅日子（更舊嘅日子只計 `skipped_old`，唔補寫，由月度更表 upload 負責）。每個（人，日）已有未取消記錄（`roster_already`）或其他訊息已對過嘅 intent → 跳過，一律唔建；自己編輯前嘅 pending 記錄視為唔存在（取消後重建）。配唔到／同名多人嘅名：每（群，日，名）固定 groupKey `rn:<群>:<日>:<名 hash>` 只開**一張**題，重發唔再開；呢類題唔會被編輯 supersede。批量查詢（一條名單 3 條 SQL，唔逐名來回）。
+- 指標（counts only，唔記名）：`roster_list_msgs`／`roster_days`／`roster_names`／`roster_names_new`／`roster_names_already`／`roster_names_unmatched`；訊息 `parsed_json.roster` 同步記 `skipped_old/future/locked`、`unmatched_dup`。
+
+### 預定更表「日序名單」（`roster_plan`）
+CPN 群開工前由管理員發：`20 名 名 名`（日期只係日數；多段用空行／換行）。**唔係實際報到**：唔建 shift、唔出題，只記 `parsed_json.roster_plan {days,names,dates}` ＋指標 `roster_plans`（供日後 `rosterOnly()` 對照）。日 ≥ 今日日數 → 本月，否則下月。
+
+### 相 caption 姓名報工（`name_shift_caption`）
+- 「X報開工／返工／開工」→ 當日（relative 今日，凌晨沿用降級）一條 shift，姓名在群範圍內配對（配唔到先出揀人題）；「X報收工／收工／下班」→ 補同一條記錄嘅 `provenance.reported_time_off`，**永不建第二條 shift**（HKT 12:00 前優先搵前一晚記錄）；冇對應開工 → note `checkout_without_checkin`，唔出題。
+- 群組開咗 `card_photo_mode`：caption 姓名係身份首要訊號，OCR 只做核對——讀到嘅姓名同 caption 唔同先出 `wa_card_confirm` 題。
+- U 工號 caption（`U9OO11 名 22/1O/2026 數碼港夜更報開工`）：工號／日期 token 內 O→0（`fixOcrDigits`）後走現有 LLM parse／resolve。
+
+### 判頭群「冇日期＝今日」（`assume_today`）
+(盤別名｜員工編號 token｜已知姓名) ＋ (更次詞｜`HHMM-HHMM`，連字號容許「一 — – ~ 至」) 而冇日期 → 過閾值，LLM 缺日期嘅 intent 補「今日」。SHIFT_RE 加 日更／日班／上班／收工。**根因**：舊 SHIFT_RE 冇「日更」「上班」、時間範圍冇辨識，所以只靠盤別名（+15）永遠過唔到 40 分；`鄧…報香港大學松蔭園2200-0615上班` 全部 reasons 空＝冇盤別名登記＋冇更次詞命中。**注意**：盤別名要登記（例：厚德、柴灣車廠、松蔭園、欣明／彩明），冇登記而又冇姓名名集時，16 條真報工只有 13 條過閾值。只有盤名＋相（`site_only_caption`）：card mode 開先處理，否則唔出題。
+
+### 其他類型（只分類、盡量唔出題）
+- `A代B`／`A替B`／`A頂B`（兩個姓名樣 token）→ 一個 `cover` intent（走現有 wa_cover 確認題「A 改做 B 嘅更？」），roster 偵測 EXCLUDE 加「代」。
+- 純問句（`請問…`、`有無返`）→ 第 0 層直接忽略（`plain_question`），零 intent、零題卡；LLM 路徑返 question_only 嘅 intent 照舊記為 ignored（唔出題）。
+- 多日假期 `X11月份假期3,12,18,26` → 每日一個 leave intent（假期碼由群 leave_word_map 對照，對唔到先出題）。
+- 月度考勤摘要 `X10月份返<盤>考勤紀錄，休息6日：…` → 只記 `parsed_json.rule {month,rest_days,claimed}`；v1 唔核對（TODO：同月度更表休息日對照）。
+- 私訊機械人嘅媒體（`not_group`）：指標 `dm_media`；日摘要一日 >3 條會提一句。
+
+### WA-9 (7) Opus 覆核修正（M1–M3／S1–S4）
+- **M1 值勤表行號**：只有所有讀得到嘅引擎行數一致先信行號；單票行**一律唔丟**，出 review 卡（`name_candidates`＝該行姓名；行號可信而且同已確認行同行號同日期 → 加 reason `row_misread_suspect`，歸 wa_card_confirm 一撳確認類）。一個引擎漏讀一行並重新編號，漏嗰個人唔會消失。
+- **M2 `wa_roster_mismatch` 輪次**：base groupKey `rm:<群>:<日>`；有 open 題 → 新差異併入（聯集）；題已答／跳過／superseded 後只有「之前輪次未出現過」嘅新差異先開下一輪（`:r2`、`:r3`…）；同一差異重跑冪等。
+- **M3 範圍外同名**：全系統唯一同名、但近 60 日冇喺該群／盤出現 → 唔自動寫，出 wa_person_ambiguous（單一候選，一撳確認）；同卡相 `card_name_only` 口徑一致。
+- **S1** `person_raw` 改用 `ResolvedIntent.intentIdx`（resolveIntents 標每行對應邊個輸入 intent）對返，唔再按位置。**S2** 已確認姓名卡另有單票姓名 → `name_alt`（evidence，畀審核人見，唔參與配對）。**S4** bench 引擎冇出任何行 → `row_precision=null`（輸出顯示「—」）。
+- **S3 S6 預設與部署**：冇設 `WA_CARD_OCR_STRATEGY` 嘅環境預設由 S1（tesseract+deepseek）變 **S6（qwen+haiku，claude 仲裁）**。qwen 或 haiku 失敗 → deepseek 頂上（只頂一次）。**部署前要 `QWEN_API_KEY`＋Anthropic key（`CLAUDE_API_KEY`）**，否則只剩 deepseek 單引擎、冇「兩讀」；啟動自檢 `[card-ocr] strategy=S6 qwen_key=… claude_key=… deepseek_key=… WARN=…` 會對未設定嘅 key 警告（只印布林）。想保留舊行為：設 `WA_CARD_OCR_STRATEGY=S1`。
+
+### WA-9 (7) Opus 第二輪修正
+- **撤回後重發（M2）**：`rn:`（配唔到名）題撤回 → superseded；`questionKeys` 只計 open／answered／skipped（skipped 都計，避免跳過後每次重發都再開），`insertWaQuestions` 對 superseded 嘅 `rn:` 題當唔存在 → 重發可再開。`autowrite.hasRecentDuplicate` 排除已撤回／已被取代訊息嘅 intent。口徑：**撤回 → supersede 並允許重發再開；編輯 → 同一 key 併入（唔 supersede）**。
+- **鎖月（M3）**：收工補 `reported_time_off`、相片交叉核實補 `reported_time_on/off` 統一經 `provenance-patch.ts`：鎖月（`month_closes.locked_at`）記錄**唔改**（收工 note `locked_month_skip`；交叉核實 `roster_crosscheck.locked_month_skip` 計數），每條實際更新寫 audit `whatsapp_provenance_patch`（只記記錄 id 同 key）。
+- **去重 key 含更別（S1）**：盤口群名單去重 key＝（人，日，更別；更別＝名單更碼 → 群「開工」對照 → 單一更別）。同人同日 D＋N 唔會當同一條；已有日更記錄而名單報夜更 → 撞更出題（同一撞更重發唔再開）。
+- **收工日期（S2）**：HKT 12:00 前收工只有「前一晚嗰條係跨夜更（結束 ≤ 開始）」先補前一晚，否則補當日嗰條。
+- **assume_today 上限＋指標（S3）**：每群每日最多 `WA_ASSUME_TODAY_DAILY_CAP`（預設 30，1–1000）條送 LLM，超過降級 ignore（`assume_today_cap`）；指標 `assume_today_routed`／`assume_today_llm_hit`（命中率＝hit/routed）。規則本身唔改。
+- **eval 腳本（S4）**：判頭群 = 群代號唔以 CP 開頭（`--broker-groups` 覆寫）；盤別名由 `<dir>/aliases.json`（唔入 git）讀。
+
+### WA-9 (7) 盤別名：字形折疊＋盤口群以綁定盤為準
+- 盤名／別名比對（filter `siteHit`、resolve `classifySiteName`）兩邊先經 `foldVariants`（`src/lib/names/variants.ts`：NFKC＋簡→繁＋異體字，例「徳→德」）再比，所以別名「厚德商場」配到「厚徳商場」。
+- **盤口群（群組已綁定盤）分層**（兄弟盤調人係常態，唔一刀切；`client`＝`client_group`，冇就 `client_name`）：
+  1. 文字命中群盤自己（含多盤共用嘅區域名而群盤都有）→ 群盤，唔出題。
+  2. 命中**同客戶兄弟盤獨有**嘅名／別名 → `site_ambiguous` 題，候選＝群盤＋該兄弟盤（`basis.site=sibling_site_text`），唔自動寫。
+  3. 只命中**多盤共用**嘅區域名／客戶名（別名掛喺 ≥2 個盤、群盤冇）→ 群盤，唔出題（`group_over_alias`）。
+  4. 命中**唔同客戶**嘅盤獨有嘅名 → 群盤，但要確認（`site_ambiguous`，`other_client_site`），唔自動寫。
+  5. 完全唔識嘅盤名 → 照舊出題。判頭／多盤群（冇綁定盤）先用別名配盤。
+- 盤別名係數據，由人喺盤口設定登記（唔係 code）。
+
+### 倉庫衛生：合成員工編號一律 9 字頭
+真實 U／MP／MG／MW 號集中喺 0–8 字頭範圍，所以測試／docs／註解入面嘅合成工號一律 `U9xxxx`（O 誤讀寫法如 `U9OO11`）；`tests/repo-hygiene-staff-numbers.test.ts` 掃 src／tests／docs／scripts，非 9 字頭（含 O 寫法）fail（冇允許清單；舊有連號佔位已全改 9 字頭）。假電話用 `tests/helpers/fake-tel.ts`（9001xxxx 遞增）。
+TODO：triage「已跳過」清單未加「名單仍有呢個名」提示（`rn:` 題 skipped 後名單重發唔再開，但清單睇唔出名單仍然有佢）。

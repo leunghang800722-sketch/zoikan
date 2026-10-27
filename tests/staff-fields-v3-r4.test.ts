@@ -1,5 +1,6 @@
 // WP-STAFF-FIELDS 第二階段：導入包 v3（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人／逐工號入職日期）。
 // 全部合成資料（合法 check digit hkid 由 helper 計、9100xxxx 電話、「測試」姓名、00000 開頭戶口）；唔讀 data/。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -78,7 +79,7 @@ describe("WP-STAFF-FIELDS 第四輪覆核（結構性：只有最近一次包含
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
     const mkUser = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     fx.userIds["會計"] = await mkUser("會計");

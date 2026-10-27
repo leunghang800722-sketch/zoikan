@@ -3,6 +3,7 @@
 // 真名/真工號/真電話/真月薪），覆蓋任務書 3e 要求嘅場景：正常在職、
 // 月中轉約、離職結算、病假 4 日有紙 vs 3 日、MPF 三種免供、年假試用期
 // 邊界。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, afterAll } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { buildLongtermPayrollInputs, recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
@@ -23,7 +24,7 @@ async function makeFixtureBase() {
   const b07 = await prisma.broker.create({ data: { code: `T-B07-${Math.random().toString(36).slice(2, 6)}`, name: "測試內部長工桶", kind: "internal_longterm", settlementType: "salary", createdBy: "test" } });
   const brokerK = await prisma.broker.create({ data: { code: `T-K-${Math.random().toString(36).slice(2, 6)}`, name: "測試外判雞頭", kind: "broker", settlementType: "cash", createdBy: "test" } });
   const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-  const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+  const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
   return { site, st, b07, brokerK, actorUserId: user.id };
 }
 

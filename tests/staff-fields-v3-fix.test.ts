@@ -1,5 +1,6 @@
 // WP-STAFF-FIELDS 第二階段：導入包 v3（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人／逐工號入職日期）。
 // 全部合成資料（合法 check digit hkid 由 helper 計、9100xxxx 電話、「測試」姓名、00000 開頭戶口）；唔讀 data/。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -84,7 +85,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
     const mkUser = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     fx.userIds["會計"] = await mkUser("會計");
@@ -123,8 +124,8 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
   const mkGuard = (data: Record<string, unknown>) => prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", createdBy: "t", ...data } as never });
 
   describe("B1：打字名單 only 嘅人", () => {
-    const full: X = { nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" }, bank: {} };
-    const mkWithNo = (g: Record<string, unknown>) => mkGuard({ ...g, staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
+    const full: X = { nos: [{ n: "U97001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" }, bank: {} };
+    const mkWithNo = (g: Record<string, unknown>) => mkGuard({ ...g, staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
 
     it("(c) 姓名唔同、淨靠工號 link → 新欄全部唔寫（包括銀行），出 ext_identity_check", async () => {
       const g = await mkWithNo({ nameZh: "測試員其他" });
@@ -176,7 +177,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       const sid = r.body.triage.session_id as string;
       await post(reassignRoute as never, `/api/triage/sessions/${sid}/reassign`, owner, { owner_user_id: fx.userIds["會計"] }, sid);
       // 之後另一個同名保安員出現（唔好令目標變）
-      await mkGuard({ nameZh: "測試員甲", staffNumbers: { create: [{ scheme: "MP", number: "MP77002" }] } });
+      await mkGuard({ nameZh: "測試員甲", staffNumbers: { create: [{ scheme: "MP", number: "MP97002" }] } });
       const q = (await qs("ext_identity_check"))[0]!;
       const { res } = await confirm(accountant, q.id, { option: "confirm_ext_identity" });
       expect(res.status).toBe(200);
@@ -373,19 +374,19 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       expect(t).not.toContain("測試聯絡人甲");
     });
     it("逐工號入職日期：工號屬另一個人 → 預覽顯示 not_stored（同寫入一致：唔會寫）", async () => {
-      await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U55001" }] } });
+      await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U95001" }] } });
       await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
-      const pk = pkg3([person({ nos: [{ n: "U55001", hire: "2020-01-02" }] })]);
+      const pk = pkg3([person({ nos: [{ n: "U95001", hire: "2020-01-02" }] })]);
       const pv = await previewPkg(owner, pk);
-      expect(checks(pv.body.rows[0].ext)["staffHire.U55001"] ?? checks(pv.body.rows[0].ext)["staff_hire.U55001"]).toBe("not_stored");
+      expect(checks(pv.body.rows[0].ext)["staffHire.U95001"] ?? checks(pv.body.rows[0].ext)["staff_hire.U95001"]).toBe("not_stored");
       expect(pv.body.ext_stats.to_write.find((w: { key: string }) => w.key === "staffHire")).toBeUndefined();
     });
     it("長工：人層面入職日期唔自動寫（長工糧讀 guards.hire_date），出 ext_field_review；非長工照寫", async () => {
       const lt = await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), employmentType: "longterm_autopay" });
-      const r = await applyPkg(owner, pkg3([person({ hire: "2020-01-02", nos: [{ n: "U66001", hire: "2020-01-02" }] })]));
+      const r = await applyPkg(owner, pkg3([person({ hire: "2020-01-02", nos: [{ n: "U96001", hire: "2020-01-02" }] })]));
       expect(outs(r.body.results[0].ext).hireDate).toBe("held");
       expect((await prisma.guard.findUniqueOrThrow({ where: { id: lt.id } })).hireDate).toBeNull();
-      expect(outs(r.body.results[0].ext)["staffHire.U66001"]).toBe("written"); // valid_from 長工糧冇讀
+      expect(outs(r.body.results[0].ext)["staffHire.U96001"]).toBe("written"); // valid_from 長工糧冇讀
       const q = (await qs("ext_field_review"))[0]!;
       expect(q).toBeTruthy();
       await confirm(owner, q.id, { option: "apply_ext_fields", ext_fields: { hireDate: "use_import" } });
@@ -473,8 +474,8 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
     });
 
     it("N4：ext_identity_check 照寫入連到長工 → 人層面 hireDate 唔寫，另出 ext_field_review（長工糧）", async () => {
-      const g = await mkGuard({ nameZh: "測試員其他", employmentType: "longterm_autopay", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
-      const tp = typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" }, hire: "2020-01-02" }, H[2]!);
+      const g = await mkGuard({ nameZh: "測試員其他", employmentType: "longterm_autopay", staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
+      const tp = typedPerson({ nos: [{ n: "U97001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" }, hire: "2020-01-02" }, H[2]!);
       await applyPkg(owner, pkg3([tp]));
       const q = (await qs("ext_identity_check"))[0]!;
       const { res } = await confirm(owner, q.id, { option: "confirm_ext_identity" });
@@ -488,8 +489,8 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
     });
 
     it("hold 被人手繞過：guards audit 帶 hold_override:true（冇值），summary 帶 hold_overrides", async () => {
-      const g = await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
-      await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
+      const g = await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
+      await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U97001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
       const q = (await qs("ext_identity_check"))[0]!;
       await confirm(owner, q.id, { option: "confirm_ext_identity" });
       const up = await prisma.auditLog.findMany({ where: { tableName: "guards", rowId: g.id, action: "update" } });
@@ -500,8 +501,8 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
     });
 
     it("答 ext_identity_check 要「保安員個人資料:view」＋「保安員:update」：冇就 restricted／403", async () => {
-      await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
-      const r = await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
+      await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
+      const r = await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U97001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
       const sid = r.body.triage.session_id as string;
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員", action: "update" } }, data: { granted: false } });
       await post(reassignRoute as never, `/api/triage/sessions/${sid}/reassign`, owner, { owner_user_id: fx.userIds["會計"] }, sid);
@@ -533,29 +534,29 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
     });
 
     it("銀行 held 而現有戶口同導入一樣（有銀行 view）→ 唔出 bank_review", async () => {
-      const g = await mkGuard({ nameZh: "測試員甲", bankCode: "004", bankName: "匯豐銀行", bankAccountNo: ACCT, bankPayeeName: PAYEE, staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
+      const g = await mkGuard({ nameZh: "測試員甲", bankCode: "004", bankName: "匯豐銀行", bankAccountNo: ACCT, bankPayeeName: PAYEE, staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
       void g;
-      await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], bank: {} }, H[2]!)]));
+      await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U97001" }], bank: {} }, H[2]!)]));
       expect(await prisma.triageQuestion.count({ where: { kind: "bank_review" } })).toBe(0);
     });
 
     it("builder：打字名單 only 嘅 key 確定性（跨 build 一致）", async () => {
       const { buildPackageV3 } = await import("../scripts/staff-import/lib/package-v3");
       const v2 = { version: 2 as const, generatedAt: "t", persons: [] };
-      const ext = [{ key: H[2]!, keyKind: "hkid", hasDocs: false, staffNos: ["U77001"], flags: ["typed_list_only_person"], fields: {} }];
+      const ext = [{ key: H[2]!, keyKind: "hkid", hasDocs: false, staffNos: ["U97001"], flags: ["typed_list_only_person"], fields: {} }];
       const map: Record<string, string> = {};
       const idFor = (k: string, v: string) => (map[`${k}|${v}`] ??= `rnd${Object.keys(map).length}`);
-      const a = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] }, { idFor });
-      const b = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] }, { idFor });
+      const a = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U97001" }] }, { idFor });
+      const b = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U97001" }] }, { idFor });
       expect(a.pkg.persons[0]!.key).toBe(b.pkg.persons[0]!.key); // 對照檔令跨 build 穩定
       expect(a.pkg.persons[0]!.key).toMatch(/^typed:rnd0$/);
       expect(a.pkg.persons[0]!.key).not.toContain(H[2]!); // 唔含身份證，亦唔係身份證 hash
     });
 
     it("分診搜尋：GET /api/guards 用工號（含非在職）搵到人", async () => {
-      await mkGuard({ nameZh: "測試員搜", status: "inactive", staffNumbers: { create: [{ scheme: "U", number: "U55123" }] } });
+      await mkGuard({ nameZh: "測試員搜", status: "inactive", staffNumbers: { create: [{ scheme: "U", number: "U95123" }] } });
       const { GET } = await import("@/app/api/guards/route");
-      const res = await GET(new Request("http://t/api/guards?take=10&include_inactive=1", { headers: { cookie: owner, "x-guard-search": encodeURIComponent("U55123") } }) as never);
+      const res = await GET(new Request("http://t/api/guards?take=10&include_inactive=1", { headers: { cookie: owner, "x-guard-search": encodeURIComponent("U95123") } }) as never);
       expect((await res.json()).rows.length).toBe(1);
     });
 

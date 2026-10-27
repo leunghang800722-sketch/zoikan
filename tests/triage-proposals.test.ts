@@ -1,4 +1,5 @@
 // TR-1：POST /api/triage/sessions/:id/proposals（OCR 重讀建議導入）。全部合成資料（假名／合法 check digit 假 HKID／9100xxxx）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -67,7 +68,7 @@ describe("TR-1 OCR 重讀建議導入", () => {
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
     const mkUser = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     fx.userIds["會計"] = await mkUser("會計");

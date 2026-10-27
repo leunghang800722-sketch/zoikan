@@ -24,7 +24,6 @@ function roundTripDate(v: string): boolean {
   return hk.toISOString().slice(0, 10) === v;
 }
 const STATUSES = ["received", "filtered", "parsed", "routed", "done", "ignored", "error", "revoked"] as const;
-const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const dayNum = (iso: string): number => Math.floor(Date.parse(`${iso}T00:00:00Z`) / 86_400_000);
 
 export async function GET(req: Request) {
