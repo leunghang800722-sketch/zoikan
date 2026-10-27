@@ -12,7 +12,7 @@ tools/importer/work/
 tools/importer/out/
 
 # --- P1 Next.js / Prisma 專案 ---
-node_modules/
+node_modules
 .next/
 .env
 .env.*

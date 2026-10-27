@@ -52,7 +52,7 @@ describe("WA-9 訊息匯出", () => {
     await exportGet(req("?from=2026-10-01&to=2026-10-31&status=ignored", ck["老闆"]));
     const a = await prisma.auditLog.findFirstOrThrow({ where: { action: "whatsapp_messages_export" }, orderBy: { createdAt: "desc" } });
     expect(a.after).toEqual({ from: "2026-10-01", to: "2026-10-31", group: false, statuses: ["ignored"], count: 1, truncated: false });
-    expect(JSON.stringify(a.after)).not.toContain("孫富榮");
+    expect(JSON.stringify(a.after)).not.toContain("測試甲");
   });
   it("上限 2,000 條：超出截斷＋x-truncated", async () => {
     await prisma.whatsappMessage.createMany({ data: Array.from({ length: 2001 }, (_, i) => ({ session: "default", chatJid: G, messageId: `bulk-${i}`, senderJid: "x@c.us", ts: new Date(Date.UTC(2026, 9, 10, 0, 0, 0, i)), text: "t", status: "ignored" as const })) });
