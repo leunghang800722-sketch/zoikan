@@ -37,6 +37,11 @@ interface WaMetrics {
   card_fail: number;
   card_arbiter: number;
   card_cost_est: number | null;
+  /** WA-9 文字名單：名單訊息數／名單內姓名數／配到人（冇出題）嘅姓名數／出分流題嘅姓名數 */
+  roster_list_msgs: number;
+  roster_names: number;
+  roster_names_matched: number;
+  roster_names_triage: number;
 }
 
 interface WaGroupMetrics extends WaMetrics {
@@ -57,6 +62,31 @@ export function parseDays(raw: string | null): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1 || n > METRIC_DAYS_MAX) throw BadRequest(`days 要係 1–${METRIC_DAYS_MAX} 嘅整數`);
   return n;
+}
+
+interface RosterCounts {
+  msgs: number;
+  names: number;
+  triage: number;
+}
+const EMPTY_ROSTER: RosterCounts = { msgs: 0, names: 0, triage: 0 };
+
+/** 每個 chat_jid 嘅文字名單計數（parsed_json.roster 只有計數）。 */
+async function rosterByChat(start: Date, end: Date): Promise<Map<string, RosterCounts>> {
+  const msgs = await prisma.$queryRaw<{ chat_jid: string; msgs: bigint; names: bigint }[]>(Prisma.sql`
+    SELECT m.chat_jid AS chat_jid, count(*) AS msgs, COALESCE(sum((m.parsed_json->'roster'->>'names')::int), 0) AS names
+    FROM whatsapp_messages m WHERE m.llm_provider = 'roster' AND m.ts >= ${start} AND m.ts < ${end} GROUP BY m.chat_jid`);
+  const tri = await prisma.$queryRaw<{ chat_jid: string; n: bigint }[]>(Prisma.sql`
+    SELECT m.chat_jid AS chat_jid, count(*) AS n
+    FROM whatsapp_intents i JOIN whatsapp_messages m ON m.message_id = i.message_id AND m.revision = i.message_revision
+    WHERE m.llm_provider = 'roster' AND m.ts >= ${start} AND m.ts < ${end} AND i.routed = 'triage' GROUP BY m.chat_jid`);
+  const out = new Map<string, RosterCounts>();
+  for (const r of msgs) out.set(r.chat_jid, { msgs: Number(r.msgs), names: Number(r.names), triage: 0 });
+  for (const t of tri) {
+    const cur = out.get(t.chat_jid);
+    if (cur) cur.triage = Number(t.n);
+  }
+  return out;
 }
 
 interface CardCounts {
@@ -98,7 +128,7 @@ async function cardByChat(start: Date, end: Date): Promise<Map<string, CardCount
   return out;
 }
 
-function pick(s: WaStats, tokens: { in: number; out: number }, triage: { opened: number; answered: number }, card: CardCounts = EMPTY_CARD): WaMetrics {
+function pick(s: WaStats, tokens: { in: number; out: number }, triage: { opened: number; answered: number }, card: CardCounts = EMPTY_CARD, roster: RosterCounts = EMPTY_ROSTER): WaMetrics {
   return {
     received: s.received,
     filtered: s.filtered,
@@ -122,6 +152,10 @@ function pick(s: WaStats, tokens: { in: number; out: number }, triage: { opened:
     card_fail: card.fail,
     card_arbiter: card.arbiter,
     card_cost_est: card.cost,
+    roster_list_msgs: roster.msgs,
+    roster_names: roster.names,
+    roster_names_matched: Math.max(0, roster.names - roster.triage),
+    roster_names_triage: roster.triage,
   };
 }
 
@@ -143,10 +177,11 @@ export async function computeMetrics(days: number, now: Date = new Date()): Prom
   const to = hkDateOf(now);
   const from = addDays(to, -(days - 1));
   const range = parseRange(from, to, now);
-  const [triage, tokenRows, cards] = await Promise.all([
+  const [triage, tokenRows, cards, rosters] = await Promise.all([
     triageByChat(range.start, range.end),
     prisma.whatsappMessage.groupBy({ by: ["chatJid"], where: { ts: { gte: range.start, lt: range.end } }, _sum: { llmTokensIn: true, llmTokensOut: true }, _count: { _all: true }, orderBy: { chatJid: "asc" } }),
     cardByChat(range.start, range.end),
+    rosterByChat(range.start, range.end),
   ]);
   const sumTok = (jid: string | null) => {
     let i = 0;
@@ -173,14 +208,23 @@ export async function computeMetrics(days: number, now: Date = new Date()): Prom
     if (t.cost !== null) t.cost = Math.round(t.cost * 10000) / 10000;
     return t;
   };
-  const totals = pick(await computeStats(range, null), sumTok(null), sumTri(null), sumCard());
-  const jids = [...new Set([...tokenRows.map((r) => r.chatJid), ...triage.keys(), ...cards.keys()])].sort().slice(0, MAX_GROUPS);
+  const sumRoster = (): RosterCounts => {
+    const t: RosterCounts = { msgs: 0, names: 0, triage: 0 };
+    for (const v of rosters.values()) {
+      t.msgs += v.msgs;
+      t.names += v.names;
+      t.triage += v.triage;
+    }
+    return t;
+  };
+  const totals = pick(await computeStats(range, null), sumTok(null), sumTri(null), sumCard(), sumRoster());
+  const jids = [...new Set([...tokenRows.map((r) => r.chatJid), ...triage.keys(), ...cards.keys(), ...rosters.keys()])].sort().slice(0, MAX_GROUPS);
   const groupRows = jids.length ? await prisma.whatsappGroup.findMany({ where: { groupJid: { in: jids } }, select: { id: true, groupJid: true, label: true } }) : [];
   const byJid = new Map(groupRows.map((g) => [g.groupJid, g]));
   const groups: WaGroupMetrics[] = [];
   for (const jid of jids) {
     const g = byJid.get(jid);
-    groups.push({ group_id: g?.id ?? null, label: g?.label || "（未登記群組）", ...pick(await computeStats(range, jid), sumTok(jid), sumTri(jid), cards.get(jid)) });
+    groups.push({ group_id: g?.id ?? null, label: g?.label || "（未登記群組）", ...pick(await computeStats(range, jid), sumTok(jid), sumTri(jid), cards.get(jid), rosters.get(jid)) });
   }
   groups.sort((a, b) => b.received - a.received || a.label.localeCompare(b.label));
   return { days, from, to, totals, groups };

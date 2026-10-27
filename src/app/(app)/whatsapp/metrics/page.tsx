@@ -32,6 +32,10 @@ interface Metrics {
   card_fail: number;
   card_arbiter: number;
   card_cost_est: number | null;
+  roster_list_msgs: number;
+  roster_names: number;
+  roster_names_matched: number;
+  roster_names_triage: number;
 }
 interface GroupMetrics extends Metrics {
   group_id: string | null;
@@ -68,6 +72,10 @@ const FIELDS: Array<[keyof Metrics, string]> = [
   ["card_fail", "工卡失敗"],
   ["card_arbiter", "Claude 仲裁次數"],
   ["card_cost_est", "預估成本（USD）"],
+  ["roster_list_msgs", "文字名單訊息"],
+  ["roster_names", "名單姓名數"],
+  ["roster_names_matched", "名單配到人"],
+  ["roster_names_triage", "名單出分流題"],
 ];
 
 function show(k: keyof Metrics, v: number | null): string {

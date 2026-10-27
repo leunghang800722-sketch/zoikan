@@ -2,6 +2,8 @@
 // 打分 0–100，≥ 閾值（預設 40，群組可覆寫 filter_threshold）先交 AI。
 // 問號規則（老闆 2026-10-17 補充）：日期 token＋（更別詞或請假詞）同時命中＝「帶問句嘅指令」，問號不減分；
 // 只有純疑問句（冇該組合）先減分。reasons 只係固定代碼，唔含原文。
+import { detectRosterList } from "./roster-list";
+
 export const FILTER_DEFAULT_THRESHOLD = 40;
 
 export interface FilterInput {
@@ -20,6 +22,8 @@ export interface FilterInput {
   threshold?: number | null;
   /** WA-7：媒體類型（image／video／application…；冇媒體＝null）。有媒體而冇文字／caption → reason media_only。 */
   mediaType?: string | null;
+  /** WA-9：訊息時間（文字名單偵測推算日期用） */
+  ts?: Date;
   /** WA-8：群組開咗工卡相模式——圖片訊息（有冇 caption 都得）唔當純圖片略過，交工卡辨識流程。 */
   cardPhotoMode?: boolean;
 }
@@ -79,6 +83,14 @@ export function scoreMessage(input: FilterInput): FilterResult {
 
   const text = norm(input.text ?? "");
   // WA-7：有媒體（圖片／影片／文件…）而冇文字／caption → 獨立原因碼 media_only（圖片唔解析，設計如此，要打字），唔再混入 too_short
+  // WA-9：文字名單（「1/10/2026 孫富榮 陳文傑 …」）——純 code 偵測，唔經閾值、唔 call LLM
+  if (input.ts && !input.mediaType) {
+    const roster = detectRosterList(text, input.ts);
+    if (roster) {
+      reasons.push("roster_list");
+      return { score: 100, reasons, decision: "candidate" };
+    }
+  }
   // WA-8：工卡相群組嘅圖片 → 直接過第 0 層（score 100），由 process.ts 走辨識流程
   if (input.cardPhotoMode && (input.mediaType === "image" || input.mediaType === "unknown")) {
     reasons.push("card_photo");

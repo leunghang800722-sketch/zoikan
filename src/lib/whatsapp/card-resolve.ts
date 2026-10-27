@@ -25,7 +25,7 @@ export interface CardDeps {
   recentSites(guardId: string, sinceIso: string, beforeIso: string): Promise<Map<string, number>>;
 }
 
-function prismaCardDeps(): CardDeps {
+export function prismaCardDeps(): CardDeps {
   return {
     async scheduled(guardId, dateIso) {
       const rows = await prisma.shiftRecord.findMany({ where: { guardId, workDate: isoToDbDate(dateIso), recordType: "shift", status: { not: "cancelled" } }, select: { siteId: true, shiftTypeId: true }, orderBy: [{ id: "asc" }] });
@@ -126,7 +126,7 @@ async function personFor(card: PhotoCard, ctx: ResolveContext, scope: ReadonlySe
   return { person: { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "card_name_unmatched" }, extra: ["card_name_only"] };
 }
 
-async function siteAndShiftFor(guardId: string | null, ctx: ResolveContext, deps: CardDeps, timeOn: string | null = null): Promise<{ site: NonNullable<IntentOverride["site"]>; shift?: NonNullable<IntentOverride["shift"]>; extra: string[] }> {
+export async function siteAndShiftFor(guardId: string | null, ctx: ResolveContext, deps: CardDeps, timeOn: string | null = null): Promise<{ site: NonNullable<IntentOverride["site"]>; shift?: NonNullable<IntentOverride["shift"]>; extra: string[] }> {
   const g = ctx.group;
   const day = hkDateOf(ctx.ts);
   const types = async (siteId: string) => ctx.repo.shiftTypes(siteId);

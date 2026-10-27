@@ -729,3 +729,12 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **每行獨立 resolve**：U 格式工號 → 工號卡；Wilson 純數字／手寫碼只暫存（證據 `wilson_no`），身份用姓名喺盤／判頭範圍內配對；每行用自己嘅日期（`row_date`）同相上時間定更；一張相出 N 條記錄（同一 `message_id` 追溯），低信心行／配唔到人出題（一撳確認或揀人），其餘照現有 autowrite／pending 流程；日期喺窗口外 → `date_out_of_range`。
 - **bench**：truth CSV 擴展 `file,staff_nos,rows`，rows 用 `|` 分隔每行 `姓名~工號`（工號可省）；報表加每引擎／策略 `row_recall`／`row_precision`（策略只計 confirmed 行，review 行另計 `rows_review`）。
 - **做唔到**：手寫 L13xxxx／413xxxx 編號難讀 → 唔用嚟配對（只暫存），靠姓名；姓名讀錯一字 → 範圍內配唔到 → 揀人題；表太長令引擎漏行 → 漏行出 review 或冇出（單票），請睇 bench 嘅 recall。
+
+### WA-9 (4) 文字名單路徑（數碼港日／夜群主流程；純 code，零 LLM 成本）
+
+- **背景**：數碼港群 10 月起置頂規矩——每日有人打字接龍交齊當日全部返工保安員中文全名（例：「1/10/2026 孫富榮 陳文傑 許景竣 …」），同日再 send 簽到表／打卡相。呢類訊息原本因「有日期、冇更碼字眼」低過過濾閾值，整批被當噪音（日更群 108 條全部 filtered）。
+- **偵測**（`src/lib/whatsapp/roster-list.ts` 純函數 `detectRosterList(text, ts)`）：有日期 token（d/m/yyyy、yyyy-mm-dd、d月d日、d/m〔日/月〕、今日／聽日…相對詞）＋ ≥2 個 CJK 姓名 token（2–4 字；5–6 字姓氏開頭亦算；分隔：空格／全形空格／換行／、，；:／）；名後可帶更碼（「張三 D」「李四(夜)」「王五[N]」），名單前可有整句更碼（「夜更：…」）；沒有請假／取消／替更字眼、冇問號；姓名樣 token 要有 ≥70%（至少 2 個）以常見姓氏開頭（避免「開會 準時」之類普通詞），非姓名雜質 ≤30%。名單成立後所有姓名樣 token 一律保留（偏門姓氏唔會被靜靜丟走）。上限 40 個名（唔經 LLM parse schema）。
+- **過濾**：命中 → decision `candidate`、reason `roster_list`、score 100（唔經閾值）；請假句照舊 LLM 路徑。
+- **處理**（`roster-resolve.ts`，`process.ts`）：唔 call LLM，直接砌 N 條 shift intents（date＝名單日期；凌晨「今日」等沿用日期降級出題）。每個名 strict（NFKC 去空白）配對：範圍＝該盤近 60 日有更／判頭旗下／該群曾配對過嘅 guard；範圍內唯一→配到；範圍內冇而全體唯一→配到（擴到全部）；同名多人→`wa_person_ambiguous`（候選列同名者）；配唔到→候選列同範圍字形接近嘅 guard（冇就 `wa_person_unknown`）。**只有呢啲名先出題**，其餘照現有 autowrite／pending_approval／分流流程；同日同人同更去重沿用（另一條訊息重貼同一名單＝已存在 no-op）。更別：名單內該名更碼 → 群「開工」對照 → 該盤只有一個更別 → 否則 `shift_unmapped` 出題。N 條記錄用同一 `message_id` 追溯；編輯＝整批取消再重做；撤回＝整批退回（沿用既有 source-change 邏輯）。`parsed_json.roster` 只記計數（冇姓名）。
+- **指標**（`/whatsapp/metrics`）：`roster_list_msgs`／`roster_names`／`roster_names_matched`／`roster_names_triage`。
+- **數碼港盤設計（永久，老闆確認）**：工卡／打卡紙一直都冇工號，**身份識別＝中文姓名，工號唔會出現喺相**。每日文字接龍名單係主要來源；相（簽到表／打卡紙／app 截圖）只做交叉核實（見 (5)）；當日冇文字名單先用相上姓名 OCR 做後備識別。

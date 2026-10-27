@@ -21,6 +21,8 @@ import { readCardPhoto, cardStrategyFromEnv } from "./card-ocr";
 import type { CardEngine, CardEngineName } from "./card-engines";
 import { resolveCardPhoto, type CardInput } from "./card-resolve";
 import { deleteMediaEvidence, loadMediaEvidence } from "./media";
+import { detectRosterList } from "./roster-list";
+import { resolveRosterList } from "./roster-resolve";
 import { applySourceChangeTx, staleEditedPendingIds } from "./source-change";
 
 const WA_MAX_ATTEMPTS = 3;
@@ -182,6 +184,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     threshold: group?.filterThreshold ?? null,
     mediaType: msg.mediaType ?? null,
     cardPhotoMode: group?.cardPhotoMode ?? false,
+    ts: msg.ts,
   });
   if (filtered.decision === "ignore") {
     const reason = filtered.reasons.includes("group_unbound") ? "group_unbound" : filtered.reasons.includes("group_ignored") ? "group_ignored" : "filtered_out";
@@ -190,11 +193,36 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
   if (!group) return ignoreNow("group_unbound", 0, ["group_unbound"]);
 
   // ---- WA-8：工卡相（群組開咗 card_photo_mode + 圖片訊息）：辨識 → 歸屬（唔經 LLM 解析文字）
-  const cardMode = group.cardPhotoMode && (msg.mediaType === "image" || msg.mediaType === "unknown");
+  // WA-9：文字名單（filter 已命中 roster_list）——純 code，唔 call LLM，直接砌 N 條 shift intents
+  const rosterList = filtered.reasons.includes("roster_list") && !msg.mediaType ? detectRosterList(msg.text, msg.ts) : null;
+  const cardMode = !rosterList && group.cardPhotoMode && (msg.mediaType === "image" || msg.mediaType === "unknown");
   let resolved: ResolvedIntent[];
   let parsedJson: Prisma.InputJsonValue;
   let llmFields: Prisma.WhatsappMessageUncheckedUpdateManyInput = {};
-  if (cardMode) {
+  if (rosterList) {
+    try {
+      const wm = (group.shiftWordMap && typeof group.shiftWordMap === "object" && !Array.isArray(group.shiftWordMap) ? group.shiftWordMap : {}) as Record<string, string>;
+      const lw = (group.leaveWordMap && typeof group.leaveWordMap === "object" && !Array.isArray(group.leaveWordMap) ? group.leaveWordMap : {}) as Record<string, string>;
+      resolved = await resolveRosterList({
+        ctx: {
+          ts: msg.ts,
+          group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wm, leaveWordMap: lw, autoWrite: group.autoWrite },
+          senderGuardId: msg.senderGuardId,
+          senderTelNorm: msg.senderTelNorm,
+          sites: ctx.sites,
+          index: ctx.index,
+          repo: createPrismaResolveRepo(staleIds),
+        },
+        list: rosterList,
+        chatJid: msg.chatJid,
+      });
+      // 只記計數／日期（唔記姓名）；指標用 llm_provider='roster'
+      parsedJson = toJson({ roster: { names: rosterList.names.length, date: rosterList.date, confidence: rosterList.confidence } });
+      llmFields = { llmProvider: "roster", llmModel: "roster-list", llmTokensIn: 0, llmTokensOut: 0 };
+    } catch {
+      return failAttempt(msg.id, rev, "roster_failed");
+    }
+  } else if (cardMode) {
     try {
       const wm = (group.shiftWordMap && typeof group.shiftWordMap === "object" && !Array.isArray(group.shiftWordMap) ? group.shiftWordMap : {}) as Record<string, string>;
       const lw = (group.leaveWordMap && typeof group.leaveWordMap === "object" && !Array.isArray(group.leaveWordMap) ? group.leaveWordMap : {}) as Record<string, string>;
