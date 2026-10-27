@@ -83,7 +83,7 @@ export function scoreMessage(input: FilterInput): FilterResult {
 
   const text = norm(input.text ?? "");
   // WA-7：有媒體（圖片／影片／文件…）而冇文字／caption → 獨立原因碼 media_only（圖片唔解析，設計如此，要打字），唔再混入 too_short
-  // WA-9：文字名單（「1/10/2026 孫富榮 陳文傑 …」）——純 code 偵測，唔經閾值、唔 call LLM
+  // WA-9：文字名單（「1/10/2026 孫測壹 陳測貳 …」）——純 code 偵測，唔經閾值、唔 call LLM
   if (input.ts && !input.mediaType) {
     const roster = detectRosterList(text, input.ts);
     if (roster) {
