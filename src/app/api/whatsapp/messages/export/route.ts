@@ -15,6 +15,14 @@ import { addDays, hkDateOf } from "@/lib/whatsapp/dates";
 
 const MAX_ROWS = 2000;
 const MAX_DAYS = 62;
+/** 日期要真實存在（2026-02-31 唔准）：parse 完再 format 返要同輸入一樣。 */
+function roundTripDate(v: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00+08:00`);
+  if (Number.isNaN(d.getTime())) return false;
+  const hk = new Date(d.getTime() + 8 * 3600 * 1000);
+  return hk.toISOString().slice(0, 10) === v;
+}
 const STATUSES = ["received", "filtered", "parsed", "routed", "done", "ignored", "error", "revoked"] as const;
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const dayNum = (iso: string): number => Math.floor(Date.parse(`${iso}T00:00:00Z`) / 86_400_000);
@@ -26,7 +34,7 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const from = url.searchParams.get("from") ?? "";
     const to = url.searchParams.get("to") ?? "";
-    if (!ISO.test(from) || !ISO.test(to) || Number.isNaN(Date.parse(`${from}T00:00:00Z`)) || Number.isNaN(Date.parse(`${to}T00:00:00Z`))) throw BadRequest("from／to 要係 YYYY-MM-DD");
+    if (!roundTripDate(from) || !roundTripDate(to)) throw BadRequest("from／to 要係 YYYY-MM-DD");
     if (dayNum(to) < dayNum(from)) throw BadRequest("to 唔可以早過 from");
     if (dayNum(to) - dayNum(from) + 1 > MAX_DAYS) throw BadRequest(`範圍最多 ${MAX_DAYS} 日`);
     const statusCsv = url.searchParams.get("status");
@@ -69,6 +77,6 @@ export async function GET(req: Request) {
       after: { from, to, group: group ? true : false, statuses: statuses.length ? statuses : null, count: out.length, truncated },
       ip: getClientIp(req),
     });
-    return NextResponse.json(out, { status: 200, headers: { "cache-control": "no-store", ...(truncated ? { "x-truncated": "1" } : {}) } });
+    return NextResponse.json({ rows: out, truncated }, { status: 200, headers: { "cache-control": "no-store", ...(truncated ? { "x-truncated": "1" } : {}) } });
   });
 }
