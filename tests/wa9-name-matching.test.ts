@@ -28,6 +28,26 @@ describe("解析：doc_type／時間", () => {
   });
 });
 
+describe("Opus S2／S3", () => {
+  it("S2：已確認姓名卡，另有單票姓名（每引擎只讀一人）→ 放 name_alt 畀審核人見，唔影響確認卡", async () => {
+    const r = await readCardPhoto(BYTES, { strategy: "S1", engines: engs({ tesseract: out([card({ name_zh: "測試甲" })]), deepseek: out([card({ name_zh: "測試己" })]), claude: out([card({ name_zh: "測試甲" })]) }) });
+    expect(r.arbiter_used).toBe(true);
+    expect(r.cards).toHaveLength(1);
+    expect(r.cards[0]).toMatchObject({ name_zh: "測試甲", status: "confirmed", name_alt: ["測試己"] });
+  });
+  it("S3：預設 S6 — qwen 失敗 → deepseek 頂上（唔直接去仲裁）；兩個都失敗 → deepseek 只頂一次", async () => {
+    const down: EngineOutcome = { ok: false, error: "unavailable", usage: null };
+    const ok = (n: string) => out([card({ staff_no: "U12345", name_zh: n })], "work_card");
+    const a = await readCardPhoto(BYTES, { strategy: "S6", engines: engs({ qwen: down, haiku: ok("測試甲"), deepseek: ok("測試甲"), claude: ok("測試乙") }) });
+    expect(a.arbiter_used).toBe(false);
+    expect(a.engines.map((e) => e.engine)).toEqual(["deepseek", "haiku"]);
+    expect(a.cards[0]).toMatchObject({ staff_no: "U12345", status: "confirmed" });
+    const b = await readCardPhoto(BYTES, { strategy: "S6", engines: engs({ qwen: down, haiku: down, deepseek: ok("測試甲"), claude: ok("測試甲") }) });
+    expect(b.engines.filter((e) => e.engine === "deepseek")).toHaveLength(1);
+    expect(b.arbiter_used).toBe(true);
+  });
+});
+
 describe("readCardPhoto：姓名身份", () => {
   it("兩引擎讀到同一姓名（冇工號）→ confirmed（votes 2）、doc_type 多數、時間多數；today 提示傳畀引擎；唔仲裁", async () => {
     let hint: unknown;

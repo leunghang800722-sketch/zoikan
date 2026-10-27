@@ -327,7 +327,7 @@ describe("交叉核對評級", () => {
     expect(c.reasons).toContain("mismatch_hkid");
   });
   it("用 hkid 搵行時 hkid 欄唔計互證（避免循環）", () => {
-    const u = ref("utem", { staffNos: ["U00000"], hkid: "A1234563", dob: "1980-02-01" });
+    const u = ref("utem", { staffNos: ["U90000"], hkid: "A1234563", dob: "1980-02-01" });
     const c = crosscheck(doc(), "U99999", null, idx([u]));
     expect(c.refs.utem.basis).toBe("hkid");
     expect(c.cmp.hkid.utem).toBe("no_reference");

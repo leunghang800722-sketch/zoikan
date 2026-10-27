@@ -122,6 +122,7 @@ export type AuditAction =
   | "whatsapp_group_sync_failed"
   // WA-9：老闆匯出 WhatsApp 訊息原文（after 只有範圍＋計數）。
   | "whatsapp_messages_export"
+  | "whatsapp_provenance_patch"
   // TE-1：分流題覆核證據裁圖（只計數，唔記圖／欄值／檔名）。
   | "triage_evidence_upload"
   | "triage_evidence_view"

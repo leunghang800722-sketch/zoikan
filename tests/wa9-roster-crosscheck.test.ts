@@ -14,7 +14,7 @@ function deps(roster: Record<string, string> | null) {
   const calls: Array<{ guardId: string; timeOn: string | null; timeOff: string | null }> = [];
   const d: CrossCheckDeps = {
     rosterOfDay: async () => (roster ? { guards: new Map(Object.entries(roster)) } : null),
-    setReported: async (a) => { calls.push({ guardId: a.guardId, timeOn: a.timeOn, timeOff: a.timeOff }); return 1; },
+    setReported: async (a) => { calls.push({ guardId: a.guardId, timeOn: a.timeOn, timeOff: a.timeOff }); return { updated: 1, locked: 0 }; },
   };
   return { d, calls };
 }

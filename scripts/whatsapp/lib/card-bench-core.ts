@@ -217,7 +217,7 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
     }
     if (rowAcc.truth > 0) {
       rep.row_recall = r2(rowAcc.matched / rowAcc.truth);
-      rep.row_precision = rowAcc.produced > 0 ? r2(rowAcc.matched / rowAcc.produced) : 0;
+      rep.row_precision = rowAcc.produced > 0 ? r2(rowAcc.matched / rowAcc.produced) : null; // 引擎冇出任何行＝null（唔係 0；免同「冇 truth」撈亂）
     }
     rep.avg_prompt_tokens = rep.photos ? r2(p / rep.photos) : 0;
     rep.avg_completion_tokens = rep.photos ? r2(c / rep.photos) : 0;
@@ -233,9 +233,9 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
     const def = CARD_STRATEGIES[s];
     const need = [...def.primary, def.arbiter] as CardEngineName[];
     const rep: StrategyReport = { strategy: s, photos: 0, exact: 0, review: 0, confirmed_wrong: 0, unreadable: 0, arbiter_triggered: 0, arbiter_rate: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0, tokens_by_model: {}, est_usd_per_photo: null, row_recall: null, row_precision: null, rows_review: 0 };
-    const fbd = 'fallback' in def ? (def.fallback as { for: CardEngineName; use: CardEngineName }) : null;
+    const fbd = 'fallback' in def ? (def.fallback as { for: readonly CardEngineName[]; use: CardEngineName }) : null;
     // 有後備引擎：主引擎缺但後備在 → 唔算缺
-    const missing = need.filter((n) => !byName.has(n) && !(fbd && n === fbd.for && byName.has(fbd.use)));
+    const missing = need.filter((n) => !byName.has(n) && !(fbd && fbd.for.includes(n) && byName.has(fbd.use)));
     if (missing.length > 0) {
       strategyReports.push({ ...rep, strategy: `${s}（跳過：缺 ${missing.join('+')}）` });
       continue;
@@ -274,7 +274,7 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
     }
     if (rowAcc.truth > 0) {
       rep.row_recall = r2(rowAcc.matched / rowAcc.truth);
-      rep.row_precision = rowAcc.produced > 0 ? r2(rowAcc.matched / rowAcc.produced) : 0;
+      rep.row_precision = rowAcc.produced > 0 ? r2(rowAcc.matched / rowAcc.produced) : null; // 引擎冇出任何行＝null（唔係 0；免同「冇 truth」撈亂）
     }
     rep.arbiter_rate = rep.photos ? r2(rep.arbiter_triggered / rep.photos) : 0;
     rep.avg_prompt_tokens = rep.photos ? r2(p / rep.photos) : 0;
@@ -295,10 +295,10 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
 export function summaryLines(r: BenchReport): string[] {
   const out = [`[card-bench] 相片 ${r.photos} 張`];
   for (const e of r.engines) {
-    out.push(e.skipped ? `[card-bench] 引擎 ${e.engine}：${e.skipped}` : `[card-bench] 引擎 ${e.engine}：exact ${e.exact}｜review ${e.review}｜wrong ${e.wrong}｜unreadable ${e.unreadable}｜每張 prompt ${e.avg_prompt_tokens}／completion ${e.avg_completion_tokens} tokens${e.est_usd_per_photo === null ? '' : `｜預估 US$${e.est_usd_per_photo}／張`}${Object.keys(e.failures).length ? `｜失敗 ${Object.entries(e.failures).map(([k, n]) => `${k}×${n}`).join(',')}` : ''}${e.empty_but_truth_has_cards ? `｜讀到空 ${e.empty_but_truth_has_cards}` : ''}${e.row_recall === null ? '' : `｜逐行 recall ${e.row_recall}／precision ${e.row_precision}`}`);
+    out.push(e.skipped ? `[card-bench] 引擎 ${e.engine}：${e.skipped}` : `[card-bench] 引擎 ${e.engine}：exact ${e.exact}｜review ${e.review}｜wrong ${e.wrong}｜unreadable ${e.unreadable}｜每張 prompt ${e.avg_prompt_tokens}／completion ${e.avg_completion_tokens} tokens${e.est_usd_per_photo === null ? '' : `｜預估 US$${e.est_usd_per_photo}／張`}${Object.keys(e.failures).length ? `｜失敗 ${Object.entries(e.failures).map(([k, n]) => `${k}×${n}`).join(',')}` : ''}${e.empty_but_truth_has_cards ? `｜讀到空 ${e.empty_but_truth_has_cards}` : ''}${e.row_recall === null ? '' : `｜逐行 recall ${e.row_recall}／precision ${e.row_precision ?? "—（引擎冇出行）"}`}`);
   }
   for (const s of r.strategies) {
-    out.push(`[card-bench] 策略 ${s.strategy}：exact ${s.exact}｜review ${s.review}｜confirmed_wrong ${s.confirmed_wrong}｜unreadable ${s.unreadable}｜仲裁觸發 ${(s.arbiter_rate * 100).toFixed(0)}%｜每張 prompt ${s.avg_prompt_tokens}／completion ${s.avg_completion_tokens} tokens${s.est_usd_per_photo === null ? '' : `｜預估 US$${s.est_usd_per_photo}／張`}${s.row_recall === null ? '' : `｜逐行 recall ${s.row_recall}／precision ${s.row_precision}／review ${s.rows_review}`}`);
+    out.push(`[card-bench] 策略 ${s.strategy}：exact ${s.exact}｜review ${s.review}｜confirmed_wrong ${s.confirmed_wrong}｜unreadable ${s.unreadable}｜仲裁觸發 ${(s.arbiter_rate * 100).toFixed(0)}%｜每張 prompt ${s.avg_prompt_tokens}／completion ${s.avg_completion_tokens} tokens${s.est_usd_per_photo === null ? '' : `｜預估 US$${s.est_usd_per_photo}／張`}${s.row_recall === null ? '' : `｜逐行 recall ${s.row_recall}／precision ${s.row_precision ?? "—（引擎冇出行）"}／review ${s.rows_review}`}`);
   }
   return out;
 }

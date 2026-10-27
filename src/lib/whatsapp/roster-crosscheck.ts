@@ -5,6 +5,7 @@
 // 差異＝一個群一日一條合併題 wa_roster_mismatch（姓名只存 DB 題卡，API 層按權限遮罩）。冇差異＝唔出題。
 // 名單有而相冇嘅人由 rosterOnlyForDay 提供（日終 job 用）；呢度逐張相唔報「名單有而相冇」，避免未收齊就洗版。
 import { prisma } from "@/lib/db";
+import { patchProvenanceUnlocked } from "./provenance-patch";
 import { isoToDbDate } from "./dates";
 import type { ResolvedIntent } from "./resolve";
 
@@ -15,7 +16,8 @@ export interface RosterDay {
 
 export interface CrossCheckDeps {
   rosterOfDay(chatJid: string, day: string): Promise<RosterDay | null>;
-  setReported(args: { messageId: string; guardId: string; day: string; timeOn: string | null; timeOff: string | null }): Promise<number>;
+  /** 補 reported_time；鎖月記錄唔改（locked 計數，note locked_month_skip） */
+  setReported(args: { messageId: string; guardId: string; day: string; timeOn: string | null; timeOff: string | null }): Promise<{ updated: number; locked: number }>;
   nameOf?(guardId: string): string | null;
 }
 
@@ -32,10 +34,8 @@ export function prismaCrossCheckDeps(): CrossCheckDeps {
       return { guards: new Map(rows.flatMap((r) => (r.guardId ? [[r.guardId, r.messageId] as [string, string]] : []))) };
     },
     async setReported({ messageId, guardId, day, timeOn, timeOff }) {
-      const patch = JSON.stringify({ ...(timeOn ? { reported_time_on: timeOn } : {}), ...(timeOff ? { reported_time_off: timeOff } : {}) });
-      if (patch === "{}") return 0;
-      return prisma.$executeRaw`UPDATE shift_records SET provenance = COALESCE(provenance, '{}'::jsonb) || ${patch}::jsonb
-        WHERE guard_id::text = ${guardId} AND work_date = ${day}::date AND status::text <> 'cancelled' AND record_type::text = 'shift' AND provenance->>'message_id' = ${messageId}`;
+      const r = await patchProvenanceUnlocked({ messageId, guardId, day }, { ...(timeOn ? { reported_time_on: timeOn } : {}), ...(timeOff ? { reported_time_off: timeOff } : {}) });
+      return { updated: r.updated, locked: r.locked };
     },
   };
 }
@@ -45,6 +45,8 @@ export interface CrossCheckResult {
   resolved: ResolvedIntent[];
   hadRoster: boolean;
   matched: number;
+  /** 鎖月記錄唔改（note locked_month_skip）嘅條數 */
+  lockedSkipped: number;
   photoOnly: number;
 }
 
@@ -52,8 +54,9 @@ export interface CrossCheckResult {
 export async function crossCheckWithRoster(args: { chatJid: string; day: string; groupId: string; resolved: ResolvedIntent[]; deps?: CrossCheckDeps; nameOfGuard?: (g: string) => string | null }): Promise<CrossCheckResult> {
   const deps = args.deps ?? prismaCrossCheckDeps();
   const roster = await deps.rosterOfDay(args.chatJid, args.day);
-  if (!roster) return { resolved: args.resolved, hadRoster: false, matched: 0, photoOnly: 0 };
+  if (!roster) return { resolved: args.resolved, hadRoster: false, matched: 0, lockedSkipped: 0, photoOnly: 0 };
   let matched = 0;
+  let lockedSkipped = 0;
   const photoOnly: string[] = [];
   let unresolved = 0;
   for (const r of args.resolved) {
@@ -61,7 +64,8 @@ export async function crossCheckWithRoster(args: { chatJid: string; day: string;
     const card = r.src?.card;
     if (r.guardId && roster.guards.has(r.guardId)) {
       const n = await deps.setReported({ messageId: roster.guards.get(r.guardId)!, guardId: r.guardId, day: args.day, timeOn: card?.time_on ?? null, timeOff: card?.time_off ?? null });
-      if (n >= 0) matched++;
+      matched++;
+      lockedSkipped += n.locked;
     } else if (r.guardId) {
       photoOnly.push(args.nameOfGuard?.(r.guardId) ?? r.src?.person_raw ?? "（未知）");
     } else {
@@ -69,7 +73,7 @@ export async function crossCheckWithRoster(args: { chatJid: string; day: string;
       photoOnly.push(r.src?.person_raw ?? r.src?.card?.name_zh_read ?? "（讀唔到姓名）");
     }
   }
-  if (photoOnly.length === 0) return { resolved: [], hadRoster: true, matched, photoOnly: 0 };
+  if (photoOnly.length === 0) return { resolved: [], hadRoster: true, matched, lockedSkipped, photoOnly: 0 };
   const first = args.resolved.find((r) => r.kind === "shift") ?? args.resolved[0]!;
   const mismatch: ResolvedIntent = {
     kind: "unclear",
@@ -84,7 +88,7 @@ export async function crossCheckWithRoster(args: { chatJid: string; day: string;
     routed: "triage",
     src: { person_raw: null, site_raw: null, date_raw: null, shift_raw: null, leave_raw: null, replaced_raw: null, mismatch: { day: args.day, roster_only: [], photo_only: [...new Set(photoOnly)] } },
   };
-  return { resolved: [mismatch], hadRoster: true, matched, photoOnly: photoOnly.length };
+  return { resolved: [mismatch], hadRoster: true, matched, lockedSkipped, photoOnly: photoOnly.length };
 }
 
 /** 日終：名單有而當日冇任何相對到嘅人（只數／列 guard id；呼叫者決定點通知）。 */

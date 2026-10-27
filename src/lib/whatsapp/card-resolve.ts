@@ -173,9 +173,10 @@ function cardEvidence(card: PhotoCard | null, i: number, n: number, mediaId: str
     ...(card?.doc_type ? { doc_type: card.doc_type } : {}),
     ...(card?.time_on ? { time_on: card.time_on } : {}),
     ...(card?.time_off ? { time_off: card.time_off } : {}),
+    ...(card?.name_alt?.length ? { name_alt: card.name_alt } : {}),
     ...(card?.wilson_staff_no_raw ? { wilson_no: card.wilson_staff_no_raw } : {}),
     ...(card?.row_no ? { row_no: card.row_no } : {}),
-    // 同一張相嘅其他卡（題卡列明「已確認 U01095＋疑似第二張 U01096」）
+    // 同一張相嘅其他卡（題卡列明「已確認 U91095＋疑似第二張 U91096」）
     ...(all && all.length > 1 ? { others: all.filter((_, k) => k !== i).map((c) => ({ staff_no: c.staff_no, status: c.status })) } : {}),
     ...(none ? { none } : {}),
   };

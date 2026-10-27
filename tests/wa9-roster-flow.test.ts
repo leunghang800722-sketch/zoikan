@@ -23,7 +23,7 @@ const guardLlm: LlmClient = { async chat(p) { llmCalled++; return noLlm.chat(p);
 const ev = (kind: "message" | "edited" | "revoked", mid: string, text: string, off = 0): NormalizedWaEvent => ({ kind, session: "default", messageId: mid, chatJid: G1, senderJid: "85290008888@c.us", fromMe: false, ts: new Date(T0.getTime() + off * 1000), text, mediaType: null, quotedMessageId: null, eventId: `${mid}-${kind}-${off}-${text.length}` });
 const ingest = (e: NormalizedWaEvent) => ingestEvent(e, new Date(Math.max(NOW.getTime(), (e.ts?.getTime() ?? 0) + 60_000)));
 const run = () => runWhatsappParse(NOW, { llm: [guardLlm], force: true });
-const recs = () => prisma.shiftRecord.findMany({ where: { siteId: ids.site }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
+const recs = () => prisma.shiftRecord.findMany({ where: { siteId: ids.site, workDate: { gte: new Date("2026-10-01T00:00:00Z") } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
 const qs = (mid: string) => prisma.triageQuestion.findMany({ where: { status: "open", session: { sourceType: "whatsapp" }, evidenceJson: { path: ["message", "message_id"], equals: mid } } });
 
 beforeEach(async () => {
@@ -37,6 +37,8 @@ beforeEach(async () => {
   const guards: Record<string, string> = {};
   for (const [i, n] of NAMES.entries()) guards[n] = (await prisma.guard.create({ data: { nameZh: n, employmentType: "cash_casual", tel: `9000009${i}`, createdBy: "test:w9" } })).id;
   ids = { site: site.id, tD: tD.id, guards };
+  // 範圍：近 60 日喺該盤有更嘅人先算「範圍內」（範圍外唯一同名唔自動寫，要確認）
+  for (const gid of Object.values(guards)) await prisma.shiftRecord.create({ data: { workDate: new Date("2026-09-10T00:00:00Z"), siteId: site.id, shiftTypeId: tD.id, guardId: gid, recordType: "shift", status: "confirmed", createdBy: "test:w9" } as never });
   await prisma.whatsappGroup.create({ data: { groupJid: G1, label: "W9名單群", kind: "site", siteId: site.id, shiftWordMap: { 開工: "D" }, autoWrite: true, createdBy: fx.userIds["老闆"] } });
 });
 
@@ -61,7 +63,8 @@ describe("WA-9 文字名單端到端", () => {
   });
 
   it("只有配唔到／同名多人嘅名先出題；其餘照寫；更碼後綴（N）帶去更別", async () => {
-    await prisma.guard.create({ data: { nameZh: "李測乙", employmentType: "cash_casual", tel: "90000099", createdBy: "test:w9" } }); // 同名
+    const dup = await prisma.guard.create({ data: { nameZh: "李測乙", employmentType: "cash_casual", tel: "90000099", createdBy: "test:w9" } }); // 同名
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-09-10T00:00:00Z"), siteId: ids.site, shiftTypeId: ids.tD, guardId: dup.id, recordType: "shift", status: "confirmed", createdBy: "test:w9" } as never }); // 兩個都喺範圍內
     await ingest(ev("message", "r2", "1/10/2026 陳測甲 李測乙 周查無此人 張測丙"));
     await run();
     expect(llmCalled).toBe(0);

@@ -26,6 +26,8 @@ export interface WaCardEvidence {
   doc_type?: string | null;
   time_on?: string | null;
   time_off?: string | null;
+  /** 已確認姓名卡以外嘅單票姓名讀數（畀審核人見；唔參與配對） */
+  name_alt?: string[];
   /** 值勤表：工號欄原樣（Wilson 純數字／手寫 L13xxxx 等，唔係 U 格式）＋行號 */
   wilson_no?: string | null;
   row_no?: number | null;
@@ -99,6 +101,8 @@ export interface WaEvidence {
   card?: WaCardEvidence;
   /** WA-9：名單／相片差異（一日一條合併題；姓名只存 DB，API 層按「保安員:view」遮罩） */
   mismatch?: { day: string; roster_only: string[]; photo_only: string[] };
+  /** WA-9 (7)：固定 groupKey 嘅題（名單配唔到嘅名）；round 1 先用 */
+  dedupe_key?: string;
   /** 工作月（YYYY-MM-01）；鎖月檢查／session 月份用。未知日期就用訊息月。 */
   month: string;
 }
@@ -124,7 +128,7 @@ const SOFT_REASONS = new Set(["low_confidence", "daily_cap", "auto_disabled"]);
 /** WA-8：工卡相冇資料可用（過期／唔係工卡／讀唔到）→ 只可人手／忽略。 */
 const CARD_DEAD_REASONS = new Set(["card_media_expired", "card_not_card", "card_unreadable"]);
 /** WA-8：辨識／歸屬都有結果，但要人一撳確認嘅提示碼。 */
-const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "card_former_number", "card_name_only", "card_suspect_second", "row_low_confidence"]);
+const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "card_former_number", "card_name_only", "card_suspect_second", "row_low_confidence", "row_misread_suspect"]);
 
 /**
  * 優先次序：unparsed > site > person > date > conflict（低信心單獨出現 → unparsed＋「照解析入更」）。

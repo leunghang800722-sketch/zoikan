@@ -79,14 +79,14 @@ const doAnswer = async (qid: string, ans: Record<string, unknown>) => {
 
 describe("WA-8.2 提示判定（純函數）", () => {
   it("similarStaffNos：同前綴同長度差 ≤2 位＝相似；hasDistinctCandidates：有一對互不相似先提示", () => {
-    expect(similarStaffNos("U01095", "U01096")).toBe(true);
-    expect(similarStaffNos("U01095", "U01195")).toBe(true); // 差 1 位
-    expect(similarStaffNos("U01095", "U02196")).toBe(false); // 差 3 位
-    expect(similarStaffNos("U01095", "MP1095")).toBe(false);
-    expect(hasDistinctCandidates(["U01095", "U01096"])).toBe(false);
-    expect(hasDistinctCandidates(["U01095"])).toBe(false);
-    expect(hasDistinctCandidates(["U01095", "U01096", "MP9002"])).toBe(true);
-    expect(hasDistinctCandidates(["U01095", "bad"])).toBe(false);
+    expect(similarStaffNos("U91095", "U91096")).toBe(true);
+    expect(similarStaffNos("U91095", "U91195")).toBe(true); // 差 1 位
+    expect(similarStaffNos("U91095", "U92196")).toBe(false); // 差 3 位
+    expect(similarStaffNos("U91095", "MP1095")).toBe(false);
+    expect(hasDistinctCandidates(["U91095", "U91096"])).toBe(false);
+    expect(hasDistinctCandidates(["U91095"])).toBe(false);
+    expect(hasDistinctCandidates(["U91095", "U91096", "MP9002"])).toBe(true);
+    expect(hasDistinctCandidates(["U91095", "bad"])).toBe(false);
   });
 });
 

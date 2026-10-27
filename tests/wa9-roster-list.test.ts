@@ -5,24 +5,25 @@ import { scoreMessage } from "@/lib/whatsapp/filter";
 
 const TS = new Date("2026-10-01T09:00:00Z"); // HK 2026-10-01 17:00
 const DAWN = new Date("2026-09-30T18:30:00Z"); // HK 2026-10-01 02:30
-const names = (t: string, ts = TS) => detectRosterList(t, ts)?.names.map((n) => (n.shift_hint ? `${n.raw}:${n.shift_hint}` : n.raw)) ?? null;
+const one = (t: string, ts = TS) => detectRosterList(t, ts)?.days[0] ?? null;
+const names = (t: string, ts = TS) => one(t, ts)?.names.map((n) => (n.shift_hint ? `${n.raw}:${n.shift_hint}` : n.raw)) ?? null;
 
 describe("detectRosterList 真值表", () => {
   it("老闆實例：d/m/yyyy 開頭＋空格分隔全名", () => {
     const r = detectRosterList("1/10/2026 孫測壹 陳測貳 許測叁 張測肆 梁測伍 徐測陸", TS)!;
-    expect(r.date).toBe("2026-10-01");
+    expect(r.days[0]!.date).toBe("2026-10-01");
     expect(r.confidence).toBe("high");
-    expect(r.names.map((n) => n.raw)).toEqual(["孫測壹", "陳測貳", "許測叁", "張測肆", "梁測伍", "徐測陸"]);
+    expect(r.days[0]!.names.map((n) => n.raw)).toEqual(["孫測壹", "陳測貳", "許測叁", "張測肆", "梁測伍", "徐測陸"]);
   });
   it("多種日期寫法", () => {
-    expect(detectRosterList("2026-10-01 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01");
-    expect(detectRosterList("10月1日 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01");
-    expect(detectRosterList("1/10 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01"); // 日/月
-    expect(detectRosterList("13/10/2026 孫測壹 陳測貳", TS)?.date).toBe("2026-10-13");
-    expect(detectRosterList("今日 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01");
-    expect(detectRosterList("聽日 孫測壹 陳測貳", TS)?.date).toBe("2026-10-02");
+    expect(one("2026-10-01 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01");
+    expect(one("10月1日 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01");
+    expect(one("1/10 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01"); // 日/月
+    expect(one("13/10/2026 孫測壹 陳測貳", TS)?.date).toBe("2026-10-13");
+    expect(one("今日 孫測壹 陳測貳", TS)?.date).toBe("2026-10-01");
+    expect(one("聽日 孫測壹 陳測貳", TS)?.date).toBe("2026-10-02");
     // 凌晨「今日」→ 降級（date null，date_raw 交 resolveIntents 出日期題）
-    const dawn = detectRosterList("今日 孫測壹 陳測貳", DAWN)!;
+    const dawn = one("今日 孫測壹 陳測貳", DAWN)!;
     expect(dawn.date).toBeNull();
     expect(dawn.date_raw).toBe("今日");
   });
@@ -40,8 +41,8 @@ describe("detectRosterList 真值表", () => {
   it("10+ 人（含複姓、4 字名）", () => {
     const many = "孫測壹 陳測貳 許測叁 張測肆 梁測伍 徐測陸 歐陽小明 司徒嘉儀 黃大仙 李測捌 劉德華 郭測柒";
     const r = detectRosterList(`1/10/2026 ${many}`, TS)!;
-    expect(r.names).toHaveLength(12);
-    expect(r.names[6]!.raw).toBe("歐陽小明");
+    expect(r.days[0]!.names).toHaveLength(12);
+    expect(r.days[0]!.names[6]!.raw).toBe("歐陽小明");
   });
   it("例外：請假／取消／替更／問句 → 唔當名單", () => {
     for (const t of ["1/10/2026 孫測壹 陳測貳 唔返", "聽日 孫測壹 陳測貳 病假", "1/10/2026 孫測壹 陳測貳 取消", "1/10/2026 孫測壹 替 陳測貳", "1/10/2026 孫測壹 陳測貳 返咩更?", "1/10/2026 孫測壹 SL"]) expect(detectRosterList(t, TS), t).toBeNull();

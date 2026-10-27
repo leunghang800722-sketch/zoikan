@@ -12,8 +12,9 @@ export const CARD_STRATEGIES = {
   S4: { primary: ["tesseract", "qwen"], arbiter: "haiku" },
   S5: { primary: ["qwen", "deepseek"], arbiter: "claude" },
   // WA-9：預設——qwen-vl-ocr + haiku 兩讀，分歧先 opus（claude）仲裁；haiku 唔可用（冇 key／失敗）→ 用 deepseek 頂上；tesseract 唔使（可選）
-  S6: { primary: ["qwen", "haiku"], arbiter: "claude", fallback: { for: "haiku", use: "deepseek" } },
-} as const satisfies Record<string, { primary: readonly [CardEngineName, CardEngineName]; arbiter: CardEngineName; fallback?: { for: CardEngineName; use: CardEngineName } }>;
+  // S6（預設）：qwen + haiku 兩讀，分歧先 claude（Opus）仲裁；qwen 或 haiku 唔可用（冇 key／失敗）→ deepseek 頂上（只頂一次）。部署前要 QWEN_API_KEY＋CLAUDE_API_KEY
+  S6: { primary: ["qwen", "haiku"], arbiter: "claude", fallback: { for: ["qwen", "haiku"], use: "deepseek" } },
+} as const satisfies Record<string, { primary: readonly [CardEngineName, CardEngineName]; arbiter: CardEngineName; fallback?: { for: readonly CardEngineName[]; use: CardEngineName } }>;
 export type CardStrategy = keyof typeof CARD_STRATEGIES;
 
 /** 生產預設策略：env WA_CARD_OCR_STRATEGY（S1–S6），預設 S6；唔認得當 S6。 */
@@ -40,6 +41,8 @@ export interface PhotoCard {
   time_off?: string | null;
   /** WA-9：冇工號、姓名分歧時嘅姓名候選（合併成一條題用） */
   name_candidates?: string[];
+  /** WA-9 (7)：已確認姓名卡以外、只得單票嘅其他姓名讀數（可能係誤讀，亦可能係漏讀嘅另一人）——唔影響配對，只畀審核人見 */
+  name_alt?: string[];
   /** WA-9 值勤表逐行：該行日期（YYYY-MM-DD）／工號欄原樣（唔係 U 格式嘅 Wilson 編號、手寫 L13xxxx／413xxxx；暫存、唔用嚟配對）／行號 */
   row_date?: string | null;
   wilson_staff_no_raw?: string | null;
@@ -109,15 +112,14 @@ export async function readCardPhoto(bytes: Buffer, opts: ReadPhotoOptions = {}):
     if (out.usage) usage.push(out.usage);
     return { engine: n, out };
   };
-  const fb = "fallback" in strat ? (strat.fallback as { for: CardEngineName; use: CardEngineName }) : null;
-  const primaries = await Promise.all(
-    strat.primary.map(async (n) => {
-      const r = await run(n);
-      // 指定引擎唔可用／失敗 → 用後備引擎頂上（呢次讀數以後備引擎名記賬）
-      if (fb && n === fb.for && !r.out.ok && !(strat.primary as readonly CardEngineName[]).includes(fb.use)) return run(fb.use);
-      return r;
-    }),
-  );
+  const fb = "fallback" in strat ? (strat.fallback as { for: readonly CardEngineName[]; use: CardEngineName }) : null;
+  const first = await Promise.all(strat.primary.map(run));
+  // 指定引擎唔可用／失敗 → 後備引擎頂上（只頂一次：後備引擎已喺主引擎或已頂過就唔再重複；呢次讀數以後備引擎名記賬）
+  const primaries: Ran[] = [...first];
+  for (const [i, r] of first.entries()) {
+    if (!fb || r.out.ok || !fb.for.includes(r.engine) || primaries.some((x) => x.engine === fb.use)) continue;
+    primaries[i] = await run(fb.use);
+  }
   const summary = (rs: readonly Ran[]) => rs.map((r) => ({ engine: r.engine, ok: r.out.ok, cards: r.out.ok ? r.out.cards.length : 0 }));
   const okReads = (rs: readonly Ran[]) => rs.flatMap((r) => (r.out.ok ? [r.out] : []));
 
@@ -190,7 +192,8 @@ export async function readCardPhoto(bytes: Buffer, opts: ReadPhotoOptions = {}):
     const keys = [...byName.keys()];
     const confirmedNames = keys.filter((k) => votesByName(k) >= 2);
     const singleNames = keys.filter((k) => votesByName(k) < 2);
-    for (const k of confirmedNames) cards.push(mk(null, "confirmed", ["card_name_only"], [], votesByName(k), byName.get(k)));
+    const altNames = singleNames.map((k) => byName.get(k)![0]!.name_zh!).filter(Boolean);
+    for (const k of confirmedNames) cards.push({ ...mk(null, "confirmed", ["card_name_only"], [], votesByName(k), byName.get(k)), ...(altNames.length > 0 ? { name_alt: altNames } : {}) });
     const oneNamePerEngine = all.every((r) => !r.out.ok || namesOf(r).size <= 1);
     if (confirmedNames.length === 0 && singleNames.length > 0) {
       const down = arbiterUsed && !!arbiter && !arbiter.out.ok;
@@ -270,9 +273,13 @@ async function readSheet(
     const row: SheetRow = { ...base, name_zh: pickName(rs.map((x) => ({ is_card: true, staff_no: null, name_zh: x.name_zh, name_en: null, confidence: x.confidence })), "name_zh"), staff_no_raw: rawNo, time_on: ton.value, time_off: toff.value, row: base.row, confidence: lowAny ? "low" : "high" };
     return { key, votes, row, ok: reasons.length === 0, reasons };
   });
-  // 單票行若同已確認行**同行號同日期** → 同一行嘅誤讀（例：名讀錯一字），唔另開。冇行號就唔丟（姓名相近唔代表同一個人，丟咗會漏人）
+  // 行號只喺所有讀得到嘅引擎行數一致時先可信（一個引擎漏讀一行重新編號，行號就錯位）；而且**單票行一律唔准丟**——
+  // 最多係同已確認行同行號同日期嘅誤讀，但丟咗就可能漏一個人（Opus M1）。單票行出 review 卡，姓名放 name_candidates 畀審核人揀。
+  const okEngines = all.filter((r) => r.out.ok);
+  const rowCounts = new Set(okEngines.map((r) => rowsOf(r).length));
+  const rowNoTrusted = okEngines.length >= 2 && rowCounts.size === 1;
   const okAggs = aggs.filter((a) => a.ok);
-  const kept = aggs.filter((a) => a.ok || !okAggs.some((c) => c.row.row !== null && c.row.row === a.row.row && c.row.date === a.row.date));
+  const kept = aggs;
   kept.sort((a, b) => (a.row.row ?? 1e6) - (b.row.row ?? 1e6));
   const cards: PhotoCard[] = kept.map((a) => {
     const staff = normStaffNo(a.row.staff_no_raw);
@@ -290,6 +297,9 @@ async function readSheet(
       row_date: a.row.date,
       row_no: a.row.row,
       wilson_staff_no_raw: staff ? null : a.row.staff_no_raw,
+      ...(!a.ok && a.row.name_zh ? { name_candidates: [a.row.name_zh] } : {}),
+      // 單票行同已確認行同行號同日期（而且行號可信）＝大概率係同一行嘅誤讀，標註畀審核人（仍然出題，唔丟）
+      ...(!a.ok && rowNoTrusted && a.row.row !== null && okAggs.some((c) => c.row.row === a.row.row && c.row.date === a.row.date) ? { reasons: [...a.reasons, "row_misread_suspect"] } : {}),
     };
   });
   if (cards.length === 0) return { kind: "unreadable", doc_type: "attendance_sheet", cards: [], usage, arbiter_used: !!arbiter, engines: summary(all) };

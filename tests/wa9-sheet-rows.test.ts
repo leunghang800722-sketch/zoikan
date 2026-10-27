@@ -48,7 +48,7 @@ describe("readCardPhoto：值勤表逐行", () => {
     expect(r.cards.every((c) => c.status === "confirmed")).toBe(true);
     expect(r.cards[1]).toMatchObject({ time_on: "08:00" });
   });
-  it("漏讀某行（只一個引擎有）＝review 行；低信心行＝review；同行號嘅單票誤讀唔另開行（姓名相近唔算，免漏人）", async () => {
+  it("漏讀某行（只一個引擎有）＝review 行；低信心行＝review；單票行唔准丟（誤讀都出 review 卡，姓名放 name_candidates）", async () => {
     const lop = [R[0]!, row(2, "測試乙", "6012345", "08:00", "17:05", { confidence: "low" })];
     const r = await readCardPhoto(BYTES, { strategy: "S1", engines: engs({ tesseract: sheet([...lop, R[2]!]), deepseek: sheet(lop), claude: sheet(lop) }) });
     expect(r.cards.map((c) => [c.name_zh, c.status, c.reasons.join(",")])).toEqual([
@@ -57,7 +57,19 @@ describe("readCardPhoto：值勤表逐行", () => {
       ["測試丙", "review", "card_disputed"],
     ]);
     const mis = await readCardPhoto(BYTES, { strategy: "S1", engines: engs({ tesseract: sheet([R[0]!, row(2, "測試乙", "6012345", "08:00", "17:05")]), deepseek: sheet([R[0]!, row(2, "測試己", "6012345", "08:00", "17:05")]), claude: sheet([R[0]!, row(2, "測試乙", "6012345", "08:00", "17:05")]) }) });
-    expect(mis.cards.map((c) => [c.name_zh, c.status])).toEqual([["測試甲", "confirmed"], ["測試乙", "confirmed"]]);
+    // 單票誤讀行：行號可信（三個引擎行數一致）→ 標 row_misread_suspect，但**唔丟**，出 review 卡（姓名放 name_candidates）
+    expect(mis.cards.map((c) => [c.name_zh, c.status])).toEqual([["測試甲", "confirmed"], ["測試乙", "confirmed"], ["測試己", "review"]]);
+    expect(mis.cards[2]).toMatchObject({ name_candidates: ["測試己"], reasons: expect.arrayContaining(["row_misread_suspect"]) });
+  });
+  it("M1 probe：一個引擎漏讀一行並重新編號（行號錯位）→ 漏嗰個人唔准消失，出 review 卡（引擎次序倒轉結果一樣）", async () => {
+    const q = sheet([row(1, "測試甲", "6012345", "08:00", "17:00"), row(2, "測試丙", "6012347", "08:00", "17:00")]); // 漏乙，丙變 2
+    const h = sheet([row(1, "測試甲", "6012345", "08:00", "17:00"), row(2, "測試乙", "6012346", "08:00", "17:00"), row(3, "測試丙", "6012347", "08:00", "17:00")]);
+    for (const [a, b] of [[q, h], [h, q]] as const) {
+      const r = await readCardPhoto(BYTES, { strategy: "S1", engines: engs({ tesseract: a, deepseek: b, claude: sheet([]) }) });
+      const names = r.cards.map((c) => c.name_zh);
+      expect(names).toContain("測試乙");
+      expect(r.cards.find((c) => c.name_zh === "測試乙")!.status).toBe("review");
+    }
   });
   it("所有引擎都失敗 → unreadable", async () => {
     const dead: EngineOutcome = { ok: false, error: "failed", usage: null, reason: "api_error_500" };
@@ -134,5 +146,16 @@ describe("bench：逐行 truth／recall／precision", () => {
     const txt = summaryLines(rep).join("\n");
     expect(txt).toMatch(/逐行 recall/);
     expect(txt).not.toMatch(/測試|U90001/);
+  });
+  it("S4：引擎冇出任何行 → row_precision 係 null（唔係 0）", async () => {
+    const truth = [{ name: "測試甲", staff_no: "U90001" }, { name: "測試乙", staff_no: null }];
+    const rep = await runBench({
+      photos: [{ id: "s1", truth: new Set(), rows: truth }],
+      engines: [{ key: "tesseract", engine: fake("tesseract", sheet([])) }, { key: "deepseek", engine: fake("deepseek", sheet([])) }, { key: "claude", engine: fake("claude", sheet([])) }],
+      strategies: ["S1"],
+      load: async () => BYTES,
+    });
+    expect(rep.engines.find((e) => e.engine === "tesseract")).toMatchObject({ row_recall: 0, row_precision: null });
+    expect(summaryLines(rep).join("\n")).toMatch(/precision —/);
   });
 });

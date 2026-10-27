@@ -80,19 +80,19 @@ describe("策略：成本優先、三取二", () => {
     const dead = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: failOut(), deepseek: failOut(), claude: failOut() }) });
     expect(dead).toMatchObject({ kind: "unreadable", cards: [] });
   });
-  it("M2 Opus 真值表：連號工號 B／仲裁漏讀第二張 → 第二張變 review（card_suspect_second），唔准丟；兩引擎都讀到兩張 → 兩張 confirmed；U01095／U01195 同樣", async () => {
-    const miss = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095", "U01096"]), deepseek: okOut("deepseek", ["U01095"]), claude: okOut("claude", ["U01095"]) }) });
-    expect(miss.cards.map((c) => [c.staff_no, c.status, c.reasons[0] ?? null])).toEqual([["U01095", "confirmed", null], ["U01096", "review", "card_suspect_second"]]);
+  it("M2 Opus 真值表：連號工號 B／仲裁漏讀第二張 → 第二張變 review（card_suspect_second），唔准丟；兩引擎都讀到兩張 → 兩張 confirmed；U91095／U91195 同樣", async () => {
+    const miss = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U91095", "U91096"]), deepseek: okOut("deepseek", ["U91095"]), claude: okOut("claude", ["U91095"]) }) });
+    expect(miss.cards.map((c) => [c.staff_no, c.status, c.reasons[0] ?? null])).toEqual([["U91095", "confirmed", null], ["U91096", "review", "card_suspect_second"]]);
     expect(miss.cards[1]!.votes).toBe(1);
-    const both = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095", "U01096"]), deepseek: okOut("deepseek", ["U01095", "U01096"]) }) });
+    const both = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U91095", "U91096"]), deepseek: okOut("deepseek", ["U91095", "U91096"]) }) });
     expect(both.arbiter_used).toBe(false);
-    expect(both.cards.map((c) => [c.staff_no, c.status])).toEqual([["U01095", "confirmed"], ["U01096", "confirmed"]]);
-    const far = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095", "U01195"]), deepseek: okOut("deepseek", ["U01095"]), claude: okOut("claude", ["U01095"]) }) });
-    expect(far.cards.map((c) => [c.staff_no, c.status, c.reasons[0] ?? null])).toEqual([["U01095", "confirmed", null], ["U01195", "review", "card_suspect_second"]]);
+    expect(both.cards.map((c) => [c.staff_no, c.status])).toEqual([["U91095", "confirmed"], ["U91096", "confirmed"]]);
+    const far = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U91095", "U91195"]), deepseek: okOut("deepseek", ["U91095"]), claude: okOut("claude", ["U91095"]) }) });
+    expect(far.cards.map((c) => [c.staff_no, c.status, c.reasons[0] ?? null])).toEqual([["U91095", "confirmed", null], ["U91195", "review", "card_suspect_second"]]);
     // 對照：所有引擎都只讀到一張卡 → 單票近似讀數係誤讀，唔另開卡
-    const single = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U01095"]), deepseek: okOut("deepseek", ["U01096"]), claude: okOut("claude", ["U01096"]) }) });
+    const single = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", ["U91095"]), deepseek: okOut("deepseek", ["U91096"]), claude: okOut("claude", ["U91096"]) }) });
     expect(single.cards).toHaveLength(1);
-    expect(single.cards[0]).toMatchObject({ staff_no: "U01096", status: "confirmed", candidates: ["U01095"] });
+    expect(single.cards[0]).toMatchObject({ staff_no: "U91096", status: "confirmed", candidates: ["U91095"] });
   });
   it("兩個都讀得到而話冇卡＝not_card（唔仲裁）；多張卡逐張判定；名只讀到姓名＝review（card_name_only）", async () => {
     const none = await readCardPhoto(BYTES, { strategy: "S1", engines: eng({ tesseract: okOut("tesseract", []), deepseek: okOut("deepseek", []) }) });
@@ -115,7 +115,7 @@ describe("策略：成本優先、三取二", () => {
     expect(CARD_STRATEGIES.S3).toEqual({ primary: ["deepseek", "haiku"], arbiter: "claude" });
     expect(CARD_STRATEGIES.S4).toEqual({ primary: ["tesseract", "qwen"], arbiter: "haiku" });
     expect(CARD_STRATEGIES.S5).toEqual({ primary: ["qwen", "deepseek"], arbiter: "claude" });
-    expect(CARD_STRATEGIES.S6).toEqual({ primary: ["qwen", "haiku"], arbiter: "claude", fallback: { for: "haiku", use: "deepseek" } });
+    expect(CARD_STRATEGIES.S6).toEqual({ primary: ["qwen", "haiku"], arbiter: "claude", fallback: { for: ["qwen", "haiku"], use: "deepseek" } });
     delete process.env.WA_CARD_OCR_STRATEGY;
     expect(cardStrategyFromEnv()).toBe("S6");
     process.env.WA_CARD_OCR_STRATEGY = "s4";

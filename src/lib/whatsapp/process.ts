@@ -4,11 +4,10 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { LlmUnavailableError, type LlmClient } from "@/lib/ai/llm";
-import type { SiteNameCandidate } from "@/lib/month-close/auto/site-match";
 import type { GuardMatchIndex } from "@/lib/roster-upload/match";
 import { scoreMessage } from "./filter";
 import { parseMessage, type ParsedIntent } from "./parse";
-import { resolveIntents, type ResolvedIntent } from "./resolve";
+import { resolveIntents, type ResolvedIntent, type WaSite } from "./resolve";
 import { createPrismaResolveRepo } from "./repo";
 import { hkDateOf, isoToDbDate } from "./dates";
 import { shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
@@ -21,8 +20,12 @@ import { readCardPhoto, cardStrategyFromEnv } from "./card-ocr";
 import type { CardEngine, CardEngineName } from "./card-engines";
 import { resolveCardPhoto, type CardInput } from "./card-resolve";
 import { deleteMediaEvidence, loadMediaEvidence } from "./media";
-import { detectRosterList } from "./roster-list";
-import { resolveRosterList } from "./roster-resolve";
+import { detectRosterList, detectRosterPlan } from "./roster-list";
+import { prismaRosterDeps, resolveRosterList } from "./roster-resolve";
+import { nameViewOf, textHasKnownName } from "./name-index";
+import { classifyText, normalizeReportText } from "./report-kinds";
+import { applyCheckout, leaveNoticeIntents, substitutionIntents } from "./kind-resolve";
+import { normNameVariant } from "@/lib/names/variants";
 import { crossCheckWithRoster } from "./roster-crosscheck";
 import { applySourceChangeTx, staleEditedPendingIds } from "./source-change";
 
@@ -30,7 +33,7 @@ const WA_MAX_ATTEMPTS = 3;
 const QUOTE_WINDOW_MS = 24 * 3600 * 1000;
 
 export interface RunContext {
-  sites: SiteNameCandidate[];
+  sites: WaSite[];
   index: GuardMatchIndex;
   /** 測試／特殊用途注入；冇就用 waLlmChain()。 */
   llm?: LlmClient[];
@@ -60,10 +63,10 @@ function toJson(v: unknown): Prisma.InputJsonValue {
 export async function loadRunContext(): Promise<Omit<RunContext, "llm">> {
   const { loadGuardMatchIndex } = await import("@/lib/roster-upload/guard-index");
   const [sites, index] = await Promise.all([
-    prisma.site.findMany({ where: { status: { in: ["active", "paused"] } }, select: { id: true, canonicalName: true, aliases: true } }),
+    prisma.site.findMany({ where: { status: { in: ["active", "paused"] } }, select: { id: true, canonicalName: true, aliases: true, clientName: true, clientGroup: true } }),
     loadGuardMatchIndex(prisma),
   ]);
-  return { sites: sites.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases })), index };
+  return { sites: sites.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases, client: s.clientGroup ?? s.clientName })), index };
 }
 
 function rowFor(messageId: string, revision: number, idx: number, r: ResolvedIntent): Prisma.WhatsappIntentCreateManyInput {
@@ -130,6 +133,14 @@ export async function failAttempt(id: string, revision: number, code: string): P
   return "error";
 }
 
+/** 判頭群 assume_today 每群每日送 LLM 上限；env WA_ASSUME_TODAY_DAILY_CAP 嚴格 ^\\d+$、1–1000，其他一律預設 30。 */
+function assumeTodayCap(): number {
+  const raw = process.env.WA_ASSUME_TODAY_DAILY_CAP;
+  if (raw === undefined || !/^\d+$/.test(raw)) return 30;
+  const n = Number(raw);
+  return n >= 1 && n <= 1000 ? n : 30;
+}
+
 /** 處理一條 status=received 嘅訊息。 */
 export async function processWhatsappMessage(messageRowId: string, ctx: RunContext, stats: ProcessStats = emptyStats()): Promise<ProcessOutcome> {
   const msg = await prisma.whatsappMessage.findUnique({ where: { id: messageRowId } });
@@ -186,42 +197,114 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     mediaType: msg.mediaType ?? null,
     cardPhotoMode: group?.cardPhotoMode ?? false,
     ts: msg.ts,
+    nameHit: group?.kind === "broker" ? textHasKnownName(ctx.index, msg.text) : false,
   });
   if (filtered.decision === "ignore") {
     const reason = filtered.reasons.includes("group_unbound") ? "group_unbound" : filtered.reasons.includes("group_ignored") ? "group_ignored" : "filtered_out";
     return ignoreNow(reason, filtered.score, filtered.reasons);
   }
   if (!group) return ignoreNow("group_unbound", 0, ["group_unbound"]);
+  // WA-9 (7)：判頭群 assume_today 會把閒聊（盤名＋「上班」）送去 LLM → 每群每日上限（env WA_ASSUME_TODAY_DAILY_CAP，預設 30），超過降級 ignore
+  if (filtered.reasons.includes("assume_today")) {
+    const cap = assumeTodayCap();
+    const dayStart = new Date(`${hkDateOf(msg.ts)}T00:00:00+08:00`);
+    const used = await prisma.whatsappMessage.count({ where: { chatJid: msg.chatJid, id: { not: msg.id }, status: { not: "received" }, OR: [{ ignoreReason: null }, { ignoreReason: { not: "assume_today_cap" } }], filterReasons: { array_contains: ["assume_today"] }, ts: { gte: dayStart, lt: new Date(dayStart.getTime() + 24 * 3600 * 1000) } } });
+    if (used >= cap) return ignoreNow("assume_today_cap", filtered.score, [...filtered.reasons, "assume_today_capped"]);
+  }
 
   // ---- WA-8：工卡相（群組開咗 card_photo_mode + 圖片訊息）：辨識 → 歸屬（唔經 LLM 解析文字）
   // WA-9：文字名單（filter 已命中 roster_list）——純 code，唔 call LLM，直接砌 N 條 shift intents
-  const rosterList = filtered.reasons.includes("roster_list") && !msg.mediaType ? detectRosterList(msg.text, msg.ts) : null;
-  const cardMode = !rosterList && group.cardPhotoMode && (msg.mediaType === "image" || msg.mediaType === "unknown");
+  const nameKnown = nameViewOf(ctx.index).known;
+  const rosterList = filtered.reasons.includes("roster_list") && !msg.mediaType ? detectRosterList(msg.text, msg.ts, { knownNames: nameKnown }) : null;
+  const rosterPlan = !rosterList && filtered.reasons.includes("roster_plan") && !msg.mediaType ? detectRosterPlan(msg.text, msg.ts, { knownNames: nameKnown }) : null;
+  const TEXT_KIND_REASONS = ["name_shift_caption", "substitution_notice", "leave_notice", "attendance_summary"];
+  const textKind = !rosterList && !rosterPlan && filtered.reasons.some((r) => TEXT_KIND_REASONS.includes(r)) ? classifyText(msg.text) : null;
+  const cardMode = !rosterList && !rosterPlan && !textKind && group.cardPhotoMode && (msg.mediaType === "image" || msg.mediaType === "unknown");
   let resolved: ResolvedIntent[];
   let parsedJson: Prisma.InputJsonValue;
   let llmFields: Prisma.WhatsappMessageUncheckedUpdateManyInput = {};
+  const wmOf = (v: unknown): Record<string, string> => (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, string>;
+  const mkResolveCtx = (g: NonNullable<typeof group>) => ({
+    ts: msg.ts,
+    group: { id: g.id, kind: g.kind, siteId: g.siteId, brokerId: g.brokerId, shiftWordMap: wmOf(g.shiftWordMap), leaveWordMap: wmOf(g.leaveWordMap), autoWrite: g.autoWrite },
+    senderGuardId: msg.senderGuardId,
+    senderTelNorm: msg.senderTelNorm,
+    sites: ctx.sites,
+    index: ctx.index,
+    repo: createPrismaResolveRepo(staleIds),
+  });
   if (rosterList) {
     try {
-      const wm = (group.shiftWordMap && typeof group.shiftWordMap === "object" && !Array.isArray(group.shiftWordMap) ? group.shiftWordMap : {}) as Record<string, string>;
-      const lw = (group.leaveWordMap && typeof group.leaveWordMap === "object" && !Array.isArray(group.leaveWordMap) ? group.leaveWordMap : {}) as Record<string, string>;
-      resolved = await resolveRosterList({
-        ctx: {
-          ts: msg.ts,
-          group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wm, leaveWordMap: lw, autoWrite: group.autoWrite },
-          senderGuardId: msg.senderGuardId,
-          senderTelNorm: msg.senderTelNorm,
-          sites: ctx.sites,
-          index: ctx.index,
-          repo: createPrismaResolveRepo(staleIds),
-        },
-        list: rosterList,
-        chatJid: msg.chatJid,
-      });
+      const r = await resolveRosterList({ ctx: mkResolveCtx(group), list: rosterList, chatJid: msg.chatJid, messageId: msg.messageId, staleIds: new Set(staleIds) });
+      resolved = r.resolved;
       // 只記計數／日期（唔記姓名）；指標用 llm_provider='roster'
-      parsedJson = toJson({ roster: { names: rosterList.names.length, date: rosterList.date, confidence: rosterList.confidence } });
+      parsedJson = toJson({ roster: { ...r.stats, lists: 1, list_days: rosterList.days.length, confidence: rosterList.confidence } });
       llmFields = { llmProvider: "roster", llmModel: "roster-list", llmTokensIn: 0, llmTokensOut: 0 };
     } catch {
       return failAttempt(msg.id, rev, "roster_failed");
+    }
+  } else if (rosterPlan) {
+    // 預定更表（日序名單）：唔建 shift、唔出題；只記計數（供日後 rosterOnly 對照）
+    resolved = [];
+    parsedJson = toJson({ roster_plan: { days: rosterPlan.days.length, names: rosterPlan.days.reduce((a, d) => a + d.names.length, 0), dates: rosterPlan.days.map((d) => d.date) } });
+    llmFields = { llmProvider: "roster_plan", llmModel: "roster-plan", llmTokensIn: 0, llmTokensOut: 0 };
+  } else if (textKind) {
+    try {
+      const rc = mkResolveCtx(group);
+      llmFields = { llmProvider: "rule", llmModel: textKind.kind, llmTokensIn: 0, llmTokensOut: 0 };
+      if (textKind.kind === "substitution") {
+        resolved = await resolveIntents(substitutionIntents(textKind), rc);
+        parsedJson = toJson({ rule: { kind: "substitution" } });
+      } else if (textKind.kind === "leave_notice") {
+        resolved = await resolveIntents(leaveNoticeIntents(textKind), rc);
+        parsedJson = toJson({ rule: { kind: "leave_notice", days: textKind.days.length, month: textKind.month } });
+      } else if (textKind.kind === "attendance_summary") {
+        resolved = [];
+        parsedJson = toJson({ rule: { kind: "attendance_summary", month: textKind.month, rest_days: textKind.rest_days.length, claimed: textKind.claimed } });
+      } else if (textKind.kind === "name_caption") {
+        const meta: Record<string, unknown> = { kind: "name_caption", action: textKind.action };
+        if (textKind.action === "checkout") {
+          const co = await applyCheckout({ ctx: rc, chatJid: msg.chatJid, name: textKind.name, deps: prismaRosterDeps() });
+          resolved = [];
+          Object.assign(meta, { matched: co.matched, updated: co.updated, note: co.note });
+        } else {
+          // 開工：caption 姓名係身份首要訊號；工卡相模式開住 → OCR 只做核對（姓名唔同先出題）
+          const r = await resolveRosterList({
+            ctx: rc,
+            list: { kind: "roster_list", days: [{ date: null, date_raw: "今日", names: [{ raw: textKind.name, shift_hint: null }] }], header_lines: 0, confidence: "high" },
+            chatJid: msg.chatJid,
+            messageId: msg.messageId,
+            staleIds: new Set(staleIds),
+          });
+          resolved = r.resolved;
+          if (group.cardPhotoMode && (msg.mediaType === "image" || msg.mediaType === "unknown") && msg.mediaState === "stored") {
+            const evd = await loadMediaEvidence(msg.messageId);
+            if (evd) {
+              const photo = await readCardPhoto(evd.bytes, { strategy: cardStrategyFromEnv(), today: hkDateOf(msg.ts), ...(ctx.cardEngines ? { engines: ctx.cardEngines } : {}) });
+              for (const u of photo.usage) {
+                stats.llmIn += u.promptTokens;
+                stats.llmOut += u.completionTokens;
+              }
+              const read = photo.cards.flatMap((c) => (c.name_zh ? [c.name_zh] : []));
+              const same = read.some((n) => normNameVariant(n) === normNameVariant(textKind.name));
+              meta.ocr = { cards: photo.cards.length, named: read.length, same };
+              if (read.length > 0 && !same) {
+                for (const row of resolved) {
+                  row.resolution.reasons = [...new Set([...row.resolution.reasons, "card_confirm"])];
+                  row.routed = "triage";
+                  row.src = { ...(row.src ?? { person_raw: null, site_raw: null, date_raw: null, shift_raw: null, leave_raw: null, replaced_raw: null }), card: { media_id: evd.id, staff_no_read: null, name_zh_read: read[0] ?? null, name_en_read: null, votes: 0, index: 1, total: 1, arbiter: false, candidates: [] } };
+                }
+              }
+            }
+          }
+        }
+        parsedJson = toJson({ caption: meta });
+      } else {
+        resolved = [];
+        parsedJson = toJson({ rule: { kind: textKind.kind } });
+      }
+    } catch {
+      return failAttempt(msg.id, rev, "rule_failed");
     }
   } else if (cardMode) {
     try {
@@ -278,7 +361,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
         const x = await crossCheckWithRoster({ chatJid: msg.chatJid, day: hkDateOf(msg.ts), groupId: group.id, resolved, nameOfGuard: (g) => ctx.index.nameByGuardId.get(g) ?? null });
         if (x.hadRoster) {
           resolved = x.resolved;
-          parsedJson = toJson({ card: { ...meta, roster_crosscheck: { matched: x.matched, photo_only: x.photoOnly } } });
+          parsedJson = toJson({ card: { ...meta, roster_crosscheck: { matched: x.matched, photo_only: x.photoOnly, locked_month_skip: x.lockedSkipped } } });
         }
       }
     } catch {
@@ -299,7 +382,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
 
     let parsed;
     try {
-      parsed = await parseMessage({ text: msg.text, ts: msg.ts, groupKind: group.kind, shiftTable, wordMap, quotedText }, ctx.llm);
+      parsed = await parseMessage({ text: normalizeReportText(msg.text), ts: msg.ts, groupKind: group.kind, shiftTable, wordMap, quotedText }, ctx.llm);
     } catch (e) {
       return failAttempt(msg.id, rev, e instanceof LlmUnavailableError ? "llm_unavailable" : "parse_failed");
     }
@@ -311,10 +394,11 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     if (parsed.ok && parsed.output.noise && parsed.output.intents.length === 0) {
       return ignoreNow("llm_noise", filtered.score, filtered.reasons, { ...llmFields, parsedJson: toJson(parsed.output) });
     }
-
     // ---- 程式碼配對
     try {
-      const intents: ParsedIntent[] = parsed.ok ? parsed.output.intents : [];
+      let intents: ParsedIntent[] = parsed.ok ? parsed.output.intents : [];
+      // WA-9 (7)：判頭群「冇日期＝今日」——缺日期嘅 intent 補「今日」（凌晨沿用 resolveDates 降級）
+      if (filtered.reasons.includes("assume_today")) intents = intents.map((i) => (i.date ? i : { ...i, date: { raw: "今日", kind: "relative" as const } }));
       const resolveCtx = {
         ts: msg.ts,
         group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wordMap, leaveWordMap, autoWrite: group.autoWrite },

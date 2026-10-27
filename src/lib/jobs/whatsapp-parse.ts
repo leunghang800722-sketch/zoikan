@@ -75,16 +75,20 @@ export async function runWhatsappDailySummary(now: Date, opts: { force?: boolean
   const day = addDays(hkDateOf(now), -1);
   const s = await computeStats(parseRange(day, day, now), null);
   if (s.received === 0) return { status: "skipped", summary: { day, received: 0 } };
+  // WA-9 (7)：有人私訊機械人傳媒體（一日 >3 條）→ 日摘要提一句（只有數字）
+  const dayStart = new Date(`${day}T00:00:00+08:00`);
+  const dmMedia = await prisma.whatsappMessage.count({ where: { ignoreReason: "not_group", mediaType: { not: null }, ts: { gte: dayStart, lt: new Date(dayStart.getTime() + 24 * 3600 * 1000) } } });
+  const dmNote = dmMedia > 3 ? `；有人私訊機械人傳咗 ${dmMedia} 個圖片／檔案（機械人唔處理私訊，請提醒佢哋喺群組報）` : "";
   const rate = s.consistency_rate === null ? "—" : `${Math.round(s.consistency_rate * 100)}%`;
   const r = await createNotification({
     kind: "whatsapp_daily",
     title: `WhatsApp 報更日摘要 ${day}`,
-    body: `收 ${s.received}、過濾 ${s.filtered}、解析 ${s.parsed}；建議自動 ${s.auto_write}、分流 ${s.triage}、忽略 ${s.ignored}；建議自動但群組未開 ${s.auto_results.suggested}；自動寫入 ${s.auto_results.written}、待批 ${s.auto_results.pending}、拒絕 ${s.auto_results.rejected}；對照一致率 ${rate}。`,
+    body: `收 ${s.received}、過濾 ${s.filtered}、解析 ${s.parsed}；建議自動 ${s.auto_write}、分流 ${s.triage}、忽略 ${s.ignored}；建議自動但群組未開 ${s.auto_results.suggested}；自動寫入 ${s.auto_results.written}、待批 ${s.auto_results.pending}、拒絕 ${s.auto_results.rejected}；對照一致率 ${rate}${dmNote}。`,
     href: "/whatsapp/intents",
     audience: ["老闆"],
     dedupeKey: `whatsapp_daily:${day}`,
   });
-  return { summary: { day, received: s.received, filtered: s.filtered, parsed: s.parsed, auto_write: s.auto_write, triage: s.triage, ignored: s.ignored, auto_written: s.auto_results.written, auto_pending: s.auto_results.pending, auto_rejected: s.auto_results.rejected, auto_suggested_group_off: s.auto_results.suggested, notified: r.created } };
+  return { summary: { day, received: s.received, filtered: s.filtered, parsed: s.parsed, auto_write: s.auto_write, triage: s.triage, ignored: s.ignored, auto_written: s.auto_results.written, auto_pending: s.auto_results.pending, auto_rejected: s.auto_results.rejected, auto_suggested_group_off: s.auto_results.suggested, dm_media: dmMedia, notified: r.created } };
 }
 
 export const whatsappDailySummaryJob: JobDef = {
