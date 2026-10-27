@@ -442,8 +442,8 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
   });
 
   it("§21 靠已取消（former）舊工號配對到 → guard_match 仍然係 by_staff_no＋warning「用已取消舊號配對」", async () => {
-    await prisma.guardStaffNumber.create({ data: { guardId: fx.guardA.id, scheme: "U", number: "U88888", status: "former", source: "test-wp-roster-upload" } });
-    const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "U88888" });
+    await prisma.guardStaffNumber.create({ data: { guardId: fx.guardA.id, scheme: "U", number: "U98888", status: "former", source: "test-wp-roster-upload" } });
+    const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "U98888" });
     const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "stale.xlsx"));
     expect(res.status).toBe(201);
     const body = (await res.json()) as { upload: { id: string; parse_summary: { stale_staff_no_count: number } } };

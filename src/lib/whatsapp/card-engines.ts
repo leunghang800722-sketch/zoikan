@@ -57,7 +57,7 @@ doc_type：
 - other：打卡機螢幕、自拍、風景、其他文件、或者睇唔清係咩。
 規則：
 - cards 逐個人列出。work_card／punch_card／app_screenshot／signin_sheet：每個人一個 card，rows 留空陣列；attendance_sheet：cards 留空陣列，改為 rows 逐行列出（每行一個人：row＝行號、date＝該行日期 "YYYY-MM-DD"（年份用今日嘅年份）、name_zh＝姓名、staff_no_raw＝工號欄**原樣照抄**（U 開頭、純數字、手寫 L13xxxx／413xxxx 都照抄，睇唔清就 null）、time_on／time_off＝到達／離開時間 "HH:MM"、confidence）；other：cards 同 rows 都留空。
-- staff_no 係相上印／寫嘅工號，格式只有 U+5 位數字、MP+4 位、MG+4 位、MW+4 位（例：U12345、MP1234）；睇唔清、冇、或者格式唔符（例如純數字、L13xxxx、413xxxx）就填 null，唔好估。
+- staff_no 係相上印／寫嘅工號，格式只有 U+5 位數字、MP+4 位、MG+4 位、MW+4 位（例：U92345、MP9234）；睇唔清、冇、或者格式唔符（例如純數字、L13xxxx、413xxxx）就填 null，唔好估。
 - name_zh／name_en 只抄相上見到嘅字（手寫或印刷皆可），睇唔清就 null。
 - time_on／time_off：相上見到嘅打卡／簽到時間，24 小時制 "HH:MM"；冇或睇唔清就 null。簽到表只取輸入提供嘅「今日」嗰一行。
 - 反光、太暗、太糊、被手指遮住 → confidence 填 low。唔好用相以外嘅資訊推斷任何值。`;

@@ -444,7 +444,7 @@ describe("TE-1 證據裁圖", () => {
       const wrongHkid = { hkid: H[7]!, staff_numbers: ["U90001"] };
       const wrongNos = { hkid: pa.hkid.value, staff_numbers: ["U90001", "U99999"] };
       const noKey = { hkid: "ZZZ", staff_numbers: [] };
-      const nobody = { hkid: H[9]!, staff_numbers: ["U77777"] };
+      const nobody = { hkid: H[9]!, staff_numbers: ["U97777"] };
       const r = await upload(
         accountant,
         sid,

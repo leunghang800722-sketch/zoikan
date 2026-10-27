@@ -172,6 +172,15 @@ describe("W1 resolve：盤口", () => {
       expect(r.resolution.reasons).not.toContain("site_ambiguous");
       expect(r.resolution.basis.site).toBe("group_over_alias");
     });
+    it("2b. 多盤共用嘅名但掛住嘅盤橫跨唔同客戶 → 出 site_ambiguous 題（候選＝群盤＋該些盤），唔當區域名放行", async () => {
+      const mixed = [...layered, { id: "site-y", canonicalName: "測試乙客戶盤", aliases: ["跨客區"], client: "測試客乙" }, { id: "site-z", canonicalName: "測試丙客戶盤", aliases: ["跨客區"], client: "測試客甲" }];
+      const r = await one(mk({ site_raw: "跨客區" }), ctx({ sites: mixed, group: { id: "grpG", kind: "site", siteId: G, brokerId: null, shiftWordMap: { 夜: "N", 早: "A" }, autoWrite: true }, repo: { ...repo(), shiftTypes: async (sid) => [{ id: `t-${sid}`, siteId: sid, code: "A", label: "早更", startHour: 7 }] } }));
+      expect(r.siteId).toBe(G);
+      expect(r.routed).toBe("triage");
+      expect(r.resolution.reasons).toContain("site_ambiguous");
+      expect(r.resolution.candidates.site_ids).toEqual([G, "site-y", "site-z"]);
+      expect(r.resolution.basis.site).toBe("shared_name_cross_client");
+    });
     it("3. 命中唔同客戶嘅盤 → 用群盤但要確認（唔自動寫）", async () => {
       const r = await one(mk({ site_raw: "別客戶區" }), gctx());
       expect(r.siteId).toBe(G);

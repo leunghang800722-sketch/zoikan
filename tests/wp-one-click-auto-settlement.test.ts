@@ -109,8 +109,8 @@ describe("WP-ONE-CLICK-AUTO D：結算雞頭歸屬", () => {
     const { site, d } = await mkSite("測試歸屬盤E");
     const oldGuard = await mkGuard({ name: "測試舊人" });
     const newGuard = await mkGuard({ name: "測試新人（同一個人）" });
-    await seedUploadWithRows({ month: AUG, siteId: site.id, siteNameRaw: site.canonicalName, uploaderUserId: fx.userIds["老闆"], status: "confirmed", rows: Array.from({ length: 6 }, (_, i) => ({ day: i + 1, nameRaw: "測試舊名", staffNoRaw: "U8888", guardId: oldGuard.id, settlementBrokerId: W.id })) });
-    await seedUploadWithRows({ month: SEPT, siteId: site.id, siteNameRaw: site.canonicalName, uploaderUserId: fx.userIds["老闆"], rows: [{ day: 3, nameRaw: "測試舊名", staffNoRaw: "U8888", guardId: newGuard.id, settlementBrokerId: null }] });
+    await seedUploadWithRows({ month: AUG, siteId: site.id, siteNameRaw: site.canonicalName, uploaderUserId: fx.userIds["老闆"], status: "confirmed", rows: Array.from({ length: 6 }, (_, i) => ({ day: i + 1, nameRaw: "測試舊名", staffNoRaw: "U9888", guardId: oldGuard.id, settlementBrokerId: W.id })) });
+    await seedUploadWithRows({ month: SEPT, siteId: site.id, siteNameRaw: site.canonicalName, uploaderUserId: fx.userIds["老闆"], rows: [{ day: 3, nameRaw: "測試舊名", staffNoRaw: "U9888", guardId: newGuard.id, settlementBrokerId: null }] });
     await rec(site.id, d.id, newGuard.id, sep(3));
     const { ctx } = await runCtx();
     const res = await runAutoSettlement(ctx, SEPT);

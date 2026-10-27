@@ -169,7 +169,14 @@ function resolveSite(siteRaw: string | null | undefined, ctx: ResolveContext): S
     if (hits.length > 0) {
       if (hits.some((h) => h.siteId === groupSite)) return { siteId: groupSite, reasons: [], candidates: [], basis: "text_exact" };
       const unique = hits.filter((h) => h.owners === 1);
-      if (unique.length === 0) return { siteId: groupSite, reasons: [], candidates: [], basis: "group_over_alias" };
+      if (unique.length === 0) {
+        // 多盤共用嘅名只限掛住嘅盤**全部同一客戶**先當區域名（群盤唔出題）；橫跨唔同客戶（或客戶未知）→ 出題，候選＝群盤＋該些盤
+        const clientOf = (id: string): string | null => ctx.sites.find((x) => x.id === id)?.client ?? null;
+        const shared = [...new Set(hits.map((h) => h.siteId))];
+        const clients = new Set(shared.map(clientOf));
+        if (clients.size > 1 || clients.has(null)) return { siteId: groupSite, reasons: ["site_ambiguous"], candidates: [groupSite, ...shared], basis: "shared_name_cross_client" };
+        return { siteId: groupSite, reasons: [], candidates: [], basis: "group_over_alias" };
+      }
       const groupClient = ctx.sites.find((x) => x.id === groupSite)?.client ?? null;
       const sibling = unique.filter((h) => groupClient !== null && (ctx.sites.find((x) => x.id === h.siteId)?.client ?? null) === groupClient);
       if (sibling.length > 0) return { siteId: groupSite, reasons: ["site_ambiguous"], candidates: [groupSite, ...new Set(sibling.map((h) => h.siteId))], basis: "sibling_site_text" };

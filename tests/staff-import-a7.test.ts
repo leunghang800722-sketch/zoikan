@@ -16,7 +16,7 @@ const H2 = mkHkid("B", "234567");
 
 const NAME = "名測試員甲";
 const guard = (o: Partial<DbGuard> = {}): DbGuard => ({ id: "g1", nameZh: NAME, hkid: null, tels: [], staffNos: [], dob: null, ...o });
-const base: MatchInput = { staffNos: ["U70001"], hkid: H1, hkidValid: true, hkidConfirmed: true, nameZh: NAME, nameConfirmed: true, phone: null, dob: null, grade: "auto_ok", gradeReasons: [] };
+const base: MatchInput = { staffNos: ["U90001"], hkid: H1, hkidValid: true, hkidConfirmed: true, nameZh: NAME, nameConfirmed: true, phone: null, dob: null, grade: "auto_ok", gradeReasons: [] };
 const run = (g: DbGuard[], i: Partial<MatchInput>, roster?: Map<string, RosterEvidence>) => decideMatch({ ...base, ...i }, buildDbIndex(g, roster));
 
 describe("name_only 輔助判斷", () => {
@@ -25,11 +25,11 @@ describe("name_only 輔助判斷", () => {
     expect(r).toMatchObject({ action: "create", guardId: null });
     expect(r.reasons).toContain("same_name_different_hkid");
     // 即使 dob 相同、更表有佐證，(a) 優先
-    const ros = new Map([["g1", { staffNoRaws: ["U70001"], telRaws: [] }]]);
+    const ros = new Map([["g1", { staffNoRaws: ["U90001"], telRaws: [] }]]);
     expect(run([guard({ hkid: H2, dob: "1990-05-06" })], { dob: "1990-05-06" }, ros).action).toBe("create");
   });
   it("(a') G 有另一 hkid、導入者 hkid 未 confirmed → 唔 link，needs_review guard_has_other_hkid_unconfirmed（dob／更表佐證都唔得）", () => {
-    const ros = new Map([["g1", { staffNoRaws: ["U70001"], telRaws: [] }]]);
+    const ros = new Map([["g1", { staffNoRaws: ["U90001"], telRaws: [] }]]);
     const r = run([guard({ hkid: H2, dob: "1990-05-06" })], { hkidConfirmed: false, dob: "1990-05-06" }, ros);
     expect(r).toMatchObject({ action: "needs_review", guardId: null });
     expect(r.reasons).toEqual(["guard_has_other_hkid_unconfirmed"]);
@@ -43,16 +43,16 @@ describe("name_only 輔助判斷", () => {
     expect(run([guard({ dob: null })], { dob: "1990-05-06" }).reasons).toContain("name_only_candidate");
   });
   it("(b)(c) 導入者 nameZh 未 confirmed → 唔做輔助 link", () => {
-    const ros = new Map([["g1", { staffNoRaws: ["U70001"], telRaws: [] }]]);
+    const ros = new Map([["g1", { staffNoRaws: ["U90001"], telRaws: [] }]]);
     expect(run([guard({ dob: "1990-05-06" })], { dob: "1990-05-06", nameConfirmed: false }, ros)).toMatchObject({ action: "needs_review", reasons: ["name_only_candidate"] });
     expect(run([guard()], { nameConfirmed: false }, ros).action).toBe("needs_review");
     expect(run([guard({ dob: "1990-05-06" })], { dob: "1991-01-01", nameConfirmed: false }).reasons).toEqual(["name_only_candidate"]);
   });
   it("(c) 更表佐證：工號（正規化＋邊界）或電話", () => {
     const ros = (staffNoRaws: string[], telRaws: string[] = []) => new Map([["g1", { staffNoRaws, telRaws }]]);
-    expect(run([guard()], {}, ros(["u 70001"]))).toMatchObject({ action: "link", basis: ["name_roster_evidence"] });
-    expect(run([guard()], {}, ros(["MP55 / U70001"]))).toMatchObject({ action: "link", basis: ["name_roster_evidence"] });
-    expect(run([guard()], {}, ros(["U700015"])).action).toBe("needs_review");
+    expect(run([guard()], {}, ros(["u 90001"]))).toMatchObject({ action: "link", basis: ["name_roster_evidence"] });
+    expect(run([guard()], {}, ros(["MP55 / U90001"]))).toMatchObject({ action: "link", basis: ["name_roster_evidence"] });
+    expect(run([guard()], {}, ros(["U900015"])).action).toBe("needs_review");
     expect(run([guard()], { phone: "91234567" }, ros([], ["9123 4567"]))).toMatchObject({ action: "link", basis: ["name_roster_evidence"] });
     expect(run([guard()], { phone: "91234567" }, ros([], ["91234568"])).action).toBe("needs_review");
     expect(run([guard()], { phone: null }, ros([], ["91234567"])).action).toBe("needs_review");
@@ -87,7 +87,7 @@ describe("preview 預載更表佐證（未作廢上載）", () => {
       sex: { value: null, status: "missing" },
       phone: { value: null, status: "missing" },
       address: { value: null, status: "missing" },
-      staffNumbers: [{ scheme: "U", number: "U70001" }],
+      staffNumbers: [{ scheme: "U", number: "U90001" }],
       rating: "auto_ok",
       reasons: [],
       conflicts: [],
@@ -103,7 +103,7 @@ describe("preview 預載更表佐證（未作廢上載）", () => {
       data: { month: new Date("2026-10-01T00:00:00.000Z"), siteId: fx.site.id, siteNameRaw: "測試盤", uploaderUserId: fx.userIds["老闆"], fileName: "x.xlsx", fileSha256: sha, fileBytes: Buffer.from("x"), fileSize: 1, status: "parsed", ...(voided ? { voidedAt: new Date() } : {}) },
     });
   const row = (uploadId: string, guardMatch: "by_name" | "by_staff_no" | "by_name_tel" | "ambiguous" = "by_staff_no", matchBasis: string | null = "staff_no") =>
-    prisma.rosterUploadRow.create({ data: { uploadId, rowIndex: 1, workDate: new Date("2026-10-02T00:00:00.000Z"), rawCode: "D", codeKind: "shift", guardId: fx.guardA.id, guardMatch, matchBasis, staffNoRaw: "u70001" } });
+    prisma.rosterUploadRow.create({ data: { uploadId, rowIndex: 1, workDate: new Date("2026-10-02T00:00:00.000Z"), rawCode: "D", codeKind: "shift", guardId: fx.guardA.id, guardMatch, matchBasis, staffNoRaw: "u90001" } });
 
   it("冇佐證 → needs_review；作廢上載唔計；by_name／ambiguous 行唔算佐證；by_staff_no／by_name_tel 行 → link＋basis", async () => {
     expect((await preview()).action).toBe("needs_review");

@@ -67,17 +67,17 @@ const card = (no: string | null, conf: 'high' | 'medium' | 'low' = 'high') => ({
 const ok = (engine: CardEngineName, nos: string[], p = 300, c = 40): EngineOutcome => ({ ok: true, is_card: nos.length > 0, cards: nos.map((n) => card(n)), usage: engine === 'tesseract' ? null : { engine, model: `fake-${engine}`, promptTokens: p, completionTokens: c } });
 export function dryFixture(): BenchInput {
   const photos = [
-    { id: 'p1', truth: new Set(['U12345']) },
-    { id: 'p2', truth: new Set(['MP1234']) },
+    { id: 'p1', truth: new Set(['U92345']) },
+    { id: 'p2', truth: new Set(['MP9234']) },
     { id: 'p3', truth: new Set<string>() },
-    { id: 'p4', truth: new Set(['U22222', 'MG3333']) },
+    { id: 'p4', truth: new Set(['U92222', 'MG9333']) },
   ];
   const scripts: Record<CardEngineName, Record<string, EngineOutcome>> = {
-    tesseract: { p1: ok('tesseract', ['U12345']), p2: ok('tesseract', ['MP1235']), p3: ok('tesseract', []), p4: ok('tesseract', ['U22222']) },
-    deepseek: { p1: ok('deepseek', ['U12345']), p2: ok('deepseek', ['MP1234']), p3: ok('deepseek', []), p4: ok('deepseek', ['U22222', 'MG3333']) },
-    haiku: { p1: ok('haiku', ['U12345']), p2: ok('haiku', ['MP1234']), p3: ok('haiku', []), p4: ok('haiku', ['U22222', 'MG3333']) },
-    qwen: { p1: ok('qwen', ['U12345']), p2: ok('qwen', ['MP1234']), p3: ok('qwen', []), p4: ok('qwen', ['U22222', 'MG3333']) },
-    claude: { p1: ok('claude', ['U12345'], 900, 60), p2: ok('claude', ['MP1234'], 900, 60), p3: ok('claude', [], 900, 60), p4: ok('claude', ['U22222', 'MG3333'], 900, 60) },
+    tesseract: { p1: ok('tesseract', ['U92345']), p2: ok('tesseract', ['MP9235']), p3: ok('tesseract', []), p4: ok('tesseract', ['U92222']) },
+    deepseek: { p1: ok('deepseek', ['U92345']), p2: ok('deepseek', ['MP9234']), p3: ok('deepseek', []), p4: ok('deepseek', ['U92222', 'MG9333']) },
+    haiku: { p1: ok('haiku', ['U92345']), p2: ok('haiku', ['MP9234']), p3: ok('haiku', []), p4: ok('haiku', ['U92222', 'MG9333']) },
+    qwen: { p1: ok('qwen', ['U92345']), p2: ok('qwen', ['MP9234']), p3: ok('qwen', []), p4: ok('qwen', ['U92222', 'MG9333']) },
+    claude: { p1: ok('claude', ['U92345'], 900, 60), p2: ok('claude', ['MP9234'], 900, 60), p3: ok('claude', [], 900, 60), p4: ok('claude', ['U92222', 'MG9333'], 900, 60) },
   };
   return {
     photos,

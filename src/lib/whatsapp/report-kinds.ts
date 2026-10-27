@@ -57,5 +57,5 @@ function normalizeTimeRanges(text: string): string {
 export const normalizeReportText = (text: string): string => normalizeTimeRanges(fixOcrDigits(text));
 
 export const TIME_RANGE_RE = /(?<!\d)(?:[01]\d|2[0-3])[0-5]\d\s*[-一—–~～至到]\s*(?:[01]\d|2[0-3])[0-5]\d(?!\d)/;
-/** 員工編號樣 token（U90222／MP1234…，容許 O 代 0）。 */
+/** 員工編號樣 token（U90222／MP9234…，容許 O 代 0）。 */
 export const STAFF_TOKEN_RE = /(?<![A-Za-z0-9])(?:U|MP|MG|MW)[0-9Oo]{4,6}(?![A-Za-z0-9])/;

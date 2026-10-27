@@ -24,7 +24,7 @@ describe("解析：doc_type／時間", () => {
     const p = parseCardText('{"doc_type":"app_screenshot","cards":[{"staff_no":null,"name_zh":"測試甲","name_en":null,"time_on":"8:07","time_off":null,"confidence":"high"}]}');
     expect(p.doc_type).toBe("app_screenshot");
     expect(p.cards[0]).toMatchObject({ name_zh: "測試甲", time_on: "08:07", time_off: null });
-    expect(parseCardText("U12345 測試甲").doc_type).toBeNull();
+    expect(parseCardText("U92345 測試甲").doc_type).toBeNull();
   });
 });
 
@@ -37,11 +37,11 @@ describe("Opus S2／S3", () => {
   });
   it("S3：預設 S6 — qwen 失敗 → deepseek 頂上（唔直接去仲裁）；兩個都失敗 → deepseek 只頂一次", async () => {
     const down: EngineOutcome = { ok: false, error: "unavailable", usage: null };
-    const ok = (n: string) => out([card({ staff_no: "U12345", name_zh: n })], "work_card");
+    const ok = (n: string) => out([card({ staff_no: "U92345", name_zh: n })], "work_card");
     const a = await readCardPhoto(BYTES, { strategy: "S6", engines: engs({ qwen: down, haiku: ok("測試甲"), deepseek: ok("測試甲"), claude: ok("測試乙") }) });
     expect(a.arbiter_used).toBe(false);
     expect(a.engines.map((e) => e.engine)).toEqual(["deepseek", "haiku"]);
-    expect(a.cards[0]).toMatchObject({ staff_no: "U12345", status: "confirmed" });
+    expect(a.cards[0]).toMatchObject({ staff_no: "U92345", status: "confirmed" });
     const b = await readCardPhoto(BYTES, { strategy: "S6", engines: engs({ qwen: down, haiku: down, deepseek: ok("測試甲"), claude: ok("測試甲") }) });
     expect(b.engines.filter((e) => e.engine === "deepseek")).toHaveLength(1);
     expect(b.arbiter_used).toBe(true);

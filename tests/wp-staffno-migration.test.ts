@@ -145,23 +145,23 @@ describe("WP-STAFFNO S3/S4/應修3/必修5：migration 資料搬遷邏輯（synt
     guardIds = {};
 
     // B：正常 U 號，冇撞號。
-    guardIds.B = (await prisma.guard.create({ data: { nameZh: "案例B", employmentType: "cash_casual", staffNo: "U100001", createdAt: at(1) } })).id;
+    guardIds.B = (await prisma.guard.create({ data: { nameZh: "案例B", employmentType: "cash_casual", staffNo: "U900001", createdAt: at(1) } })).id;
     // C：正常 MG 號。
-    guardIds.C = (await prisma.guard.create({ data: { nameZh: "案例C", employmentType: "cash_casual", staffNoMw: "MG200002", createdAt: at(2) } })).id;
+    guardIds.C = (await prisma.guard.create({ data: { nameZh: "案例C", employmentType: "cash_casual", staffNoMw: "MG900002", createdAt: at(2) } })).id;
     // D：正常 MW 號。
-    guardIds.D = (await prisma.guard.create({ data: { nameZh: "案例D", employmentType: "cash_casual", staffNoMw: "MW200003", createdAt: at(3) } })).id;
+    guardIds.D = (await prisma.guard.create({ data: { nameZh: "案例D", employmentType: "cash_casual", staffNoMw: "MW900003", createdAt: at(3) } })).id;
     // E：格式唔啱（冇字母前綴）。
     guardIds.E = (await prisma.guard.create({ data: { nameZh: "案例E", employmentType: "cash_casual", staffNo: "00500", createdAt: at(4) } })).id;
     // F：同欄撞號（大小寫/空白差異，正規化後相同）——guard F1 較早。
     guardIds.F1 = (await prisma.guard.create({ data: { nameZh: "案例F1", employmentType: "cash_casual", staffNo: "U90000", createdAt: at(10) } })).id;
     guardIds.F2 = (await prisma.guard.create({ data: { nameZh: "案例F2", employmentType: "cash_casual", staffNo: " u90000 ", createdAt: at(11) } })).id;
     // G：跨欄撞號——guard G1（staff_no）較早，guard G2（staff_no_mw）較遲。
-    guardIds.G1 = (await prisma.guard.create({ data: { nameZh: "案例G1", employmentType: "cash_casual", staffNo: "MG70000", createdAt: at(20) } })).id;
-    guardIds.G2 = (await prisma.guard.create({ data: { nameZh: "案例G2", employmentType: "cash_casual", staffNoMw: "MG70000", createdAt: at(21) } })).id;
+    guardIds.G1 = (await prisma.guard.create({ data: { nameZh: "案例G1", employmentType: "cash_casual", staffNo: "MG90000", createdAt: at(20) } })).id;
+    guardIds.G2 = (await prisma.guard.create({ data: { nameZh: "案例G2", employmentType: "cash_casual", staffNoMw: "MG90000", createdAt: at(21) } })).id;
     // H：三重撞號。
-    guardIds.H1 = (await prisma.guard.create({ data: { nameZh: "案例H1", employmentType: "cash_casual", staffNo: "U80000", createdAt: at(30) } })).id;
-    guardIds.H2 = (await prisma.guard.create({ data: { nameZh: "案例H2", employmentType: "cash_casual", staffNo: "u80000", createdAt: at(31) } })).id;
-    guardIds.H3 = (await prisma.guard.create({ data: { nameZh: "案例H3", employmentType: "cash_casual", staffNo: " U80000 ", createdAt: at(32) } })).id;
+    guardIds.H1 = (await prisma.guard.create({ data: { nameZh: "案例H1", employmentType: "cash_casual", staffNo: "U98000", createdAt: at(30) } })).id;
+    guardIds.H2 = (await prisma.guard.create({ data: { nameZh: "案例H2", employmentType: "cash_casual", staffNo: "u98000", createdAt: at(31) } })).id;
+    guardIds.H3 = (await prisma.guard.create({ data: { nameZh: "案例H3", employmentType: "cash_casual", staffNo: " U98000 ", createdAt: at(32) } })).id;
     // K：合法邊界格式（帶連字符）。
     guardIds.K = (await prisma.guard.create({ data: { nameZh: "案例K", employmentType: "cash_casual", staffNo: "MP-001A", createdAt: at(40) } })).id;
     // L（應修 3）：開頭連續大寫字母 >4 位——"ABCDE123" 頭 5 位全部係字母，
@@ -186,20 +186,20 @@ describe("WP-STAFFNO S3/S4/應修3/必修5：migration 資料搬遷邏輯（synt
   it("B：正常 U 號 → 一行 current", async () => {
     const row = await prisma.guardStaffNumber.findFirst({ where: { guardId: guardIds.B } });
     expect(row?.scheme).toBe("U");
-    expect(row?.number).toBe("U100001");
+    expect(row?.number).toBe("U900001");
     expect(row?.status).toBe("current");
   });
 
   it("C：正常 MG 號 → 一行 current", async () => {
     const row = await prisma.guardStaffNumber.findFirst({ where: { guardId: guardIds.C } });
     expect(row?.scheme).toBe("MG");
-    expect(row?.number).toBe("MG200002");
+    expect(row?.number).toBe("MG900002");
   });
 
   it("D：正常 MW 號 → 一行 current", async () => {
     const row = await prisma.guardStaffNumber.findFirst({ where: { guardId: guardIds.D } });
     expect(row?.scheme).toBe("MW");
-    expect(row?.number).toBe("MW200003");
+    expect(row?.number).toBe("MW900003");
   });
 
   it("E：格式唔啱（冇字母前綴）→ 冇新表行，audit_log migration_skipped_invalid，guards.staff_no 原值不變", async () => {
@@ -222,7 +222,7 @@ describe("WP-STAFFNO S3/S4/應修3/必修5：migration 資料搬遷邏輯（synt
   });
 
   it("G：跨欄撞號（staff_no vs staff_no_mw）→ 較早嗰個攞 current，較遲嗰個 skip + audit", async () => {
-    const rows = await prisma.guardStaffNumber.findMany({ where: { number: "MG70000" } });
+    const rows = await prisma.guardStaffNumber.findMany({ where: { number: "MG90000" } });
     expect(rows.length).toBe(1);
     expect(rows[0]!.guardId).toBe(guardIds.G1);
     const logs = await prisma.auditLog.findMany({ where: { tableName: "guard_staff_numbers", rowId: guardIds.G2, action: "migration_skipped_duplicate" } });
@@ -230,7 +230,7 @@ describe("WP-STAFFNO S3/S4/應修3/必修5：migration 資料搬遷邏輯（synt
   });
 
   it("H：三重撞號 → 最早嗰個攞 current，其餘兩個各自 skip + audit（兩條）", async () => {
-    const rows = await prisma.guardStaffNumber.findMany({ where: { number: "U80000" } });
+    const rows = await prisma.guardStaffNumber.findMany({ where: { number: "U98000" } });
     expect(rows.length).toBe(1);
     expect(rows[0]!.guardId).toBe(guardIds.H1);
     const logs = await prisma.auditLog.findMany({

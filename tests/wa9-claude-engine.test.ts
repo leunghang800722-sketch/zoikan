@@ -51,10 +51,10 @@ describe("claude 引擎診斷", () => {
       return { name, model: "m", read: async () => f(i++) };
     };
     const rep = await runBench({
-      photos: [1, 2, 3].map((n) => ({ id: `p${n}`, truth: new Set(["U12345"]) })),
+      photos: [1, 2, 3].map((n) => ({ id: `p${n}`, truth: new Set(["U92345"]) })),
       engines: [
         { key: "claude", engine: eng("claude", async (i) => (i < 2 ? { ok: false as const, error: "failed" as const, usage: null, reason: "refusal" } : { ok: true as const, is_card: false, cards: [], usage: null })) },
-        { key: "haiku", engine: eng("haiku", async () => ({ ok: true as const, is_card: true, cards: [{ is_card: true, staff_no: "U12345", name_zh: null, name_en: null, confidence: "high" as const }], usage: null })) },
+        { key: "haiku", engine: eng("haiku", async () => ({ ok: true as const, is_card: true, cards: [{ is_card: true, staff_no: "U92345", name_zh: null, name_en: null, confidence: "high" as const }], usage: null })) },
       ],
       strategies: [],
       load: async () => JPEG,
@@ -65,6 +65,6 @@ describe("claude 引擎診斷", () => {
     const txt = summaryLines(rep).join("\n");
     expect(txt).toContain("refusal×2");
     expect(txt).toContain("讀到空 1");
-    expect(txt).not.toMatch(/U12345/);
+    expect(txt).not.toMatch(/U92345/);
   });
 });

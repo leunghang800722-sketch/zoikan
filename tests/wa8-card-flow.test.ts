@@ -128,7 +128,7 @@ describe("WA-8 D 工卡相端到端", () => {
     expect((m.parsedJson as { card: { arbiter: string } }).card.arbiter).toBe("S1");
     // 第二張：三個都唔同
     await feed("c4", { ts: new Date(T0.getTime() + 5000) });
-    await run(engines(["U90001"], ["MP9999"], ["MG8888"]));
+    await run(engines(["U90001"], ["MP9999"], ["MG9888"]));
     const [q] = await openQs("c4");
     expect(["wa_person_ambiguous", "wa_person_unknown"]).toContain(q!.kind);
     expect(await recs()).toHaveLength(1);

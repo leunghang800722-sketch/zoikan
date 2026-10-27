@@ -209,8 +209,8 @@ describe("WP-STAFF-FIELDS 第三輪覆核（R1–R5／Minor）", () => {
   });
 
   it("R4：ext_identity_check 銀行四欄唔齊 → 其他欄照寫，銀行當 skip（留 bank_review＋bank_incomplete）", async () => {
-    const g = await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
-    const tp = typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" }, bank: {} }, H[2]!) as unknown as { bank: { payeeName: unknown } };
+    const g = await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
+    const tp = typedPerson({ nos: [{ n: "U97001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" }, bank: {} }, H[2]!) as unknown as { bank: { payeeName: unknown } };
     tp.bank.payeeName = L(null);
     await applyPkg(owner, pkg3([tp as never]));
     const q = (await qs("ext_identity_check"))[0]!;
@@ -251,8 +251,8 @@ describe("WP-STAFF-FIELDS 第三輪覆核（R1–R5／Minor）", () => {
   });
 
   it("Minor：hold_override 標埋聯絡人／逐工號入職日期 audit", async () => {
-    const g = await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
-    await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001", hire: "2020-01-02" }], contacts: [{ name: "測試聯絡人甲", tel: "91000011" }] }, H[2]!)]));
+    const g = await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
+    await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U97001", hire: "2020-01-02" }], contacts: [{ name: "測試聯絡人甲", tel: "91000011" }] }, H[2]!)]));
     const q = (await qs("ext_identity_check"))[0]!;
     await confirm(owner, q.id, { option: "confirm_ext_identity" });
     const c = await prisma.auditLog.findMany({ where: { tableName: "guard_emergency_contacts" }, orderBy: { createdAt: "desc" }, take: 1 });
@@ -281,8 +281,8 @@ describe("WP-STAFF-FIELDS 第三輪覆核（R1–R5／Minor）", () => {
   });
 
   it("Minor：restricted 題唔計入冇權限者 badge", async () => {
-    await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
-    await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
+    await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U97001" }] } });
+    await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U97001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
     const sid = (await prisma.triageSession.findFirstOrThrow({})).id;
     await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員", action: "update" } }, data: { granted: false } });
     await post(reassignRoute as never, `/api/triage/sessions/${sid}/reassign`, owner, { owner_user_id: fx.userIds["會計"] }, sid);

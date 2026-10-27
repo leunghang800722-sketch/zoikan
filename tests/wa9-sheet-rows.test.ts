@@ -120,9 +120,9 @@ describe("resolve：每行獨立", () => {
 
 describe("bench：逐行 truth／recall／precision", () => {
   it("parseTruthDetail／scoreRows／scoreSheet", () => {
-    const t = parseTruthDetail("file,staff_nos,rows\nsheet1.jpg,,測試甲~U90001|測試乙~6012345|測試丙\ncard1.jpg,U12345,\n");
+    const t = parseTruthDetail("file,staff_nos,rows\nsheet1.jpg,,測試甲~U90001|測試乙~6012345|測試丙\ncard1.jpg,U92345,\n");
     expect(t.get("sheet1.jpg")!.rows).toEqual([{ name: "測試甲", staff_no: "U90001" }, { name: "測試乙", staff_no: "6012345" }, { name: "測試丙", staff_no: null }]);
-    expect(t.get("card1.jpg")!.nos.has("U12345")).toBe(true);
+    expect(t.get("card1.jpg")!.nos.has("U92345")).toBe(true);
     const truth = t.get("sheet1.jpg")!.rows;
     expect(scoreRows([{ name: "測試甲", staff_no_raw: "u 90001" }, { name: "測試乙", staff_no_raw: "6012346" }, { name: "測試丙", staff_no_raw: null }], truth)).toEqual({ matched: 2, produced: 3, truth: 3 });
     expect(scoreSheet({ matched: 3, produced: 3, truth: 3 })).toBe("exact");
