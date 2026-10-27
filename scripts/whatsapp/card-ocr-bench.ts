@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEngine, CARD_ENGINE_NAMES, qwenModel, type CardEngine, type CardEngineName, type EngineOutcome } from '@/lib/whatsapp/card-engines';
 import { CARD_STRATEGIES, type CardStrategy } from '@/lib/whatsapp/card-ocr';
-import { BenchArgError, parseTruthCsv, runBench, summaryLines, type BenchInput } from './lib/card-bench-core';
+import { BenchArgError, parseTruthDetail, runBench, summaryLines, type BenchInput } from './lib/card-bench-core';
 
 interface Args {
   dir: string | null;
@@ -93,7 +93,7 @@ export async function run(args: Args, cwd: string = process.cwd()): Promise<{ li
     input = { ...dryFixture(), strategies: args.strategies };
   } else {
     if (!args.dir || !args.truth) throw new BenchArgError('要 --dir 同 --truth（或者 --dry）');
-    const truth = parseTruthCsv(await readFile(path.resolve(cwd, args.truth), 'utf-8'));
+    const truth = parseTruthDetail(await readFile(path.resolve(cwd, args.truth), 'utf-8'));
     const dir = path.resolve(cwd, args.dir);
     const files = (await readdir(dir)).filter((f) => /\.(jpe?g|png)$/i.test(f) && truth.has(f));
     if (files.length === 0) throw new BenchArgError('冇任何相片同 truth 對得上（檔名要一致）');
@@ -109,7 +109,7 @@ export async function run(args: Args, cwd: string = process.cwd()): Promise<{ li
     }
     void wantQwen;
     input = {
-      photos: ids.map((id, i) => ({ id, truth: truth.get(files[i]!)! })),
+      photos: ids.map((id, i) => ({ id, truth: truth.get(files[i]!)!.nos, rows: truth.get(files[i]!)!.rows })),
       engines,
       strategies: args.strategies,
       load: async (id) => readFile(path.join(dir, byId.get(id)!)),

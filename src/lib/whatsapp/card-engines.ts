@@ -8,7 +8,7 @@ import { ClaudeVisionClient } from "@/lib/guards/ocr/claude-vision-client";
 import { ocrModel } from "@/lib/guards/ocr/config";
 import { DeepSeekVisionClient, OcrUnavailableError, openAiClientOptions, type VisionClient } from "@/lib/guards/ocr/vision-client";
 import { modelImageDataUrl, ocrPreprocessed } from "./card-image";
-import { extractNameCandidates, extractStaffNos, parseCardText, type CardRead, type DocType } from "./card-parse";
+import { extractNameCandidates, extractStaffNos, parseCardText, type CardRead, type DocType, type SheetRow } from "./card-parse";
 
 export const CARD_ENGINE_NAMES = ["tesseract", "deepseek", "haiku", "qwen", "claude"] as const;
 export type CardEngineName = (typeof CARD_ENGINE_NAMES)[number];
@@ -20,7 +20,7 @@ export interface EngineUsage {
   completionTokens: number;
 }
 export type EngineOutcome =
-  | { ok: true; is_card: boolean; cards: CardRead[]; usage: EngineUsage | null; doc_type?: DocType | null }
+  | { ok: true; is_card: boolean; cards: CardRead[]; usage: EngineUsage | null; doc_type?: DocType | null; rows?: SheetRow[] }
   /** reason＝失敗類別碼（refusal／max_tokens／api_error／auth／rate_limit／connection／bad_image／no_image／error…）——只係固定字串，唔含任何內容 */
   | { ok: false; error: "unavailable" | "failed"; usage: EngineUsage | null; reason?: string };
 
@@ -47,7 +47,7 @@ const haikuModel = (): string => process.env.WA_CARD_HAIKU_MODEL?.trim() || DEFA
 // prompt（LLM 引擎共用）——只要求 JSON；工號為主，姓名輔助；唔准估
 // ---------------------------------------------------------------------------
 const CARD_SYSTEM = `你係保安公司出勤相片辨識器。輸入係一張 WhatsApp 相片，只輸出 JSON：
-{"doc_type": "work_card"|"punch_card"|"signin_sheet"|"attendance_sheet"|"app_screenshot"|"other", "cards": [{"staff_no": string|null, "name_zh": string|null, "name_en": string|null, "time_on": string|null, "time_off": string|null, "confidence": "high"|"medium"|"low"}]}
+{"doc_type": "work_card"|"punch_card"|"signin_sheet"|"attendance_sheet"|"app_screenshot"|"other", "cards": [{"staff_no": string|null, "name_zh": string|null, "name_en": string|null, "time_on": string|null, "time_off": string|null, "confidence": "high"|"medium"|"low"}], "rows": [{"row": number|null, "date": string|null, "name_zh": string|null, "staff_no_raw": string|null, "time_on": string|null, "time_off": string|null, "confidence": "high"|"medium"|"low"}]}
 doc_type：
 - work_card：保安員工卡（印有工號、姓名、相）。
 - punch_card：微電腦打卡鐘打出嚟嘅打卡紙（手寫 No.／工號同姓名，上面有打卡時間）。
@@ -56,7 +56,7 @@ doc_type：
 - app_screenshot：考勤 app 截圖（「歡迎，<姓名>！」＋打卡時間＋地點）。
 - other：打卡機螢幕、自拍、風景、其他文件、或者睇唔清係咩。
 規則：
-- cards 逐個人列出。work_card／punch_card／app_screenshot／signin_sheet：每個人一個 card；attendance_sheet 唔填 cards（留空陣列，之後另有逐行抽取）；other：cards 留空。
+- cards 逐個人列出。work_card／punch_card／app_screenshot／signin_sheet：每個人一個 card，rows 留空陣列；attendance_sheet：cards 留空陣列，改為 rows 逐行列出（每行一個人：row＝行號、date＝該行日期 "YYYY-MM-DD"（年份用今日嘅年份）、name_zh＝姓名、staff_no_raw＝工號欄**原樣照抄**（U 開頭、純數字、手寫 L13xxxx／413xxxx 都照抄，睇唔清就 null）、time_on／time_off＝到達／離開時間 "HH:MM"、confidence）；other：cards 同 rows 都留空。
 - staff_no 係相上印／寫嘅工號，格式只有 U+5 位數字、MP+4 位、MG+4 位、MW+4 位（例：U12345、MP1234）；睇唔清、冇、或者格式唔符（例如純數字、L13xxxx、413xxxx）就填 null，唔好估。
 - name_zh／name_en 只抄相上見到嘅字（手寫或印刷皆可），睇唔清就 null。
 - time_on／time_off：相上見到嘅打卡／簽到時間，24 小時制 "HH:MM"；冇或睇唔清就 null。簽到表只取輸入提供嘅「今日」嗰一行。
@@ -68,6 +68,23 @@ export const CARD_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
     doc_type: { type: "string", enum: ["work_card", "punch_card", "signin_sheet", "attendance_sheet", "app_screenshot", "other"] },
+    rows: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          row: { anyOf: [{ type: "number" }, { type: "null" }] },
+          date: { anyOf: [{ type: "string" }, { type: "null" }] },
+          name_zh: { anyOf: [{ type: "string" }, { type: "null" }] },
+          staff_no_raw: { anyOf: [{ type: "string" }, { type: "null" }] },
+          time_on: { anyOf: [{ type: "string" }, { type: "null" }] },
+          time_off: { anyOf: [{ type: "string" }, { type: "null" }] },
+          confidence: { type: "string", enum: ["high", "medium", "low"] },
+        },
+        required: ["row", "date", "name_zh", "staff_no_raw", "time_on", "time_off", "confidence"],
+        additionalProperties: false,
+      },
+    },
     cards: {
       type: "array",
       items: {
@@ -85,7 +102,7 @@ export const CARD_JSON_SCHEMA: Record<string, unknown> = {
       },
     },
   },
-  required: ["doc_type", "cards"],
+  required: ["doc_type", "cards", "rows"],
   additionalProperties: false,
 };
 
@@ -103,7 +120,7 @@ export function cardClaudeEffort(): "low" | "medium" | "high" {
 
 function fromText(text: string, usage: EngineUsage): EngineOutcome {
   const p = parseCardText(text);
-  return { ok: true, is_card: p.is_card, cards: p.cards, usage, doc_type: p.doc_type };
+  return { ok: true, is_card: p.is_card, cards: p.cards, usage, doc_type: p.doc_type, rows: p.rows };
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +167,7 @@ function qwenEngine(model: string, client?: Pick<OpenAI, "chat">): CardEngine {
         const res = await api.chat.completions.create({
           model,
           temperature: 0,
-          max_tokens: 800,
+          max_tokens: 2500, // 值勤表逐行 JSON 較長
           messages: [
             { role: "system", content: CARD_SYSTEM },
             { role: "user", content: [{ type: "text", text: cardUser(hint?.today) }, { type: "image_url", image_url: { url: img } }] },

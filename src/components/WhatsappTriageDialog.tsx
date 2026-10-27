@@ -60,7 +60,7 @@ interface WaQuestion {
       replaced_records: Array<{ id: string; site_name: string; shift_code: string; work_date: string; status: string }>;
     } | null;
     cancel_preview: string[];
-    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; multi_hint?: boolean; doc_type?: string | null; time_on?: string | null; none: "expired" | "not_card" | "unreadable" | null } | null;
+    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; multi_hint?: boolean; doc_type?: string | null; time_on?: string | null; wilson_no?: string | null; row_no?: number | null; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -79,6 +79,7 @@ const REASON_LABEL: Record<string, string> = {
   card_not_card: "相入面唔係工卡",
   card_unreadable: "工卡讀唔到",
   card_confirm: "工卡相要你確認",
+  row_low_confidence: "值勤表呢一行讀數信心偏低",
   card_suspect_second: "疑似同一張相仲有第二張工卡（只一個引擎讀到）",
   card_disputed: "工號讀數唔一致",
   card_arbiter_unavailable: "工號讀數唔一致（仲裁用唔到）",
@@ -339,7 +340,7 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
                   </div>
                   {q.wa.card && (
                     <div className="rounded-lg border border-zk-border bg-zk-surface p-3 space-y-2" data-testid="wa-card">
-                      <div className="text-zk-xs text-zk-faint">{q.wa.card.doc_type ? (DOC_TYPE_LABEL[q.wa.card.doc_type] ?? "相片") : "工卡相"}{q.wa.card.total > 1 ? `（第 ${q.wa.card.index}／${q.wa.card.total} 張）` : ""}{q.wa.card.time_on ? ` · 相上時間 ${q.wa.card.time_on}` : ""}</div>
+                      <div className="text-zk-xs text-zk-faint">{q.wa.card.doc_type ? (DOC_TYPE_LABEL[q.wa.card.doc_type] ?? "相片") : "工卡相"}{q.wa.card.total > 1 ? `（第 ${q.wa.card.index}／${q.wa.card.total} 張）` : ""}{q.wa.card.row_no ? ` · 第 ${q.wa.card.row_no} 行` : ""}{q.wa.card.time_on ? ` · 相上時間 ${q.wa.card.time_on}` : ""}{q.wa.card.wilson_no ? ` · 相上編號 ${q.wa.card.wilson_no}` : ""}</div>
                       {q.wa.card.media_url && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={q.wa.card.media_url} alt="工卡相" className="max-h-72 w-auto max-w-full rounded border border-zk-border bg-white object-contain" data-testid="wa-card-image" />

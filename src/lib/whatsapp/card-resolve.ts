@@ -99,6 +99,8 @@ async function personFor(card: PhotoCard, ctx: ResolveContext, scope: ReadonlySe
     // review：候選工號 → guard 候選（畀人揀；三個讀數都唔同＝一條題列晒全部候選）
     const ids = [...new Set(cands.flatMap((n) => { const h = idx.byStaffNumber.get(normalizeStaffNumber(n)); return h ? [h.guardId] : []; }))];
     const code = card.reasons[0] ?? "card_disputed";
+    // 值勤表逐行：候選只有一位 → 人配到，淨係要一撳確認（低信心／分歧行）
+    if (card.doc_type === "attendance_sheet" && ids.length === 1) return { person: { guardId: ids[0]!, reasons: [], candidates: [], basis: "card_row_candidate" }, extra: ["card_confirm", ...card.reasons.filter((r) => r === "row_low_confidence")] };
     if (ids.length > 0) return { person: { guardId: null, reasons: ["person_ambiguous"], candidates: ids.slice(0, MAX_SITE_CANDIDATES), basis: "card_candidates" }, extra: [code] };
     return { person: { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "card_candidates_unmatched" }, extra: [code] };
   }
@@ -109,7 +111,7 @@ async function personFor(card: PhotoCard, ctx: ResolveContext, scope: ReadonlySe
   const global = [...new Set(names.flatMap((n) => [...(idx.byName.get(n) ?? []), ...(idx.byAlias.get(n) ?? [])]))];
   const inScope = scope ? global.filter((g) => scope.has(g)) : global;
   const strong = card.status === "confirmed" && names.length === 1; // 兩個引擎讀到同一姓名
-  if (inScope.length === 1) return { person: { guardId: inScope[0]!, reasons: [], candidates: [], basis: scope ? "card_name_in_scope" : "card_name" }, extra: strong && scope ? [] : ["card_name_only"] };
+  if (inScope.length === 1) return { person: { guardId: inScope[0]!, reasons: [], candidates: [], basis: scope ? "card_name_in_scope" : "card_name" }, extra: [...(strong && scope ? [] : ["card_name_only"]), ...card.reasons.filter((r) => r === "row_low_confidence")] };
   const pool = new Set<string>(global);
   if (scope && names.length > 0) {
     const chars = new Set([...names.join("")]);
@@ -170,6 +172,8 @@ function cardEvidence(card: PhotoCard | null, i: number, n: number, mediaId: str
     candidates: card?.candidates ?? [],
     ...(card?.doc_type ? { doc_type: card.doc_type } : {}),
     ...(card?.time_on ? { time_on: card.time_on } : {}),
+    ...(card?.wilson_staff_no_raw ? { wilson_no: card.wilson_staff_no_raw } : {}),
+    ...(card?.row_no ? { row_no: card.row_no } : {}),
     // 同一張相嘅其他卡（題卡列明「已確認 U01095＋疑似第二張 U01096」）
     ...(all && all.length > 1 ? { others: all.filter((_, k) => k !== i).map((c) => ({ staff_no: c.staff_no, status: c.status })) } : {}),
     ...(none ? { none } : {}),
@@ -218,7 +222,7 @@ export async function resolveCardPhoto(a: CardResolveArgs): Promise<ResolvedInte
     if (card.status === "confirmed" && person.guardId && !ctx.group.autoWrite && !extraReasons.includes("card_confirm")) extraReasons.push("card_confirm");
     intents.push({
       type: "shift",
-      date: { raw: "今日", kind: "relative" },
+      date: card.row_date ? { raw: `${Number(card.row_date.slice(5, 7))}月${Number(card.row_date.slice(8, 10))}日`, kind: "absolute" } : { raw: "今日", kind: "relative" },
       site_raw: null,
       persons: [],
       self_reference: false,

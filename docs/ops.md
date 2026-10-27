@@ -721,3 +721,11 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **姓名身份**（冇任何工號時）：≥2 個引擎讀到同一姓名＝confirmed；分歧 → 仲裁；三個都唔同 → 合併成一條題列全部姓名候選。有工號仍然以工號為主。
 - **配對**：盤口群＝該盤近 60 日有更嘅 guard；判頭群＝該判頭旗下近 60 日有更嘅 guard；喺範圍內 strict（NFKC＋去空白）同名而且**唯一**（讀數 confirmed）＝配到人；範圍內多個／冇 → `wa_person_ambiguous` 揀人題，候選＝同名者＋同範圍按字形接近排序嘅 guard（上限 8）。大群（multi_site）冇範圍：配到但要一撳確認（`card_name_only`）。範圍內唯一但讀數未確認 → 一撳確認。
 - **更別**：相上讀到嘅打卡時間（`time_on`）優先於訊息送出時間，用嚟對該盤更開始時間（±2 小時）；群組「開工」對照仍然優先。
+
+### WA-9 (3) 多人值勤／出勤記錄表逐行抽取（判頭群，例：柴灣車廠崗位表）
+
+- 引擎輸出 `doc_type=attendance_sheet` ＋ `rows:[{row, date(YYYY-MM-DD), name_zh, staff_no_raw, time_on, time_off, confidence}]`（`staff_no_raw`＝工號欄原樣，U 格式／Wilson 純數字／手寫 L13xxxx、413xxxx 都照抄）。
+- **逐行判定**：兩個引擎逐行（同姓名＋同日期）完全一致 → 全部 confirmed，唔仲裁；有分歧／漏行／單引擎失敗 → 仲裁引擎讀一次，逐行三取二（時間、工號欄取多數）；只一票、欄位分歧、或任何一個讀數信心 low → review 行（`card_disputed`／`row_low_confidence`）。單票行若同已確認行**同行號同日期**＝同一行嘅誤讀，唔另開；冇行號／姓名相近一律唔丟（免漏人）。同一人同日喺表內出現兩次合成一行。
+- **每行獨立 resolve**：U 格式工號 → 工號卡；Wilson 純數字／手寫碼只暫存（證據 `wilson_no`），身份用姓名喺盤／判頭範圍內配對；每行用自己嘅日期（`row_date`）同相上時間定更；一張相出 N 條記錄（同一 `message_id` 追溯），低信心行／配唔到人出題（一撳確認或揀人），其餘照現有 autowrite／pending 流程；日期喺窗口外 → `date_out_of_range`。
+- **bench**：truth CSV 擴展 `file,staff_nos,rows`，rows 用 `|` 分隔每行 `姓名~工號`（工號可省）；報表加每引擎／策略 `row_recall`／`row_precision`（策略只計 confirmed 行，review 行另計 `rows_review`）。
+- **做唔到**：手寫 L13xxxx／413xxxx 編號難讀 → 唔用嚟配對（只暫存），靠姓名；姓名讀錯一字 → 範圍內配唔到 → 揀人題；表太長令引擎漏行 → 漏行出 review 或冇出（單票），請睇 bench 嘅 recall。

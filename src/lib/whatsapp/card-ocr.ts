@@ -3,7 +3,7 @@
 //   三個都唔一致 → review（出分流題）。工號為主；姓名只輔助（resolve 時核對同工號對到嘅 guard）。
 //   一張相可以有幾張卡 → 逐個工號判定。冇值用 caption 以外嘅文字推斷（呢度完全唔睇 caption）。
 import { createEngine, type CardEngine, type CardEngineName, type EngineOverrides, type EngineUsage } from "./card-engines";
-import type { CardRead, DocType } from "./card-parse";
+import { normStaffNo, type CardRead, type DocType, type SheetRow } from "./card-parse";
 
 export const CARD_STRATEGIES = {
   S1: { primary: ["tesseract", "deepseek"], arbiter: "claude" },
@@ -38,6 +38,10 @@ export interface PhotoCard {
   time_off?: string | null;
   /** WA-9：冇工號、姓名分歧時嘅姓名候選（合併成一條題用） */
   name_candidates?: string[];
+  /** WA-9 值勤表逐行：該行日期（YYYY-MM-DD）／工號欄原樣（唔係 U 格式嘅 Wilson 編號、手寫 L13xxxx／413xxxx；暫存、唔用嚟配對）／行號 */
+  row_date?: string | null;
+  wilson_staff_no_raw?: string | null;
+  row_no?: number | null;
 }
 export interface CardPhotoResult {
   /** cards＝有卡｜not_card＝相入面冇工卡（兩個引擎都話唔係）｜unreadable＝讀唔到（引擎全部失敗／冇任何可用讀數） */
@@ -109,8 +113,11 @@ export async function readCardPhoto(bytes: Buffer, opts: ReadPhotoOptions = {}):
 
   const sets = primaries.map((r) => (r.out.ok ? new Set(nosOf(r.out.cards)) : null));
   const [A, B] = sets;
-  const anyCardClaim = okReads(primaries).some((o) => o.is_card && o.cards.length > 0);
+  const anyCardClaim = okReads(primaries).some((o) => o.is_card && (o.cards.length > 0 || (o.rows?.length ?? 0) > 0));
   const bothOk = A !== null && B !== null;
+
+  // WA-9：值勤／出勤記錄表（任何一個引擎話係 attendance_sheet 或者逐行抽到 rows）→ 逐行判定
+  if (okReads(primaries).some((o) => (o.rows?.length ?? 0) > 0 || o.doc_type === "attendance_sheet")) return readSheet(primaries, strat.arbiter, run, usage, summary);
 
   // 兩個都讀得到而且都話冇卡 → 唔係工卡
   if (bothOk && !anyCardClaim) return { kind: "not_card", doc_type: pickDocType(okReads(primaries)), cards: [], usage, arbiter_used: false, engines: summary(primaries) };
@@ -192,4 +199,89 @@ export async function readCardPhoto(bytes: Buffer, opts: ReadPhotoOptions = {}):
     return { kind: dead || anyCardClaim || arbiterUsed ? "unreadable" : "not_card", doc_type: docType, cards: [], usage, arbiter_used: arbiterUsed, engines: summary(all) };
   }
   return { kind: "cards", doc_type: docType, cards, usage, arbiter_used: arbiterUsed, engines: summary(all) };
+}
+
+// ---------------------------------------------------------------------------
+// WA-9：值勤／出勤記錄表逐行判定（多人表；一行＝一條候選記錄）
+// ---------------------------------------------------------------------------
+const rowName = (r: SheetRow): string => (r.name_zh ?? "").normalize("NFKC").replace(/\s+/g, "");
+const rowNoKey = (r: SheetRow): string => (r.staff_no_raw ?? "").normalize("NFKC").toUpperCase().replace(/[\s\-:]/g, "");
+const rowKey = (r: SheetRow): string => `${rowName(r)}|${r.date ?? ""}`;
+const sameRow = (a: SheetRow, b: SheetRow): boolean => rowNoKey(a) === rowNoKey(b) && a.time_on === b.time_on && a.time_off === b.time_off;
+
+function majority<T>(vals: readonly T[]): { value: T | null; n: number } {
+  const t = new Map<string, { v: T; n: number }>();
+  for (const v of vals) {
+    const k = JSON.stringify(v);
+    const cur = t.get(k);
+    if (cur) cur.n += 1;
+    else t.set(k, { v, n: 1 });
+  }
+  const top = [...t.values()].sort((a, b) => b.n - a.n)[0];
+  return top ? { value: top.v, n: top.n } : { value: null, n: 0 };
+}
+
+async function readSheet(
+  primaries: readonly Ran[],
+  arbiterName: CardEngineName,
+  run: (n: CardEngineName) => Promise<Ran>,
+  usage: EngineUsage[],
+  summary: (rs: readonly Ran[]) => Array<{ engine: CardEngineName; ok: boolean; cards: number }>,
+): Promise<CardPhotoResult> {
+  const rowsOf = (r: Ran): SheetRow[] => (r.out.ok ? (r.out.rows ?? []).filter((x) => rowName(x) || rowNoKey(x)) : []);
+  const bothOk = primaries.every((p) => p.out.ok);
+  const [ra, rb] = primaries.map(rowsOf);
+  // 全部行兩邊都有而且欄位一致 → 唔仲裁（零 Claude 成本）
+  const agreedAll = bothOk && ra!.length > 0 && ra!.length === rb!.length && ra!.every((x) => rb!.some((y) => rowKey(x) === rowKey(y) && sameRow(x, y)));
+  let all: Ran[] = [...primaries];
+  let arbiter: Ran | null = null;
+  if (!agreedAll) {
+    arbiter = await run(arbiterName);
+    all = [...primaries, arbiter];
+  }
+  const arbiterDown = !!arbiter && !arbiter.out.ok;
+  const reads = all.flatMap((r) => rowsOf(r).map((row) => ({ engine: r.engine, row })));
+  const keys = [...new Set(reads.map((x) => rowKey(x.row)))];
+  type Agg = { key: string; votes: number; row: SheetRow; ok: boolean; reasons: string[] };
+  const aggs: Agg[] = keys.map((key) => {
+    const rs = reads.filter((x) => rowKey(x.row) === key).map((x) => x.row);
+    const base = rs[0]!;
+    const sn = majority(rs.map((x) => rowNoKey(x) || null));
+    const ton = majority(rs.map((x) => x.time_on));
+    const toff = majority(rs.map((x) => x.time_off));
+    const rawNo = rs.find((x) => rowNoKey(x) === sn.value)?.staff_no_raw ?? null;
+    const lowAny = rs.some((x) => x.confidence === "low");
+    const votes = new Set(reads.filter((x) => rowKey(x.row) === key).map((x) => x.engine)).size;
+    const reasons: string[] = [];
+    if (votes < 2) reasons.push(arbiterDown ? "card_arbiter_unavailable" : "card_disputed");
+    else if (sn.n < 2 && new Set(rs.map((x) => rowNoKey(x) || null)).size > 1) reasons.push("card_disputed");
+    else if (ton.n < 2 && new Set(rs.map((x) => x.time_on)).size > 1) reasons.push("card_disputed");
+    if (lowAny) reasons.push("row_low_confidence");
+    const row: SheetRow = { ...base, name_zh: pickName(rs.map((x) => ({ is_card: true, staff_no: null, name_zh: x.name_zh, name_en: null, confidence: x.confidence })), "name_zh"), staff_no_raw: rawNo, time_on: ton.value, time_off: toff.value, row: base.row, confidence: lowAny ? "low" : "high" };
+    return { key, votes, row, ok: reasons.length === 0, reasons };
+  });
+  // 單票行若同已確認行**同行號同日期** → 同一行嘅誤讀（例：名讀錯一字），唔另開。冇行號就唔丟（姓名相近唔代表同一個人，丟咗會漏人）
+  const okAggs = aggs.filter((a) => a.ok);
+  const kept = aggs.filter((a) => a.ok || !okAggs.some((c) => c.row.row !== null && c.row.row === a.row.row && c.row.date === a.row.date));
+  kept.sort((a, b) => (a.row.row ?? 1e6) - (b.row.row ?? 1e6));
+  const cards: PhotoCard[] = kept.map((a) => {
+    const staff = normStaffNo(a.row.staff_no_raw);
+    return {
+      staff_no: staff,
+      name_zh: a.row.name_zh,
+      name_en: null,
+      status: a.ok ? "confirmed" : "review",
+      reasons: a.ok ? [] : a.reasons,
+      candidates: [],
+      votes: a.votes,
+      doc_type: "attendance_sheet",
+      time_on: a.row.time_on,
+      time_off: a.row.time_off,
+      row_date: a.row.date,
+      row_no: a.row.row,
+      wilson_staff_no_raw: staff ? null : a.row.staff_no_raw,
+    };
+  });
+  if (cards.length === 0) return { kind: "unreadable", doc_type: "attendance_sheet", cards: [], usage, arbiter_used: !!arbiter, engines: summary(all) };
+  return { kind: "cards", doc_type: "attendance_sheet", cards, usage, arbiter_used: !!arbiter, engines: summary(all) };
 }

@@ -25,6 +25,9 @@ export interface WaCardEvidence {
   /** WA-9：相片文件類型／相入面讀到嘅打卡時間 */
   doc_type?: string | null;
   time_on?: string | null;
+  /** 值勤表：工號欄原樣（Wilson 純數字／手寫 L13xxxx 等，唔係 U 格式）＋行號 */
+  wilson_no?: string | null;
+  row_no?: number | null;
   /** 同一張相嘅其他卡（疑似第二張卡題用） */
   others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>;
   /** 無圖原因：expired｜not_card｜unreadable */
@@ -118,7 +121,7 @@ const SOFT_REASONS = new Set(["low_confidence", "daily_cap", "auto_disabled"]);
 /** WA-8：工卡相冇資料可用（過期／唔係工卡／讀唔到）→ 只可人手／忽略。 */
 const CARD_DEAD_REASONS = new Set(["card_media_expired", "card_not_card", "card_unreadable"]);
 /** WA-8：辨識／歸屬都有結果，但要人一撳確認嘅提示碼。 */
-const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "card_former_number", "card_name_only", "card_suspect_second"]);
+const CARD_CONFIRM_REASONS = new Set(["card_confirm", "card_name_mismatch", "card_former_number", "card_name_only", "card_suspect_second", "row_low_confidence"]);
 
 /**
  * 優先次序：unparsed > site > person > date > conflict（低信心單獨出現 → unparsed＋「照解析入更」）。
