@@ -23,6 +23,7 @@ import { resolveCardPhoto, type CardInput } from "./card-resolve";
 import { deleteMediaEvidence, loadMediaEvidence } from "./media";
 import { detectRosterList } from "./roster-list";
 import { resolveRosterList } from "./roster-resolve";
+import { crossCheckWithRoster } from "./roster-crosscheck";
 import { applySourceChangeTx, staleEditedPendingIds } from "./source-change";
 
 const WA_MAX_ATTEMPTS = 3;
@@ -272,6 +273,14 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
         input,
         mediaId: evd?.id ?? null,
       });
+      // WA-9：同群同日有文字名單 → 相只做交叉核實（補 reported_time；差異一日一條合併題），冇名單先用相入面姓名做主要識別
+      if (input.kind === "photo") {
+        const x = await crossCheckWithRoster({ chatJid: msg.chatJid, day: hkDateOf(msg.ts), groupId: group.id, resolved, nameOfGuard: (g) => ctx.index.nameByGuardId.get(g) ?? null });
+        if (x.hadRoster) {
+          resolved = x.resolved;
+          parsedJson = toJson({ card: { ...meta, roster_crosscheck: { matched: x.matched, photo_only: x.photoOnly } } });
+        }
+      }
     } catch {
       return failAttempt(msg.id, rev, "card_failed");
     }

@@ -42,6 +42,7 @@ const json = async (r: Response) => (await r.json()) as Record<string, any>;
 const openQs = (mid: string) => prisma.triageQuestion.findMany({ where: { status: "open", session: { sourceType: "whatsapp" }, evidenceJson: { path: ["message", "message_id"], equals: mid } } });
 
 beforeEach(async () => {
+  process.env.WA_CARD_OCR_STRATEGY = "S1"; // 預設已改 S6；呢批測試注入 tesseract+deepseek，釘返 S1
   await clearAll();
   await prisma.triageQuestion.deleteMany({});
   await prisma.triageSession.deleteMany({});

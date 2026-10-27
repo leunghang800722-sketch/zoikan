@@ -104,6 +104,8 @@ export interface IntentOverride {
 export interface IntentSrc {
   /** WA-8：工卡相辨識資料（evidence 用，DB 內） */
   card?: WaCardEvidence;
+  /** WA-9：名單／相片差異（一日一條合併題） */
+  mismatch?: { day: string; roster_only: string[]; photo_only: string[] };
   person_raw: string | null;
   site_raw: string | null;
   date_raw: string | null;

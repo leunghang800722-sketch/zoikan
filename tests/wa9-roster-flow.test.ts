@@ -8,6 +8,7 @@ import { ingestEvent } from "@/lib/whatsapp/ingest";
 import type { NormalizedWaEvent } from "@/lib/whatsapp/schema";
 import type { LlmClient } from "@/lib/ai/llm";
 import { computeMetrics } from "@/lib/whatsapp/metrics";
+import { crossCheckWithRoster, prismaCrossCheckDeps } from "@/lib/whatsapp/roster-crosscheck";
 
 const T0 = new Date("2026-10-01T05:00:00Z"); // HK 2026-10-01 13:00
 const NOW = new Date(T0.getTime() + 60_000);
@@ -103,5 +104,32 @@ describe("WA-9 文字名單端到端", () => {
     await run();
     expect(await recs()).toHaveLength(4);
     expect(await qs("r6")).toHaveLength(0);
+  });
+
+  it("交叉核實（DB）：相對到名單 → provenance 補 reported_time、更不變；相多一人 → 一日一條合併題（第二張相併入同一條）", async () => {
+    await ingest(ev("message", "r9", `1/10/2026 ${NAMES.slice(0, 2).join(" ")}`));
+    await run();
+    const before = await recs();
+    expect(before).toHaveLength(2);
+    const deps = prismaCrossCheckDeps();
+    const mk = (guardId: string | null, name: string, on: string | null): import("@/lib/whatsapp/resolve").ResolvedIntent => ({
+      kind: "shift", workDate: "2026-10-01", siteId: ids.site, guardId, shiftTypeId: ids.tD, leaveCode: null, hours: null, confidence: 1,
+      resolution: { type: "shift", reasons: [], notes: [], basis: {}, candidates: {}, group_id: "x", group_auto_write: true } as never, routed: "auto_write",
+      src: { person_raw: name, site_raw: null, date_raw: null, shift_raw: null, leave_raw: null, replaced_raw: null, card: { media_id: null, staff_no_read: null, name_zh_read: name, name_en_read: null, votes: 2, index: 1, total: 1, arbiter: false, candidates: [], time_on: on, time_off: "19:00" } },
+    });
+    const x = await crossCheckWithRoster({ chatJid: G1, day: "2026-10-01", groupId: "g", resolved: [mk(ids.guards["陳測甲"]!, "陳測甲", "07:55"), mk(ids.guards["黃測丁"]!, "黃測丁", "08:02")], deps });
+    expect(x.hadRoster).toBe(true);
+    expect(x.matched).toBe(1);
+    expect(x.resolved).toHaveLength(1);
+    const after = await recs();
+    expect(after).toHaveLength(2); // 冇新記錄
+    const a = after.find((r) => r.guardId === ids.guards["陳測甲"])!;
+    expect(a.shiftTypeId).toBe(ids.tD);
+    expect(a.provenance).toMatchObject({ message_id: "r9", reported_time_on: "07:55", reported_time_off: "19:00" });
+    const b = after.find((r) => r.guardId === ids.guards["李測乙"])!;
+    expect((b.provenance as Record<string, unknown>).reported_time_on).toBeUndefined();
+    // 另一日冇名單 → 原樣
+    const y = await crossCheckWithRoster({ chatJid: G1, day: "2026-10-02", groupId: "g", resolved: [mk(ids.guards["陳測甲"]!, "陳測甲", "08:00")], deps });
+    expect(y.hadRoster).toBe(false);
   });
 });

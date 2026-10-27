@@ -109,19 +109,40 @@ describe("策略：成本優先、三取二", () => {
     // WA-9：兩個引擎讀到同一姓名＝以姓名為身份 confirmed（resolve 仲要喺盤／判頭範圍內唯一）
     expect(nameOnly.cards).toEqual([expect.objectContaining({ staff_no: null, name_zh: "測試甲", status: "confirmed", reasons: ["card_name_only"], votes: 2 })]);
   });
-  it("五個策略引擎組合；env WA_CARD_OCR_STRATEGY 預設 S1", () => {
+  it("六個策略引擎組合；env WA_CARD_OCR_STRATEGY 預設 S6", () => {
     expect(CARD_STRATEGIES.S1).toEqual({ primary: ["tesseract", "deepseek"], arbiter: "claude" });
     expect(CARD_STRATEGIES.S2.arbiter).toBe("haiku");
     expect(CARD_STRATEGIES.S3).toEqual({ primary: ["deepseek", "haiku"], arbiter: "claude" });
     expect(CARD_STRATEGIES.S4).toEqual({ primary: ["tesseract", "qwen"], arbiter: "haiku" });
     expect(CARD_STRATEGIES.S5).toEqual({ primary: ["qwen", "deepseek"], arbiter: "claude" });
+    expect(CARD_STRATEGIES.S6).toEqual({ primary: ["qwen", "haiku"], arbiter: "claude", fallback: { for: "haiku", use: "deepseek" } });
     delete process.env.WA_CARD_OCR_STRATEGY;
-    expect(cardStrategyFromEnv()).toBe("S1");
+    expect(cardStrategyFromEnv()).toBe("S6");
     process.env.WA_CARD_OCR_STRATEGY = "s4";
     expect(cardStrategyFromEnv()).toBe("S4");
     process.env.WA_CARD_OCR_STRATEGY = "zzz";
-    expect(cardStrategyFromEnv()).toBe("S1");
+    expect(cardStrategyFromEnv()).toBe("S6");
     delete process.env.WA_CARD_OCR_STRATEGY;
+  });
+});
+
+describe("WA-9 S6：qwen + haiku → claude；haiku 唔可用用 deepseek 頂上", () => {
+  const ok = (no: string): EngineOutcome => ({ ok: true, is_card: true, cards: [{ staff_no: no, name_zh: null, name_en: null, confidence: "high" } as never], usage: null });
+  const down: EngineOutcome = { ok: false, error: "unavailable", usage: null };
+  const mk = (m: Partial<Record<CardEngineName, EngineOutcome>>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, fake(k as CardEngineName, v!)])) as Partial<Record<CardEngineName, CardEngine>>;
+  it("qwen 同 haiku 一致 → confirmed，冇仲裁；分歧 → claude 仲裁", async () => {
+    const a = await readCardPhoto(BYTES, { strategy: "S6", engines: mk({ qwen: ok("U12345"), haiku: ok("U12345"), claude: ok("U99999") }) });
+    expect(a.cards[0]).toMatchObject({ staff_no: "U12345", status: "confirmed" });
+    expect(a.arbiter_used).toBe(false);
+    const b = await readCardPhoto(BYTES, { strategy: "S6", engines: mk({ qwen: ok("U12345"), haiku: ok("U12346"), claude: ok("U12345") }) });
+    expect(b.arbiter_used).toBe(true);
+    expect(b.cards[0]).toMatchObject({ staff_no: "U12345", status: "confirmed" });
+  });
+  it("haiku 唔可用 → deepseek 頂上（仍然兩讀，唔使仲裁）", async () => {
+    const r = await readCardPhoto(BYTES, { strategy: "S6", engines: mk({ qwen: ok("U12345"), haiku: down, deepseek: ok("U12345") }) });
+    expect(r.cards[0]).toMatchObject({ staff_no: "U12345", status: "confirmed" });
+    expect(r.arbiter_used).toBe(false);
+    expect(r.engines.map((e) => e.engine)).toEqual(["qwen", "deepseek"]);
   });
 });
 

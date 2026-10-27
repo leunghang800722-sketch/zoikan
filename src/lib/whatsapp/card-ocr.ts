@@ -11,13 +11,15 @@ export const CARD_STRATEGIES = {
   S3: { primary: ["deepseek", "haiku"], arbiter: "claude" },
   S4: { primary: ["tesseract", "qwen"], arbiter: "haiku" },
   S5: { primary: ["qwen", "deepseek"], arbiter: "claude" },
-} as const satisfies Record<string, { primary: readonly [CardEngineName, CardEngineName]; arbiter: CardEngineName }>;
+  // WA-9：預設——qwen-vl-ocr + haiku 兩讀，分歧先 opus（claude）仲裁；haiku 唔可用（冇 key／失敗）→ 用 deepseek 頂上；tesseract 唔使（可選）
+  S6: { primary: ["qwen", "haiku"], arbiter: "claude", fallback: { for: "haiku", use: "deepseek" } },
+} as const satisfies Record<string, { primary: readonly [CardEngineName, CardEngineName]; arbiter: CardEngineName; fallback?: { for: CardEngineName; use: CardEngineName } }>;
 export type CardStrategy = keyof typeof CARD_STRATEGIES;
 
-/** 生產預設策略：env WA_CARD_OCR_STRATEGY（S1–S5），預設 S1；唔認得當 S1。 */
+/** 生產預設策略：env WA_CARD_OCR_STRATEGY（S1–S6），預設 S6；唔認得當 S6。 */
 export function cardStrategyFromEnv(): CardStrategy {
   const v = process.env.WA_CARD_OCR_STRATEGY?.trim().toUpperCase();
-  return v && v in CARD_STRATEGIES ? (v as CardStrategy) : "S1";
+  return v && v in CARD_STRATEGIES ? (v as CardStrategy) : "S6";
 }
 
 export interface PhotoCard {
@@ -107,7 +109,15 @@ export async function readCardPhoto(bytes: Buffer, opts: ReadPhotoOptions = {}):
     if (out.usage) usage.push(out.usage);
     return { engine: n, out };
   };
-  const primaries = await Promise.all(strat.primary.map(run));
+  const fb = "fallback" in strat ? (strat.fallback as { for: CardEngineName; use: CardEngineName }) : null;
+  const primaries = await Promise.all(
+    strat.primary.map(async (n) => {
+      const r = await run(n);
+      // 指定引擎唔可用／失敗 → 用後備引擎頂上（呢次讀數以後備引擎名記賬）
+      if (fb && n === fb.for && !r.out.ok && !(strat.primary as readonly CardEngineName[]).includes(fb.use)) return run(fb.use);
+      return r;
+    }),
+  );
   const summary = (rs: readonly Ran[]) => rs.map((r) => ({ engine: r.engine, ok: r.out.ok, cards: r.out.ok ? r.out.cards.length : 0 }));
   const okReads = (rs: readonly Ran[]) => rs.flatMap((r) => (r.out.ok ? [r.out] : []));
 

@@ -25,7 +25,7 @@ export type EngineOutcome =
   | { ok: false; error: "unavailable" | "failed"; usage: EngineUsage | null; reason?: string };
 
 /** 讀圖提示：today＝訊息香港日（YYYY-MM-DD），簽到表揀嗰日嗰行用。 */
-export interface ReadHint {
+interface ReadHint {
   today?: string;
 }
 

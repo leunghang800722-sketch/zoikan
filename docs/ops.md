@@ -672,7 +672,7 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
   `tesseract`（本機 child_process，零成本；Dockerfile runner 階段已 `apt-get install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng`；冇 binary → unavailable；env `TESSERACT_BIN`／`TESSERACT_LANGS`；前處理：自動旋轉、放大到長邊 1600、灰階＋正規化、二值化後再用 A-Z0-9 白名單第二次 OCR 專攻工號）｜`deepseek`（deepseek-flash）｜`haiku`（Claude Haiku 5.5，env `WA_CARD_HAIKU_MODEL` 預設 `claude-haiku-5-5`）｜`qwen`（阿里 Model Studio，OpenAI 相容；env `QWEN_API_KEY`、`QWEN_BASE_URL` 預設 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`、`QWEN_VL_MODEL` 預設 `qwen-vl-ocr`；輸出可能係純文字 → 容錯解析：先 JSON，失敗用正則抽工號；純文字冇工號唔當工卡）｜`claude`（Opus，只做仲裁）。
   送模型嘅圖統一壓到長邊 ≤1000（sharp 可選；冇 sharp 且係 JPEG 就原圖，唔係 JPEG 就該引擎 failed）。key 只由 env 讀，唔寫檔案／log；冇 key＝unavailable。
 - **工號格式**：`U\d{5}｜MP\d{4}｜MG\d{4}｜MW\d{4}`；不合格式一律當讀唔到（唔猜）。
-- **策略**（env `WA_CARD_OCR_STRATEGY`，預設 `S1`；bench 結果出咗再定）：S1 tesseract+deepseek→claude｜S2 tesseract+deepseek→haiku｜S3 deepseek+haiku→claude｜S4 tesseract+qwen→haiku｜S5 qwen+deepseek→claude。
+- **策略**（env `WA_CARD_OCR_STRATEGY`，**WA-9 起預設 `S6`**）：S6 qwen-vl-ocr+haiku 兩讀→分歧先 claude（Opus）仲裁，haiku 唔可用（冇 key／失敗）→ deepseek 頂上，tesseract 唔使（可選，S1/S2/S4 先用）｜S1 tesseract+deepseek→claude｜S2 tesseract+deepseek→haiku｜S3 deepseek+haiku→claude｜S4 tesseract+qwen→haiku｜S5 qwen+deepseek→claude。
   兩個便宜引擎各讀一次：工號一致 → confirmed（零仲裁成本）；唔一致／其中一個失敗 → 仲裁引擎讀一次（三取二，≥2 票 confirmed）；單票或三個都唔同 → review（出分流題，帶候選工號）；兩個都話冇卡 → `not_card`（唔仲裁）；單票讀數同已確認工號只差 ≤2 位數字（同前綴同長度）視為同一張卡嘅誤讀，唔另開卡。一張相多張卡逐個工號判定。冇工號但讀到姓名 → review（`card_name_only`）。完全冇 caption 以外嘅文字推斷（辨識唔睇 caption）。
 - **基準測試**（離線、只讀、唔寫 DB）：`npx tsx scripts/whatsapp/card-ocr-bench.ts --dir <相片夾> --truth <truth.csv> --engines tesseract,deepseek,haiku,qwen,claude --qwen-models qwen-vl-ocr,qwen3-vl-plus [--strategies S1,S2,S3,S4,S5] [--out data/…/report.json]`；`--dry` 用合成 fixture（假引擎）。truth.csv：`file,staff_nos`（多張卡用 `|`；空＝相入面冇卡）。每個引擎出 exact／review／wrong／unreadable＋每張平均 prompt／completion tokens；每個策略出 exact／review／confirmed_wrong／unreadable＋仲裁觸發比例＋token（按 provider:model）。輸出淨係計數，唔印工號／姓名／檔名。**上線門檻：工號 exact ≥90%、confirmed-but-wrong 0。**
 
@@ -738,3 +738,26 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - **處理**（`roster-resolve.ts`，`process.ts`）：唔 call LLM，直接砌 N 條 shift intents（date＝名單日期；凌晨「今日」等沿用日期降級出題）。每個名 strict（NFKC 去空白）配對：範圍＝該盤近 60 日有更／判頭旗下／該群曾配對過嘅 guard；範圍內唯一→配到；範圍內冇而全體唯一→配到（擴到全部）；同名多人→`wa_person_ambiguous`（候選列同名者）；配唔到→候選列同範圍字形接近嘅 guard（冇就 `wa_person_unknown`）。**只有呢啲名先出題**，其餘照現有 autowrite／pending_approval／分流流程；同日同人同更去重沿用（另一條訊息重貼同一名單＝已存在 no-op）。更別：名單內該名更碼 → 群「開工」對照 → 該盤只有一個更別 → 否則 `shift_unmapped` 出題。N 條記錄用同一 `message_id` 追溯；編輯＝整批取消再重做；撤回＝整批退回（沿用既有 source-change 邏輯）。`parsed_json.roster` 只記計數（冇姓名）。
 - **指標**（`/whatsapp/metrics`）：`roster_list_msgs`／`roster_names`／`roster_names_matched`／`roster_names_triage`。
 - **數碼港盤設計（永久，老闆確認）**：工卡／打卡紙一直都冇工號，**身份識別＝中文姓名，工號唔會出現喺相**。每日文字接龍名單係主要來源；相（簽到表／打卡紙／app 截圖）只做交叉核實（見 (5)）；當日冇文字名單先用相上姓名 OCR 做後備識別。
+
+## WA-9 (5)(6)：相片交叉核實＋預設策略 S6＋三個群組實際流程
+
+### 數碼港盤（永久設計）
+**數碼港盤：身份識別＝中文姓名，工號唔會出現喺相**（老闆確認：數碼港卡同打卡紙從來冇工號）。所以數碼港嘅主路徑係「文字名單」，相只做交叉核實；相入面讀到嘅姓名只喺「當日冇文字名單」時先做主要識別。
+- 當日有名單（同群、香港同一日、`llm_provider='roster'`、冇撤回）：
+  - 相（簽到表／打卡紙／app 截圖）辨識出嘅人，對得到名單 → 將相入面讀到嘅 `reported_time_on/off` 補入名單嗰條記錄嘅 `provenance`（`message_id` + guard 定位），**唔改更、唔另寫記錄**。
+  - 相有、名單冇（或相入面姓名配唔到人）→ 計入差異。差異**一個群一日一條合併題 `wa_roster_mismatch`**（groupKey `rm:<group_id>:<日期>`，同日第二張相嘅差異併入同一條 open 題；唔逐名出題）。選項：去排更頁核對／已核對冇問題／跳過。
+  - 名單有而相冇嘅人：`roster-crosscheck.rosterOnly()` 提供（日終比對用）；逐張相唔報，免得未收齊就洗版。**相唔係寫入必要條件**——冇相照樣寫。
+  - 全部對到＝唔出題，暫存圖即刪。指標 `parsed_json.card.roster_crosscheck {matched, photo_only}`（只計數，冇姓名）。
+- 當日冇名單：照舊 WA-9 (2)(3) 嘅姓名 OCR 識別流程（範圍內唯一先自動寫，否則揀人題）。
+
+### 三個群組實際流程
+1. **數碼港盤**（文字名單＋相）：名單訊息 → 純 code 拆名 → N 條 pending_approval 記錄；相 → 交叉核實（見上）；冇名單嗰日 → 相入面姓名做識別。
+2. **有工號嘅工卡群**（卡面有 U／MP／MG 工號）：工號為主（WA-8 流程不變，S6 兩讀＋Claude 仲裁）；姓名只核對。
+3. **值勤／出勤表群**（多人表）：逐行抽取（日期、行號、姓名／工號欄原樣、上下班時間）；手寫 L13xxxx／413xxxx 唔係 U 格式工號，只暫存、**唔用嚟配對**，由姓名／候選出題。
+
+### 做唔到嘅情況
+- 手寫 Wilson 編號（L13xxxx／413xxxx）讀唔清 → 出題，唔自動配。
+- 同名多人、姓名配唔到、相片過期（>7 日）或唔係工卡 → 出題／忽略，唔猜。
+- 引擎全部 unavailable（冇 key）→ `card_unreadable` 題。
+- 真相片 bench 未喺本環境跑（冇 API key）；claude 引擎 0/4 嘅根因未證實（只加咗 effort 預設同失敗原因碼診斷），上線後要用 bench 驗證。
+

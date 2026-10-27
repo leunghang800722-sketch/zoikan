@@ -5,7 +5,7 @@
 // 命中 → { date, date_raw, names:[{raw, shift_hint}] }；唔命中 → null（照舊 LLM 路徑）。
 import { hkDateOf, resolveDates } from "./dates";
 
-export interface RosterName {
+interface RosterName {
   raw: string;
   /** 該名自己帶嘅更碼提示（D／N／夜…），或整句更碼；冇＝null */
   shift_hint: string | null;
@@ -19,7 +19,7 @@ export interface RosterList {
   confidence: "high" | "medium";
 }
 
-export const ROSTER_MAX_NAMES = 40;
+const ROSTER_MAX_NAMES = 40;
 
 // 常見姓氏（單字＋複姓）。只用嚟**判斷係咪名單**（避免「開會 準時」之類普通詞被當名單）；名單一旦成立，所有姓名樣 token 都保留（冇偏門姓氏就被靜靜丟走）。
 const SURNAMES_1 = "陳李張黃梁林劉王吳楊何郭羅周鄭馬蔡葉蘇許譚曾鍾徐趙孫朱胡潘余馮洪彭呂蕭容鄧姚方蔣溫戴杜傅沈袁范丁魏區簡曹謝邱莫柯阮尹韓田石岑古白賴湯駱倪麥魯梅任史嚴龍文盧程陸唐衛汪董甘毛紀巫辛韋賀岳薛邵歐管康常錢鄒凌游熊郝苗萬鄺雷季顧關章江龐金鄔練柳舒施雲祁洛蒙宋鮑甄利崔屈禤巢邢單狄滕鄢湛藍黎孔向谷尤戚寧俞翟翁童蒲安殷柏華卓左卜池官顏葛霍侯俊褚衞鞠奚欒喬盛夏於連藺步都耿滿弘匡國寇廣祿闕東殳沃曲符景詹束龔咸盧蘭祝曉";

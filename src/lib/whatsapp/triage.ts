@@ -11,7 +11,7 @@ import { ensureSystemUser } from "@/lib/system-user";
 import { TRIAGE_OWNER_ROLES, TRIAGE_LOCK } from "@/lib/triage/session";
 import { hkDateOf } from "./dates";
 import type { IntentSrc } from "./resolve";
-import { groupKeyOf, maxRoundsOf, optionsForWa, pickWaKind, sortOfTs, type WaEvidence, type WaIntentKind, type WaKind, type WaQuestionDraft } from "./triage-types";
+import { groupKeyOf, rosterMismatchKey, maxRoundsOf, optionsForWa, pickWaKind, sortOfTs, type WaEvidence, type WaIntentKind, type WaKind, type WaQuestionDraft } from "./triage-types";
 
 type Tx = Prisma.TransactionClient;
 type Db = Tx | typeof prisma;
@@ -91,6 +91,7 @@ function draftFromIntent(msg: WaMessageCtx, group: WaGroupCtx, row: WaIntentRow,
     intent: { kind: row.kind, work_date: workDate, site_id: row.siteId, guard_id: row.guardId, shift_type_id: row.shiftTypeId, leave_code: row.leaveCode, confidence: row.confidence },
     src: src ?? EMPTY_SRC,
     ...(src?.card ? { card: src.card } : {}),
+    ...(src?.mismatch ? { mismatch: src.mismatch } : {}),
     reasons,
     notes: strArr(res.notes),
     candidates: { guard_ids: strArr(cands.guard_ids), site_ids: strArr(cands.site_ids), dates: strArr(cands.dates), shift_type_ids: strArr(cands.shift_type_ids), existing_record_ids: strArr((res as { existing_record_ids?: unknown }).existing_record_ids) },
@@ -117,7 +118,7 @@ export function buildDraft(ev: WaEvidence, group: Pick<WaGroupCtx, "label">, ts:
   const title = `${group.label || "WhatsApp 群組"}｜${hk.slice(5, 10)} ${hk.slice(11, 16)}`;
   return {
     kind,
-    groupKey: groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
+    groupKey: kind === "wa_roster_mismatch" && ev.mismatch ? rosterMismatchKey(ev.group.id, ev.mismatch.day) : groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
     sort: sortOfTs(ts), // 同一訊息嘅跟進輪次維持原次序
     title,
     evidence: ev,
@@ -221,10 +222,22 @@ export async function createWaQuestionsTx(tx: Tx, args: { msg: WaMessageCtx; gro
   // 已存在嘅題（重送／重跑）：result_ref 補返
   for (const d of drafts) {
     const qid = existing.get(d.groupKey);
+    if (qid && d.kind === "wa_roster_mismatch" && d.evidence.mismatch) await mergeMismatchTx(tx, qid, d.evidence.mismatch);
     if (qid) await tx.whatsappIntent.update({ where: { id: d.evidence.message.intent_id }, data: { resultRef: qid } });
   }
   await refreshWaSession(tx, session.id);
   return { sessionId: session.id, ownerUserId: session.ownerUserId, created: created.length, newSession };
+}
+
+/** WA-9：同日已有差異題（open）→ 將新相嘅差異併入（聯集），唔另開題。 */
+async function mergeMismatchTx(tx: Tx, qid: string, m: { day: string; roster_only: string[]; photo_only: string[] }): Promise<void> {
+  const q = await tx.triageQuestion.findUnique({ where: { id: qid }, select: { status: true, evidenceJson: true } });
+  if (!q || q.status !== "open") return;
+  const ev = q.evidenceJson as unknown as WaEvidence;
+  const cur = ev.mismatch ?? { day: m.day, roster_only: [], photo_only: [] };
+  const u = (a: string[], b: string[]): string[] => [...new Set([...a, ...b])];
+  const next = { day: m.day, roster_only: u(cur.roster_only, m.roster_only), photo_only: u(cur.photo_only, m.photo_only) };
+  await tx.triageQuestion.update({ where: { id: qid }, data: { evidenceJson: JSON.parse(JSON.stringify({ ...ev, mismatch: next })) as Prisma.InputJsonValue } });
 }
 
 /** 撤回：呢個 job tick 將「訊息已撤回」嘅 open 題 superseded（一條 SQL，冪等）。回受影響題數。 */

@@ -233,7 +233,9 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
     const def = CARD_STRATEGIES[s];
     const need = [...def.primary, def.arbiter] as CardEngineName[];
     const rep: StrategyReport = { strategy: s, photos: 0, exact: 0, review: 0, confirmed_wrong: 0, unreadable: 0, arbiter_triggered: 0, arbiter_rate: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0, tokens_by_model: {}, est_usd_per_photo: null, row_recall: null, row_precision: null, rows_review: 0 };
-    const missing = need.filter((n) => !byName.has(n));
+    const fbd = 'fallback' in def ? (def.fallback as { for: CardEngineName; use: CardEngineName }) : null;
+    // 有後備引擎：主引擎缺但後備在 → 唔算缺
+    const missing = need.filter((n) => !byName.has(n) && !(fbd && n === fbd.for && byName.has(fbd.use)));
     if (missing.length > 0) {
       strategyReports.push({ ...rep, strategy: `${s}（跳過：缺 ${missing.join('+')}）` });
       continue;

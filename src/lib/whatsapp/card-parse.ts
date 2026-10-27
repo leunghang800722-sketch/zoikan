@@ -6,7 +6,7 @@ const TOKEN_RE = /(?<![A-Za-z0-9])(U|MP|MG|MW)\s*[-:]?\s*([0-9OoIl]{4,5})(?![0-9
 type CardConfidence = "high" | "medium" | "low";
 
 /** WA-9：相片文件類型（真相：數碼港打卡紙／簽到表／app 截圖冇工號、只有姓名；值勤記錄表多人多行）。 */
-export const DOC_TYPES = ["work_card", "punch_card", "signin_sheet", "attendance_sheet", "app_screenshot", "other"] as const;
+const DOC_TYPES = ["work_card", "punch_card", "signin_sheet", "attendance_sheet", "app_screenshot", "other"] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 export function normDocType(v: unknown): DocType | null {
   return typeof v === "string" && (DOC_TYPES as readonly string[]).includes(v) ? (v as DocType) : null;

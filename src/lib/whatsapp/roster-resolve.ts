@@ -18,7 +18,7 @@ export interface RosterDeps extends CardDeps {
   groupMatchedGuards(chatJid: string, sinceIso: string): Promise<Set<string>>;
 }
 
-export function prismaRosterDeps(): RosterDeps {
+function prismaRosterDeps(): RosterDeps {
   return {
     ...prismaCardDeps(),
     async groupMatchedGuards(chatJid, sinceIso) {
