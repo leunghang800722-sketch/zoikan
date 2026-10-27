@@ -1,5 +1,6 @@
 // P6.1c（H3）：Maxwell 導入作廢舊合約／新建合約前要過範圍鎖月檢查；
 // 作廢舊合約要寫 audit（action=void）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -29,7 +30,7 @@ describe("P6.1c：Maxwell 導入鎖月", () => {
   beforeEach(async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     actorUserId = user.id;
     await prisma.monthClose.create({ data: { month: JUN, lockedAt: new Date(), lockedBy: actorUserId, createdBy: "test" } });
   });

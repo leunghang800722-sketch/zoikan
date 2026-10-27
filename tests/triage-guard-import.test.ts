@@ -1,5 +1,6 @@
 // WP-AI-OPS §28.4：導入後對話式分診（規則出題／冪等／權限／預覽＝寫入／唯一性／跳過／audit）。
 // 全部合成資料（合法 check digit hkid 由 helper 計、9100xxxx 電話、「導入測試員X」）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -73,7 +74,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     fx = await seedWp2Fixture();
     // 每個 test 用全新嘅會計／主管（非老闆每日導入次數按 audit 計，全局固定用戶會跨 test 累積）
     const mkUser = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     fx.userIds["會計"] = await mkUser("會計");
@@ -950,7 +951,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
       const t = new Date(Date.now() - hoursAgo * 3600_000);
       for (let i = 0; i < NON_BOSS_MAX_RUNS_PER_DAY; i++) await prisma.auditLog.create({ data: { actorUserId: userId, tableName: "guard_quota", rowId: userId, action: QUOTA_RESERVE_ACTION, createdAt: t, after: { kind: "batch", request_id: "t" } } });
     };
-    const mkU = async () => (await prisma.user.create({ data: { name: "限額測試", tel: `7${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id;
+    const mkU = async () => (await prisma.user.create({ data: { name: "限額測試", tel: fakeTel(), passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id;
     const recent = await mkU();
     const old = await mkU();
     await seed(recent, 17);

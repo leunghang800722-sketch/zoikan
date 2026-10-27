@@ -1,6 +1,7 @@
 // WP-GUARD-OCR §29：單人證件辨識（兩次獨立讀／格式驗證／review／missing）、POST /api/guards/ocr/read、
 // single_ocr 單人導入包（>1 人 400、獨立配額、import_via 標記、projection 保護）。
 // 全部 fake vision client＋合成資料（陳大文、A123456(3)…）；唔會打任何外部 API。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -242,7 +243,7 @@ describe("POST /api/guards/ocr/read", () => {
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
     const mk = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     accountantId = await mk("會計");
@@ -389,7 +390,7 @@ describe("single_ocr 單人導入包", () => {
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
     const mk = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     accountantId = await mk("會計");
@@ -515,7 +516,7 @@ describe("single_ocr 單人導入包", () => {
 
   it("獨立配額：single_ocr 唔食批量 20 次；批量用晒 20 次仍可做單人包；單人包 100 次封頂（preview＋apply 合計）", async () => {
     const freshUser = async () => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       const u = await prisma.user.create({ data: { name: "測試會計配額", tel, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } });
       return { id: u.id, cookie: await sessionCookieForUser(u.id) };
     };
@@ -657,7 +658,7 @@ describe("Opus 驗收修正（route：m5／m6／m8／m10／m11）", () => {
     await prisma.triageQuestion.deleteMany({});
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
-    const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+    const tel = fakeTel();
     userId = (await prisma.user.create({ data: { name: "測試會計並發", tel, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id;
     cookie = await sessionCookieForUser(userId);
     owner = await sessionCookieForUser(fx.userIds["老闆"]);

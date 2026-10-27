@@ -1,5 +1,6 @@
 // WP-GUARD-OCR §29（Opus 覆核 Major-A）：預留式配額唔佔長連線——連線池只有 5 條、模型慢 6 秒，
 // 同一用戶同時 6 個 OCR 請求都唔會 500，其他 query 唔被拖慢。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
 describe("OCR 配額：連線池壓力", () => {
@@ -22,7 +23,7 @@ describe("OCR 配額：連線池壓力", () => {
     const { seedWp2Fixture, sessionCookieForUser } = await import("./fixtures/wp2-fixture");
     await clearAll();
     fx = await seedWp2Fixture();
-    const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+    const tel = fakeTel();
     userId = (await prisma.user.create({ data: { name: "測試會計池", tel, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id;
     cookie = await sessionCookieForUser(userId);
     ocrRoute = (await import("@/app/api/guards/ocr/read/route")).POST;

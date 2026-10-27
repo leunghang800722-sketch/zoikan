@@ -1,4 +1,5 @@
 // TE-13.1：共用工號／電話題，人冇 confirmed 身份證 → drop_shared 變 dropped（可確認、唔建人）；有身份證照舊 create；keep 無 HKID 擋＋enter_hkid 可用。全部合成資料。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser } from "./fixtures/wp2-fixture";
@@ -32,7 +33,7 @@ describe("TE-13.1 drop_shared 卡死修正", () => {
     await prisma.triageQuestion.deleteMany({});
     await prisma.triageSession.deleteMany({});
     const fx = await seedWp2Fixture();
-    const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+    const tel = fakeTel();
     accountant = await sessionCookieForUser((await prisma.user.create({ data: { name: "測試會計新", tel, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id);
   });
   const post = (route: (r: Request, c: never) => Promise<Response>, url: string, body: unknown, id = "x") =>

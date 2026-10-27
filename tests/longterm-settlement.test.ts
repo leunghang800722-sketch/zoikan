@@ -3,6 +3,7 @@
 // `loadActiveLongtermPosts()`／`inferGuardMonthlyTopSite()`／
 // `findInternalLongtermBrokerId()` 另外用真 DB fixture 測（同
 // tests/settlement-broker-fallback.test.ts 一致手法）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import {
@@ -183,7 +184,7 @@ describe("longterm-settlement DB helpers", () => {
     const otherSite = await makeSite("另一個盤");
     const guard = await makeGuard();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const uploader = await prisma.user.create({ data: { name: "測試上載人", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const uploader = await prisma.user.create({ data: { name: "測試上載人", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
 
     async function makeUpload(siteId: string) {
       return prisma.rosterUpload.create({
@@ -251,7 +252,7 @@ describe("inferReferralBrokerFromRosters", () => {
   }
   async function makeUploader() {
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    return prisma.user.create({ data: { name: "測試上載人", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    return prisma.user.create({ data: { name: "測試上載人", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
   }
   async function makeUpload(uploaderId: string, siteId: string, status: "uploaded" | "parsed" | "confirmed" | "superseded" | "voided" = "parsed") {
     return prisma.rosterUpload.create({

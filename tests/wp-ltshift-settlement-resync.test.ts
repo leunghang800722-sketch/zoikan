@@ -2,6 +2,7 @@
 // 上載盤（含子盤）＋月份 scope 入面已寫入嘅 shift_records（唔靠更表
 // 行配對），對長工格重新跑 `resolveLongtermSettlement()`，settlement／
 // operational 有變就 UPDATE 落去（唔換 row id）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { recomputeSettlement } from "@/lib/roster-upload/settlement-resync";
@@ -22,7 +23,7 @@ describe("recomputeSettlement", () => {
   }
   async function makeUploader() {
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    return prisma.user.create({ data: { name: "測試上載人", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    return prisma.user.create({ data: { name: "測試上載人", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
   }
   async function makeUpload(siteId: string, uploaderId: string) {
     return prisma.rosterUpload.create({

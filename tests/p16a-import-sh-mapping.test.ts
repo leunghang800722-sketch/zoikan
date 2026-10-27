@@ -1,6 +1,7 @@
 // P16a：Maxwell「法定假期」欄映射（含「即時」→ immediate；空白／其他 → after_3_months）、
 // 重導入更新既有 maxwell_import 合約非薪酬欄（audit＋contracts_fields_updated；manual 唔掂）、
 // 7 月有 SH 且入職未滿 3 個月 → import→aggregate 扣 NPSH。合成資料。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -39,7 +40,7 @@ describe("P16a Maxwell 導入：法定假期有薪起點", () => {
   beforeEach(async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    actor = (await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } })).id;
+    actor = (await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } })).id;
   });
   afterAll(async () => {
     await clearAll();

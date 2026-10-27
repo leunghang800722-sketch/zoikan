@@ -1,5 +1,6 @@
 // EMP-P3 第 1 部分：resolveLongtermPeriod（MG 卡鏈聘用段）＋ aggregate 改讀（2026-10 起）＋警告先行＋再入職出糧／結餘。
 // 合成資料（測試甲乙／MG9xxxx），唔讀 data/。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, afterAll } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { buildLongtermPayrollInputs } from "@/lib/longterm-payroll/aggregate";
@@ -94,7 +95,7 @@ async function base() {
   const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "t" } });
   const b07 = await prisma.broker.create({ data: { code: `T-B07-${Math.random().toString(36).slice(2, 6)}`, name: "測試內部長工桶", kind: "internal_longterm", settlementType: "salary", createdBy: "t" } });
   const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-  const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "t" } });
+  const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "t" } });
   return { site, st, b07, actor: user.id };
 }
 type Base = Awaited<ReturnType<typeof base>>;

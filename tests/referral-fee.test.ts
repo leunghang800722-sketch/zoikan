@@ -1,6 +1,7 @@
 // WP-LTSHIFT（老闆 2026-09-26 §3）：長工介紹費自動計——純函數
 // `computeReferralFees()` 單元測試＋`recomputeReferralFees()` DB
 // integration test（idempotent、7 月拒絕、唔踩人手輸入）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { computeReferralFees, computeReferralFeesForMonth, recomputeReferralFees, referralRatesFromPostorderRows, REFERRAL_FEE_EXEMPT_CLIENT_GROUP } from "@/lib/reports/referral-fee";
@@ -97,7 +98,7 @@ describe("recomputeReferralFees（DB integration）", () => {
   }
   async function makeActorUserId(): Promise<string> {
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試會計", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試會計", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     return user.id;
   }
 

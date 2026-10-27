@@ -1,5 +1,6 @@
 // TE-1：分流題覆核證據裁圖（docs/plans/triage-evidence-crops-plan.md；Opus 條件 M1–M9／S1–S5；§7 來源優先順序）。
 // 全部合成資料：假名「導入測試員X」、合法 check digit 假 HKID、合成 header-only JPEG/PNG（tests/lib/te1-images.ts）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
@@ -87,7 +88,7 @@ describe("TE-1 證據裁圖", () => {
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
     const mkUser = async (role: "會計" | "主管") => {
-      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const tel = fakeTel();
       return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
     };
     fx.userIds["會計"] = await mkUser("會計");

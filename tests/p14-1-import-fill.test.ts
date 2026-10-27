@@ -1,5 +1,6 @@
 // P14.1：Maxwell 導入補欄（nameEn／staffNoMw）——只補空、永不覆蓋、永不改 monthlySalary；
 // 正式站 staffNoMw 全空嘅情況（靠中文名配對）；撞號只警告。合成資料（測試甲乙、MG9xxx）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -27,7 +28,7 @@ describe("P14.1 Maxwell 導入補欄", () => {
   beforeEach(async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    actor = (await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } })).id;
+    actor = (await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } })).id;
   });
 
   it("staffNoMw 全空 → 靠中文名配對，補 nameEn＋MG 工號（經 guard_staff_numbers 並同步 staffNoMw）；monthlySalary 不變", async () => {

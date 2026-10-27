@@ -1,4 +1,5 @@
 // P19b：離職月結算——平均工資（ADW）EO 自動計、優先次序、離職者導航卡條件。全部假數（月薪 20,000／15,000，假名「測試甲」）。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, afterAll } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { buildLongtermPayrollInputs, recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
@@ -20,7 +21,7 @@ async function base() {
   const site = await prisma.site.create({ data: { canonicalName: `測試盤-${Math.random().toString(36).slice(2, 8)}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
   const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "test" } });
   const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-  const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+  const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
   return { site, st, actorUserId: user.id };
 }
 async function mkLeaver(opts: { hire: string; leave: string; salary: number; dob: string; actor: string; name?: string; hireContract?: string }) {

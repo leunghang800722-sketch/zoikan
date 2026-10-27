@@ -1,4 +1,5 @@
 // P11.1：Maxwell 導入 contract_start_mode（original／first_unlocked）。合成 fixture，唔用真人資料。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -34,7 +35,7 @@ describe("P11.1：Maxwell 導入合約起始模式", () => {
   beforeEach(async () => {
     await clearAll();
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     actorUserId = user.id;
     await prisma.monthClose.create({ data: { month: d("2026-07-01"), lockedAt: new Date(), lockedBy: actorUserId, createdBy: "test" } });
     await prisma.monthClose.create({ data: { month: d("2026-08-01"), lockedAt: new Date(), lockedBy: actorUserId, createdBy: "test" } });

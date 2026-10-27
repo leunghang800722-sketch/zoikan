@@ -1,6 +1,7 @@
 // 驗收（Opus 5.5，2026-09-26）：更表有雞頭碼欄但部分行漏填——同張上載同
 // 一個盤其他行只有一個雞頭碼，漏填行跟佢（同總表「補：總表該盤唯一雞頭」
 // 一致）；多過一個雞頭就唔估（跌返規則 8 fallback 鏈）。合成 fixture。
+import { fakeTel } from "./helpers/fake-tel";
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { loadReconcileInput } from "@/lib/roster-upload/reconcile";
@@ -14,7 +15,7 @@ describe("reconcile：漏填雞頭碼跟同盤唯一雞頭", () => {
 
   async function setup(codes: (string | null)[]) {
     const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
-    const user = await prisma.user.create({ data: { name: "測試老闆", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+    const user = await prisma.user.create({ data: { name: "測試老闆", tel: fakeTel(), passwordHash: "x", roleId: role.id, createdBy: "test" } });
     const brokers = new Map<string, string>();
     for (const c of ["TK", "TW", "TY"]) brokers.set(c, (await prisma.broker.create({ data: { code: c, name: `測試${c}`, kind: c === "TY" ? "internal_cash" : "broker", settlementType: "cash", createdBy: "test" } })).id);
     const site = await prisma.site.create({ data: { canonicalName: "測試漏填盤", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
