@@ -10,7 +10,7 @@ import { scoreMessage } from "./filter";
 import { parseMessage, type ParsedIntent } from "./parse";
 import { resolveIntents, type ResolvedIntent } from "./resolve";
 import { createPrismaResolveRepo } from "./repo";
-import { isoToDbDate } from "./dates";
+import { hkDateOf, isoToDbDate } from "./dates";
 import { shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
 import { createWaQuestionsTx, notifyWaTriage, supersedeWaQuestions, type WaTriageResult } from "./triage";
 import { TRIAGE_LOCK } from "@/lib/triage/session";
@@ -208,7 +208,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
         input = { kind: "dead", why: "expired" };
         meta = { kind: "expired" };
       } else {
-        const photo = await readCardPhoto(evd.bytes, { strategy, ...(ctx.cardEngines ? { engines: ctx.cardEngines } : {}) });
+        const photo = await readCardPhoto(evd.bytes, { strategy, today: hkDateOf(msg.ts), ...(ctx.cardEngines ? { engines: ctx.cardEngines } : {}) });
         input = { kind: "photo", photo };
         for (const u of photo.usage) {
           tin += u.promptTokens;
@@ -217,6 +217,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
         // 只記計數／引擎名／token——絕不記工號、姓名、圖片內容
         meta = {
           kind: photo.kind,
+          doc_type: photo.doc_type ?? null,
           strategy,
           cards: photo.cards.length,
           confirmed: photo.cards.filter((c) => c.status === "confirmed").length,

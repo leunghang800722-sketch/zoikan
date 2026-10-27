@@ -60,7 +60,7 @@ interface WaQuestion {
       replaced_records: Array<{ id: string; site_name: string; shift_code: string; work_date: string; status: string }>;
     } | null;
     cancel_preview: string[];
-    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; multi_hint?: boolean; none: "expired" | "not_card" | "unreadable" | null } | null;
+    card?: { media_url: string | null; staff_no: string | null; name_zh: string | null; name_en: string | null; votes: number; index: number; total: number; arbiter: boolean; candidates: string[]; others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>; multi_hint?: boolean; doc_type?: string | null; time_on?: string | null; none: "expired" | "not_card" | "unreadable" | null } | null;
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -72,6 +72,7 @@ interface Impact {
   notes: string[];
 }
 
+const DOC_TYPE_LABEL: Record<string, string> = { work_card: "工卡相", punch_card: "打卡紙", signin_sheet: "簽到表", attendance_sheet: "值勤／出勤記錄表", app_screenshot: "考勤 app 截圖", other: "其他相片" };
 const CARD_NONE_TEXT: Record<string, string> = { expired: "相片已過期（系統冇收到圖），請叫對方再 send 一次", not_card: "相入面睇落唔係工卡（例如打卡機螢幕、自拍）", unreadable: "相太暗／太糊／反光，工號讀唔到" };
 const REASON_LABEL: Record<string, string> = {
   card_media_expired: "相片已過期",
@@ -338,7 +339,7 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
                   </div>
                   {q.wa.card && (
                     <div className="rounded-lg border border-zk-border bg-zk-surface p-3 space-y-2" data-testid="wa-card">
-                      <div className="text-zk-xs text-zk-faint">工卡相{q.wa.card.total > 1 ? `（第 ${q.wa.card.index}／${q.wa.card.total} 張卡）` : ""}</div>
+                      <div className="text-zk-xs text-zk-faint">{q.wa.card.doc_type ? (DOC_TYPE_LABEL[q.wa.card.doc_type] ?? "相片") : "工卡相"}{q.wa.card.total > 1 ? `（第 ${q.wa.card.index}／${q.wa.card.total} 張）` : ""}{q.wa.card.time_on ? ` · 相上時間 ${q.wa.card.time_on}` : ""}</div>
                       {q.wa.card.media_url && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={q.wa.card.media_url} alt="工卡相" className="max-h-72 w-auto max-w-full rounded border border-zk-border bg-white object-contain" data-testid="wa-card-image" />

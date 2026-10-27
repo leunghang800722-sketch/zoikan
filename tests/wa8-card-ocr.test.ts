@@ -106,7 +106,8 @@ describe("策略：成本優先、三取二", () => {
         deepseek: { ok: true, is_card: true, cards: [card(null, { name_zh: "測試甲" })], usage: null },
       }),
     });
-    expect(nameOnly.cards).toEqual([expect.objectContaining({ staff_no: null, name_zh: "測試甲", status: "review", reasons: ["card_name_only"] })]);
+    // WA-9：兩個引擎讀到同一姓名＝以姓名為身份 confirmed（resolve 仲要喺盤／判頭範圍內唯一）
+    expect(nameOnly.cards).toEqual([expect.objectContaining({ staff_no: null, name_zh: "測試甲", status: "confirmed", reasons: ["card_name_only"], votes: 2 })]);
   });
   it("五個策略引擎組合；env WA_CARD_OCR_STRATEGY 預設 S1", () => {
     expect(CARD_STRATEGIES.S1).toEqual({ primary: ["tesseract", "deepseek"], arbiter: "claude" });

@@ -22,6 +22,9 @@ export interface WaCardEvidence {
   arbiter: boolean;
   /** review 時畀人揀嘅候選工號 */
   candidates: string[];
+  /** WA-9：相片文件類型／相入面讀到嘅打卡時間 */
+  doc_type?: string | null;
+  time_on?: string | null;
   /** 同一張相嘅其他卡（疑似第二張卡題用） */
   others?: Array<{ staff_no: string | null; status: "confirmed" | "review" }>;
   /** 無圖原因：expired｜not_card｜unreadable */

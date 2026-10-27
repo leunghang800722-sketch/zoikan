@@ -713,3 +713,11 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 - 真相 bench 見 claude 引擎 0/4（haiku 4/4）。引擎層面原本將所有失敗吞成 `unreadable`，睇唔到係 refusal／max_tokens／API 錯定係讀到空。現改為：引擎失敗時回固定類別碼 `reason`（`refusal`｜`max_tokens`｜`api_error_<status>`｜`auth_<status>`｜`rate_limit_<status>`｜`connection`｜`bad_image`｜`no_image`｜`error`），bench 報表每引擎加 `failures`（類別 × 張數）同 `empty_but_truth_has_cards`（有回應但讀到空而 truth 有卡）；console 行會印「失敗 refusal×2」「讀到空 1」。用 `--engines claude` 跑 bt-cards 即見原因。
 - 懷疑點之一：Opus 在 `effort: "low"` 下轉錄細字手寫容易草草收工。工卡辨識改為 env `WA_CARD_CLAUDE_EFFORT`（`low`｜`medium`｜`high`，**預設 medium**）；其他 OCR 路徑嘅 effort 預設不變（low）；Haiku 唔帶 effort。**呢個係推測，未用真 API 驗證**（開發環境冇 key，亦冇用老闆樣本相打任何 API）——請用 bench 重跑 `--engines claude`，睇 `failures`／`讀到空` 決定係咪 refusal（身份類圖片被拒）、max_tokens 定其他。
+
+### WA-9 (2) 文件類型分類＋姓名身份
+
+真相 bench：數碼港群嘅相係 Comix 打卡紙（手寫姓名、冇工號）、Wilson 每月簽到表（印刷姓名＋手寫時間）、考勤 app 截圖（「歡迎，<姓名>！」＋時間）——身份只有中文姓名。
+- **分類**：引擎輸出 `doc_type`：`work_card`｜`punch_card`｜`signin_sheet`｜`attendance_sheet`｜`app_screenshot`｜`other`（多數票；`parsed_json.card.doc_type` 記，唔含值）；每張卡另讀 `time_on`／`time_off`（HH:MM）。簽到表揀「今日」（訊息香港日，經 `today` 提示傳畀引擎）嗰一行。
+- **姓名身份**（冇任何工號時）：≥2 個引擎讀到同一姓名＝confirmed；分歧 → 仲裁；三個都唔同 → 合併成一條題列全部姓名候選。有工號仍然以工號為主。
+- **配對**：盤口群＝該盤近 60 日有更嘅 guard；判頭群＝該判頭旗下近 60 日有更嘅 guard；喺範圍內 strict（NFKC＋去空白）同名而且**唯一**（讀數 confirmed）＝配到人；範圍內多個／冇 → `wa_person_ambiguous` 揀人題，候選＝同名者＋同範圍按字形接近排序嘅 guard（上限 8）。大群（multi_site）冇範圍：配到但要一撳確認（`card_name_only`）。範圍內唯一但讀數未確認 → 一撳確認。
+- **更別**：相上讀到嘅打卡時間（`time_on`）優先於訊息送出時間，用嚟對該盤更開始時間（±2 小時）；群組「開工」對照仍然優先。
