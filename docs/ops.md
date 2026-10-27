@@ -708,3 +708,8 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 - 兩引擎各只讀到一張唔同嘅卡而仲裁失敗，會合併成一條 review 題（`wa_person_ambiguous`，列晒候選）。審核人揀咗一位，另一位未必有記錄——所以題卡（`wa_card_confirm`／`wa_person_ambiguous`）當候選工號 ≥2 而且當中有兩個**互不相似**（唔係同前綴同長度差 ≤2 位）時，顯示提示「相入面可能有多過一張工卡：如果係兩個人，請分別確認」（DTO `wa.card.multi_hint`，純 bool，唔含工號值）。候選工號差 ≤2 位多數係同一張卡嘅誤讀，唔提示。
 - **「加多一位」**：答案可帶 `also_guard_id`（只限工卡相題、選項 `wa_pick_guard`／`wa_accept`／`wa_force_write`、報更類；對象必須係題目候選之一，而且唔可以同今條揀嘅人一樣）。答完今條後，同一事務內為對方另開一條確認題（新 intent idx、保留盤／日子／更別、`card_confirm`，通常係 `wa_card_confirm`），所以暫存圖仍有 open 題而保留，全部答完先刪。預覽會提示「另外會開一條確認題」。UI：題卡提示下面有「加多一位（同一相另開確認題）」下拉。
 - **tesseract 自檢**（`scripts/ai/guard-ocr-selftest.ts`）：多兩行 log——`[card-ocr] tesseract available=<bool> version=<--version 第一行> langs=<chi_tra,eng 有邊啲>`（spawn 失敗／ENOENT → `available=false`，唔阻網站起）；同 `[card-ocr] tesseract read ok=<bool> ms=<n>`（用合成卡圖跑一次引擎，唔印讀到嘅文字）。deploy 後可確認容器有冇 binary 同 `chi_tra` 語言包。
+
+### WA-9（真相 bench 後）(1) claude 引擎診斷
+
+- 真相 bench 見 claude 引擎 0/4（haiku 4/4）。引擎層面原本將所有失敗吞成 `unreadable`，睇唔到係 refusal／max_tokens／API 錯定係讀到空。現改為：引擎失敗時回固定類別碼 `reason`（`refusal`｜`max_tokens`｜`api_error_<status>`｜`auth_<status>`｜`rate_limit_<status>`｜`connection`｜`bad_image`｜`no_image`｜`error`），bench 報表每引擎加 `failures`（類別 × 張數）同 `empty_but_truth_has_cards`（有回應但讀到空而 truth 有卡）；console 行會印「失敗 refusal×2」「讀到空 1」。用 `--engines claude` 跑 bt-cards 即見原因。
+- 懷疑點之一：Opus 在 `effort: "low"` 下轉錄細字手寫容易草草收工。工卡辨識改為 env `WA_CARD_CLAUDE_EFFORT`（`low`｜`medium`｜`high`，**預設 medium**）；其他 OCR 路徑嘅 effort 預設不變（low）；Haiku 唔帶 effort。**呢個係推測，未用真 API 驗證**（開發環境冇 key，亦冇用老闆樣本相打任何 API）——請用 bench 重跑 `--engines claude`，睇 `failures`／`讀到空` 決定係咪 refusal（身份類圖片被拒）、max_tokens 定其他。

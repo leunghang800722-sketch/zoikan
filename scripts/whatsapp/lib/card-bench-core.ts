@@ -74,6 +74,10 @@ export interface EngineReport {
   avg_completion_tokens: number;
   /** 每張相預估成本（USD）：用實測 usage × env 單價；冇設單價＝null */
   est_usd_per_photo: number | null;
+  /** WA-9：引擎失敗類別分佈（refusal／max_tokens／api_error_<status>…，固定碼，唔含內容）——診斷「引擎答 0/4」係失敗定係讀到空 */
+  failures: Record<string, number>;
+  /** 引擎有回應但冇讀到任何卡，而 truth 有卡嘅張數 */
+  empty_but_truth_has_cards: number;
 }
 export interface StrategyReport {
   strategy: string;
@@ -126,7 +130,7 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
 
   const engineReports: EngineReport[] = [];
   for (const { key, engine } of inp.engines) {
-    const rep: EngineReport = { engine: key, photos: 0, exact: 0, review: 0, wrong: 0, unreadable: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0, est_usd_per_photo: null };
+    const rep: EngineReport = { engine: key, photos: 0, exact: 0, review: 0, wrong: 0, unreadable: 0, avg_prompt_tokens: 0, avg_completion_tokens: 0, est_usd_per_photo: null, failures: {}, empty_but_truth_has_cards: 0 };
     let p = 0;
     let c = 0;
     for (const ph of inp.photos) {
@@ -137,6 +141,10 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
       }
       rep.photos += 1;
       rep[scoreEngine(out, ph.truth)] += 1;
+      if (!out.ok) {
+        const k = out.reason ?? out.error;
+        rep.failures[k] = (rep.failures[k] ?? 0) + 1;
+      } else if (out.cards.length === 0 && ph.truth.size > 0) rep.empty_but_truth_has_cards += 1;
       p += out.usage?.promptTokens ?? 0;
       c += out.usage?.completionTokens ?? 0;
     }
@@ -200,7 +208,7 @@ export async function runBench(inp: BenchInput): Promise<BenchReport> {
 export function summaryLines(r: BenchReport): string[] {
   const out = [`[card-bench] 相片 ${r.photos} 張`];
   for (const e of r.engines) {
-    out.push(e.skipped ? `[card-bench] 引擎 ${e.engine}：${e.skipped}` : `[card-bench] 引擎 ${e.engine}：exact ${e.exact}｜review ${e.review}｜wrong ${e.wrong}｜unreadable ${e.unreadable}｜每張 prompt ${e.avg_prompt_tokens}／completion ${e.avg_completion_tokens} tokens${e.est_usd_per_photo === null ? '' : `｜預估 US$${e.est_usd_per_photo}／張`}`);
+    out.push(e.skipped ? `[card-bench] 引擎 ${e.engine}：${e.skipped}` : `[card-bench] 引擎 ${e.engine}：exact ${e.exact}｜review ${e.review}｜wrong ${e.wrong}｜unreadable ${e.unreadable}｜每張 prompt ${e.avg_prompt_tokens}／completion ${e.avg_completion_tokens} tokens${e.est_usd_per_photo === null ? '' : `｜預估 US$${e.est_usd_per_photo}／張`}${Object.keys(e.failures).length ? `｜失敗 ${Object.entries(e.failures).map(([k, n]) => `${k}×${n}`).join(',')}` : ''}${e.empty_but_truth_has_cards ? `｜讀到空 ${e.empty_but_truth_has_cards}` : ''}`);
   }
   for (const s of r.strategies) {
     out.push(`[card-bench] 策略 ${s.strategy}：exact ${s.exact}｜review ${s.review}｜confirmed_wrong ${s.confirmed_wrong}｜unreadable ${s.unreadable}｜仲裁觸發 ${(s.arbiter_rate * 100).toFixed(0)}%｜每張 prompt ${s.avg_prompt_tokens}／completion ${s.avg_completion_tokens} tokens${s.est_usd_per_photo === null ? '' : `｜預估 US$${s.est_usd_per_photo}／張`}`);

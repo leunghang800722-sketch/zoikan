@@ -18,6 +18,8 @@ export interface VisionRequest {
   maxTokens?: number;
   /** WA-8：Claude structured output 用嘅自訂 JSON schema（工卡辨識）；冇＝用證件欄位 schema。DeepSeek 忽略。 */
   jsonSchema?: Record<string, unknown>;
+  /** WA-9：Claude output_config.effort（預設 low；工卡辨識用 env WA_CARD_CLAUDE_EFFORT，預設 medium）。Haiku 唔帶。DeepSeek 忽略。 */
+  effort?: "low" | "medium" | "high";
 }
 export interface VisionResponse {
   text: string;

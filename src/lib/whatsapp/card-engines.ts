@@ -21,7 +21,8 @@ export interface EngineUsage {
 }
 export type EngineOutcome =
   | { ok: true; is_card: boolean; cards: CardRead[]; usage: EngineUsage | null }
-  | { ok: false; error: "unavailable" | "failed"; usage: EngineUsage | null };
+  /** reason＝失敗類別碼（refusal／max_tokens／api_error／auth／rate_limit／connection／bad_image／no_image／error…）——只係固定字串，唔含任何內容 */
+  | { ok: false; error: "unavailable" | "failed"; usage: EngineUsage | null; reason?: string };
 
 export interface CardEngine {
   readonly name: CardEngineName;
@@ -74,6 +75,18 @@ export const CARD_JSON_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
+/** 失敗類別碼（固定字串，唔帶內容／key）：OcrUnavailableError.reason（refusal／max_tokens／api_error／auth／rate_limit／connection／bad_image）＋HTTP status。 */
+export function failReason(e: unknown): string {
+  if (e instanceof OcrUnavailableError) return `${e.reason ?? "unavailable"}${e.status ? `_${e.status}` : ""}`;
+  return "error";
+}
+
+/** 工卡辨識用 Claude effort（env WA_CARD_CLAUDE_EFFORT：low|medium|high，預設 medium——手寫細字轉錄 low 容易草草收工）。 */
+export function cardClaudeEffort(): "low" | "medium" | "high" {
+  const v = process.env.WA_CARD_CLAUDE_EFFORT?.trim().toLowerCase();
+  return v === "low" || v === "high" ? v : "medium";
+}
+
 function fromText(text: string, usage: EngineUsage): EngineOutcome {
   const p = parseCardText(text);
   return { ok: true, is_card: p.is_card, cards: p.cards, usage };
@@ -95,12 +108,12 @@ function visionEngine(name: "deepseek" | "haiku" | "claude", model: string, make
         return { ok: false, error: "failed", usage: null };
       }
       const img = await modelImageDataUrl(bytes, 1000);
-      if (!img) return { ok: false, error: "failed", usage: null };
+      if (!img) return { ok: false, error: "failed", usage: null, reason: "no_image" };
       try {
-        const r = await client.complete({ system: CARD_SYSTEM, userText: CARD_USER, images: [img], jsonSchema: CARD_JSON_SCHEMA });
+        const r = await client.complete({ system: CARD_SYSTEM, userText: CARD_USER, images: [img], jsonSchema: CARD_JSON_SCHEMA, effort: cardClaudeEffort() });
         return fromText(r.text, { engine: name, model: client.model || model, promptTokens: r.promptTokens, completionTokens: r.completionTokens });
-      } catch {
-        return { ok: false, error: "failed", usage: null };
+      } catch (e) {
+        return { ok: false, error: "failed", usage: null, reason: failReason(e) };
       }
     },
   };
@@ -130,8 +143,8 @@ function qwenEngine(model: string, client?: Pick<OpenAI, "chat">): CardEngine {
           ],
         });
         return fromText(res.choices[0]?.message?.content ?? "", { engine: "qwen", model, promptTokens: res.usage?.prompt_tokens ?? 0, completionTokens: res.usage?.completion_tokens ?? 0 });
-      } catch {
-        return { ok: false, error: "failed", usage: null };
+      } catch (e) {
+        return { ok: false, error: "failed", usage: null, reason: failReason(e) };
       }
     },
   };
