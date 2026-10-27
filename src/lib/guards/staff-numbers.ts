@@ -66,7 +66,7 @@ const STAFF_NUMBER_SCHEME_RE = /^[A-Z]{1,4}$/;
 export const STAFF_NUMBER_NUMBER_RE = /^[A-Z]{1,4}[0-9A-Z-]{1,16}$/;
 
 // S2：正規化＝trim＋大寫＋移除所有空白（唔淨係頭尾——中間打錯多咗個
-// space，例如 "U 1234"，都要當同 "U9234" 係同一個號，唔應該因為呢種
+// space，例如 "U 9234"，都要當同 "U9234" 係同一個號，唔應該因為呢種
 // 打字習慣差異漏撞號檢查）。
 export function normalizeStaffNumber(raw: string): string {
   return raw.trim().toUpperCase().replace(/\s+/g, "");

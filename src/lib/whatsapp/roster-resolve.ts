@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { addDays, dateInWindow, hkDateOf, isoToDbDate } from "./dates";
 import type { ParsedIntent } from "./parse";
 import { prismaCardDeps, siteAndShiftFor, type CardDeps } from "./card-resolve";
-import { createHash } from "node:crypto";
+import { rosterNameKey } from "./name-key";
 import { normNameVariant } from "@/lib/names/variants";
 import { guardsByName, nameViewOf } from "./name-index";
 import { refineNames, type RosterList } from "./roster-list";
@@ -95,8 +95,7 @@ export interface RosterStats {
 }
 const emptyRosterStats = (): RosterStats => ({ days: 0, names: 0, new: 0, already: 0, unmatched_new: 0, unmatched_dup: 0, skipped_old: 0, skipped_future: 0, skipped_locked: 0 });
 
-/** 配唔到／同名多人嘅名，同一 (群, 日, 名) 只開一張題：groupKey 固定，之後重發唔再開。 */
-const rosterNameKey = (groupId: string, date: string, name: string): string => `rn:${groupId}:${date}:${createHash("sha1").update(normNameVariant(name)).digest("hex").slice(0, 12)}`;
+// 配唔到／同名多人嘅名，同一 (群, 日, 名) 只開一張題：groupKey 固定（rosterNameKey，短訊路徑共用），之後重發唔再開。
 
 export async function resolveRosterList(args: { ctx: ResolveContext; list: RosterList; chatJid: string; messageId?: string; staleIds?: ReadonlySet<string>; deps?: RosterDeps }): Promise<{ resolved: ResolvedIntent[]; stats: RosterStats }> {
   const { ctx, list } = args;

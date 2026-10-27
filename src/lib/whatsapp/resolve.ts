@@ -4,6 +4,9 @@
 // 取捨（簡報未講清，採保守）：routed=auto_write 只睇 §6.1 第 1–6 項；第 7 項（群組 auto_write 開關）記入
 // resolution.group_auto_write，供 W3 真正寫入時再把關（dry-run 期間試點群開關通常仍係關）。
 import { foldVariants } from "@/lib/names/variants";
+import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
+import { rosterNameKey } from "./name-key";
+import { guardsByName } from "./name-index";
 import { classifySiteName, type SiteNameCandidate } from "@/lib/month-close/auto/site-match";
 import type { GuardMatchIndex } from "@/lib/roster-upload/match";
 import { normalizeTelHk } from "@/lib/guards/identity";
@@ -24,6 +27,8 @@ export interface ShiftTypeLite {
   label: string | null;
   /** 開工鐘數（0–23）；冇開工時間＝null */
   startHour: number | null;
+  /** 開工分鐘（0–59）；冇提供（undefined／null）＝只對鐘數 */
+  startMinute?: number | null;
 }
 export interface ExistingRecord {
   id: string;
@@ -114,6 +119,8 @@ export interface IntentSrc {
   mismatch?: { day: string; roster_only: string[]; photo_only: string[] };
   /** WA-9 (7)：名單配唔到嘅名——(群,日,名) 固定 groupKey（重發唔再開題） */
   dedupe_key?: string;
+  /** WA-9 (8)：短訊路徑揀人題嘅 (群,日,名) 固定 key（同名單路徑 rosterNameKey 一樣） */
+  name_key?: string;
   person_raw: string | null;
   site_raw: string | null;
   date_raw: string | null;
@@ -150,6 +157,23 @@ function siteTextHits(rawF: string, sites: ResolveContext["sites"]): Array<{ sit
   return out;
 }
 
+/**
+ * 文字（已折疊）係咪群盤名嘅「明顯部分」：去空白＋小寫後長度 ≥2（純 ASCII 要 ≥3，避免「CP」之類），
+ * 而且係群盤名（去空白）嘅前綴，或者等於群盤名按空格分開嘅其中一個 token。
+ */
+export function isGroupNamePrefix(rawF: string, names: readonly string[]): boolean {
+  const t = rawF.replace(/\s+/g, "").toLowerCase();
+  if (t.length < 2) return false;
+  if (/^[\x00-\x7f]+$/.test(t) && t.length < 3) return false;
+  for (const n of names) {
+    if (!n) continue;
+    const flat = n.replace(/\s+/g, "").toLowerCase();
+    if (flat.startsWith(t)) return true;
+    if (n.toLowerCase().split(/\s+/).some((tok) => tok === t)) return true;
+  }
+  return false;
+}
+
 function resolveSite(siteRaw: string | null | undefined, ctx: ResolveContext): SiteRes {
   const groupSite = ctx.group.kind === "site" ? ctx.group.siteId : null;
   const raw = (siteRaw ?? "").trim();
@@ -165,9 +189,15 @@ function resolveSite(siteRaw: string | null | undefined, ctx: ResolveContext): S
     //  2. 只命中**多盤共用**嘅區域名／客戶名（別名掛喺 ≥2 個盤，例：「數碼港」）→ 群盤，唔出題（basis group_over_alias）。
     //  3. 命中**唔同客戶**嘅盤獨有嘅名 → 群盤，但要確認（site_ambiguous，唔自動寫）。
     //  4. 完全唔識／模糊 → 照舊（落到下面 classifySiteName）。
-    const hits = siteTextHits(rawF, foldSites(ctx.sites));
+    //  0b. 文字係群盤名（或其別名）嘅前綴／空格分隔嘅 token（例：群盤「數碼港 CP5」，文字「數碼港」）→ 都係群盤（basis group_name_prefix）。
+    const folded = foldSites(ctx.sites);
+    const hits = siteTextHits(rawF, folded);
     if (hits.length > 0) {
       if (hits.some((h) => h.siteId === groupSite)) return { siteId: groupSite, reasons: [], candidates: [], basis: "text_exact" };
+    }
+    const gs = folded.find((x) => x.id === groupSite);
+    if (gs && isGroupNamePrefix(rawF, [gs.canonicalName, ...gs.aliases])) return { siteId: groupSite, reasons: [], candidates: [], basis: "group_name_prefix" };
+    if (hits.length > 0) {
       const unique = hits.filter((h) => h.owners === 1);
       if (unique.length === 0) {
         // 多盤共用嘅名只限掛住嘅盤**全部同一客戶**先當區域名（群盤唔出題）；橫跨唔同客戶（或客戶未知）→ 出題，候選＝群盤＋該些盤
@@ -236,10 +266,48 @@ function resolveSelf(ctx: ResolveContext): PersonRes {
   return { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "sender_unmatched" };
 }
 
+// LLM 有時將工號同人名黐埋（例「U9O369梁某」，原文字母 O 被轉成 0／反之）：開頭或結尾剝走 U／MP／MG／MW＋3–6 位（O 當 0）工號 token。
+const STAFF_TOKEN_RE = /^(?:(U|MP|MG|MW)\s*([0-9Oo]{3,6}))(?![0-9A-Za-z])|(?<![0-9A-Za-z])(U|MP|MG|MW)\s*([0-9Oo]{3,6})$/i;
+export function stripStaffToken(name: string): { number: string; rest: string } | null {
+  const t = name.normalize("NFKC").trim();
+  const m = STAFF_TOKEN_RE.exec(t);
+  if (!m) return null;
+  const prefix = m[1] ?? m[3]!;
+  const digits = m[2] ?? m[4]!;
+  if ((digits.match(/[0-9]/g) ?? []).length < 2) return null; // 全部係 O 之類唔當工號
+  const rest = (m[1] ? t.slice(m[0].length) : t.slice(0, m.index)).replace(/[\s,，、:：()（）\-]+/g, " ").trim();
+  return { number: normalizeStaffNumber(prefix + digits.replace(/[Oo]/g, "0")), rest };
+}
+
 async function resolveNamed(raw: string, ctx: ResolveContext, siteId: string | null): Promise<PersonRes> {
   const name = normName(raw);
   if (!name) return { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "empty_name" };
   if (SELF_WORDS.test(name)) return resolveSelf(ctx);
+  const stripped = stripStaffToken(name);
+  if (stripped) {
+    const nameCands = stripped.rest ? nameCandidates(stripped.rest, ctx) : [];
+    const hit = ctx.index.byStaffNumber.get(stripped.number)?.guardId ?? ctx.index.byLegacyStaffNo.get(stripped.number);
+    if (hit) {
+      // 工號指甲、名指乙（名有配到人而唔包含工號嗰位）→ 揀人題，兩邊都列
+      if (nameCands.length > 0 && !nameCands.includes(hit)) return { guardId: null, reasons: ["person_ambiguous"], candidates: await orderCandidates([hit, ...nameCands], ctx, siteId), basis: "staff_number_name_mismatch" };
+      return { guardId: hit, reasons: [], candidates: [], basis: "staff_number" };
+    }
+    // 工號查唔到 → 用剝走工號後嘅淨名照舊配
+    if (!stripped.rest) return { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "staff_number_unmatched" };
+    return namedByName(stripped.rest, ctx, siteId);
+  }
+  return namedByName(name, ctx, siteId);
+}
+
+/** 人名（已 NFKC）→ 候選 guard（byName／byAlias 精確；剝工號後嘅淨名再試簡繁容錯）。 */
+function nameCandidates(name: string, ctx: ResolveContext): string[] {
+  const viaName = ctx.index.byName.get(name) ?? [];
+  const viaAlias = ctx.index.byAlias.get(name) ?? [];
+  const c = [...new Set([...viaName, ...viaAlias])];
+  return c.length > 0 ? c : guardsByName(ctx.index, name);
+}
+
+async function namedByName(name: string, ctx: ResolveContext, siteId: string | null): Promise<PersonRes> {
   const viaName = ctx.index.byName.get(name) ?? [];
   const viaAlias = ctx.index.byAlias.get(name) ?? [];
   const cands = [...new Set([...viaName, ...viaAlias])];
@@ -270,6 +338,22 @@ function hourBucket(h: number): Bucket {
   return "night";
 }
 
+/** 時間段文字 → 開始時間：「0700-1900」「0700一1900」「2200－0615」「07:00-19:00」；「一」只喺前後都係 3–4 位數字（或 HH:MM）時先當分隔。 */
+export function parseTimeRangeStart(raw: string): { hour: number; minute: number } | null {
+  const t = raw.normalize("NFKC");
+  const ok = (h: number, m: number): boolean => h >= 0 && h <= 24 && m >= 0 && m <= 59;
+  const c = /(?<![0-9:])(\d{1,2}):(\d{2})\s*(?:[-–—~至到一])\s*(\d{1,2}):(\d{2})(?![0-9:])/.exec(t);
+  if (c && ok(Number(c[1]), Number(c[2])) && ok(Number(c[3]), Number(c[4])) && Number(c[1]) < 24) return { hour: Number(c[1]), minute: Number(c[2]) };
+  const d = /(?<![0-9])(\d{3,4})\s*(?:[-–—~至到一])\s*(\d{3,4})(?![0-9])/.exec(t);
+  if (d) {
+    const sp = (x: string): [number, number] => [Number(x.slice(0, -2)), Number(x.slice(-2))];
+    const [h1, m1] = sp(d[1]!);
+    const [h2, m2] = sp(d[2]!);
+    if (h1 < 24 && ok(h1, m1) && ok(h2, m2)) return { hour: h1, minute: m1 };
+  }
+  return null;
+}
+
 function pickByCode(types: ShiftTypeLite[], code: string): ShiftTypeLite[] {
   const c = code.trim().toLowerCase();
   return types.filter((t) => t.code.trim().toLowerCase() === c);
@@ -295,6 +379,16 @@ export function resolveShift(shiftRaw: string | null | undefined, codeGuess: str
   // 2) 直接更碼（N／N更／a更…）
   const direct = finish(pickByCode(types, stripped), "code");
   if (direct) return direct;
+  // 2b) 時間段（判頭群常見「0700一1900」「2200-0615」）：取開始時間，對盤嘅更別開工時間
+  const tr = parseTimeRangeStart(raw);
+  if (tr) {
+    const exact = types.filter((t) => t.startHour === tr.hour && (typeof t.startMinute === "number" ? t.startMinute === tr.minute : true));
+    const r = finish(exact, "time_range_start");
+    if (r) return r;
+    const byBucket = finish(types.filter((t) => t.startHour !== null && hourBucket(t.startHour) === hourBucket(tr.hour)), "time_range_bucket");
+    if (byBucket) return byBucket;
+    return { shiftTypeId: null, reasons: ["shift_unmapped"], candidates: [], basis: "time_range_unmapped" };
+  }
   // 3) 時段
   const b = bucketOf(raw);
   if (b) {
@@ -355,6 +449,13 @@ function pushUnique(arr: string[], ...v: string[]): void {
 
 function unresolvedRow(kind: IntentKind, conf: number, res: Resolution, routed: Routed, extra?: Partial<ResolvedIntent>): ResolvedIntent {
   return { kind, workDate: null, siteId: null, guardId: null, shiftTypeId: null, leaveCode: null, hours: null, confidence: conf, resolution: res, routed, ...extra };
+}
+
+/** WA-9 (8)：短訊（LLM）路徑嘅 shift 揀人題帶同名單路徑一樣嘅 (群,日,名) key，兩邊互相去重。冇日期／冇名／工卡覆寫就唔帶。 */
+function nameKeyOf(kind: IntentKind, ov: IntentOverride | undefined, raw: string | null, date: string | null, reasons: readonly string[], groupId: string): { name_key: string } | null {
+  if (kind !== "shift" || ov?.person || !raw || !date) return null;
+  if (!reasons.includes("person_ambiguous") && !reasons.includes("person_unknown")) return null;
+  return { name_key: rosterNameKey(groupId, date, raw) };
 }
 
 export async function resolveIntents(intents: readonly ParsedIntent[], ctx: ResolveContext): Promise<ResolvedIntent[]> {
@@ -463,7 +564,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
           confidence: conf,
           resolution: res,
           routed: "triage",
-          src: { person_raw: w.raw, site_raw: it.site_raw ?? null, date_raw: it.date?.raw ?? null, shift_raw: it.shift_raw ?? null, leave_raw: it.leave_raw ?? null, replaced_raw: replaced[0]?.raw ?? null },
+          src: { person_raw: w.raw, ...(nameKeyOf(kind, ov, w.raw, d, res.reasons, ctx.group.id) ?? {}), site_raw: it.site_raw ?? null, date_raw: it.date?.raw ?? null, shift_raw: it.shift_raw ?? null, leave_raw: it.leave_raw ?? null, replaced_raw: replaced[0]?.raw ?? null },
         };
 
         if (!AUTO_TYPES.has(kind)) {

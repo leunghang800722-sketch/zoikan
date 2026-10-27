@@ -93,6 +93,7 @@ function draftFromIntent(msg: WaMessageCtx, group: WaGroupCtx, row: WaIntentRow,
     ...(src?.card ? { card: src.card } : {}),
     ...(src?.mismatch ? { mismatch: src.mismatch } : {}),
     ...(src?.dedupe_key ? { dedupe_key: src.dedupe_key } : {}),
+    ...(src?.name_key ? { name_key: src.name_key } : {}),
     reasons,
     notes: strArr(res.notes),
     candidates: { guard_ids: strArr(cands.guard_ids), site_ids: strArr(cands.site_ids), dates: strArr(cands.dates), shift_type_ids: strArr(cands.shift_type_ids), existing_record_ids: strArr((res as { existing_record_ids?: unknown }).existing_record_ids) },
@@ -119,7 +120,7 @@ export function buildDraft(ev: WaEvidence, group: Pick<WaGroupCtx, "label">, ts:
   const title = `${group.label || "WhatsApp 群組"}｜${hk.slice(5, 10)} ${hk.slice(11, 16)}`;
   return {
     kind,
-    groupKey: kind === "wa_roster_mismatch" && ev.mismatch ? rosterMismatchKey(ev.group.id, ev.mismatch.day) : ev.dedupe_key && ev.round === 1 ? ev.dedupe_key : groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
+    groupKey: kind === "wa_roster_mismatch" && ev.mismatch ? rosterMismatchKey(ev.group.id, ev.mismatch.day) : ev.dedupe_key && ev.round === 1 ? ev.dedupe_key : ev.name_key && ev.round === 1 && ev.intent.kind === "shift" && (kind === "wa_person_ambiguous" || kind === "wa_person_unknown") ? ev.name_key : groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
     sort: sortOfTs(ts), // 同一訊息嘅跟進輪次維持原次序
     title,
     evidence: ev,
@@ -160,11 +161,17 @@ export interface InsertedQuestion {
 }
 
 /** 冪等插入題目（同 session 已有同 groupKey → 唔再建）。 */
-export async function insertWaQuestions(tx: Tx, sessionId: string, drafts: readonly WaQuestionDraft[]): Promise<{ created: InsertedQuestion[]; existing: Map<string, string> }> {
+export async function insertWaQuestions(tx: Tx, sessionId: string, draftsIn: readonly WaQuestionDraft[]): Promise<{ created: InsertedQuestion[]; existing: Map<string, string> }> {
+  let drafts = [...draftsIn];
+  // 同一批內 groupKey 重複（例：同一訊息兩個 intent 指同一人同日）只留第一張
+  const seenKeys = new Set<string>();
+  drafts = drafts.filter((d) => (seenKeys.has(d.groupKey) ? false : (seenKeys.add(d.groupKey), true)));
   const keys = drafts.map((d) => d.groupKey);
-  const prior = keys.length ? await tx.triageQuestion.findMany({ where: { sessionId, groupKey: { in: keys } }, select: { id: true, groupKey: true, status: true } }) : [];
-  // 名單「配唔到」題（rn:）撤回後 superseded → 重發同一個名要可以再開（唔計 superseded）
-  const existing = new Map(prior.filter((p) => !(p.status === "superseded" && p.groupKey.startsWith("rn:"))).map((p) => [p.groupKey, p.id]));
+  // `rn:`（群,日,名）key 跨來源去重：名單路徑同短訊路徑可能落喺唔同 session（按訊息月份），所以 rn: 唔限 session 查
+  const prior = keys.length ? await tx.triageQuestion.findMany({ where: { groupKey: { in: keys }, OR: [{ sessionId }, { groupKey: { startsWith: "rn:" }, session: { sourceType: "whatsapp" } }] }, select: { id: true, groupKey: true, status: true } }) : [];
+  // `rn:` 題撤回後 superseded → 重發同一個名要可以再開（只計 open／answered／skipped）
+  const existing = new Map<string, string>();
+  for (const p of prior) if (!(p.status === "superseded" && p.groupKey.startsWith("rn:")) && !existing.has(p.groupKey)) existing.set(p.groupKey, p.id);
   const fresh = drafts.filter((d) => !existing.has(d.groupKey));
   const created: InsertedQuestion[] = [];
   if (fresh.length > 0) {
@@ -225,8 +232,9 @@ export async function createWaQuestionsTx(tx: Tx, args: { msg: WaMessageCtx; gro
   const { created, existing } = await insertWaQuestions(tx, session.id, drafts);
   for (const c of created) await tx.whatsappIntent.update({ where: { id: c.intentId }, data: { resultRef: c.id } });
   // 已存在嘅題（重送／重跑）：result_ref 補返
+  const createdByKey = new Map(created.map((c) => [c.groupKey, c.id]));
   for (const d of drafts) {
-    const qid = existing.get(d.groupKey);
+    const qid = existing.get(d.groupKey) ?? createdByKey.get(d.groupKey); // 同批重複 key 嘅後尾 intent 亦指向同一題
     if (qid) await tx.whatsappIntent.update({ where: { id: d.evidence.message.intent_id }, data: { resultRef: qid } });
   }
   let madeMismatch = 0;
