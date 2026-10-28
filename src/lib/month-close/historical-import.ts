@@ -15,7 +15,7 @@ import { withReportContext } from "@/lib/reports/context";
 import { writeAudit } from "@/lib/audit";
 import { ApiError, Conflict } from "@/lib/api/errors";
 import { safeErrorSummary } from "@/lib/api/http";
-import { reconcileUpload } from "@/lib/roster-upload/reconcile";
+import { reconcileUpload, BROKER_CODE_UNMATCHED_TOLERATED } from "@/lib/roster-upload/reconcile";
 import { HISTORICAL_ROSTER_SOURCE } from "@/lib/guard-fix/apply";
 import { AutoCollector } from "./auto/context";
 import { loadPostorderEvidence } from "./auto/postorder-evidence";
@@ -58,6 +58,8 @@ interface HistImportSiteReport {
   shiftTypeDiff: number;
   unresolved: number;
   unresolvedByReason: Partial<Record<UnresolvedBucket, number>>;
+  /** 雞頭碼對唔到、歷史模式容忍照寫入（結算雞頭留空，reason=broker_code_unmatched_tolerated）嘅格數。 */
+  brokerTolerated: number;
 }
 
 export interface HistImportReport {
@@ -65,7 +67,7 @@ export interface HistImportReport {
   before: HistImportCounts;
   after: HistImportCounts;
   created: { sites: number; shiftTypes: number; guards: number; siteAliases: number; noTimeShiftTypes: Array<{ site: string; code: string }> };
-  totals: { uploads: number; parseFailedUploads: number; cells: number; written: number; rosterOnly: number; settlementDiff: number; guardDiff: number; shiftTypeDiff: number; unresolved: number; unresolvedByReason: Partial<Record<UnresolvedBucket, number>> };
+  totals: { uploads: number; parseFailedUploads: number; cells: number; written: number; rosterOnly: number; settlementDiff: number; guardDiff: number; shiftTypeDiff: number; unresolved: number; unresolvedByReason: Partial<Record<UnresolvedBucket, number>>; brokerTolerated: number };
   perSite: HistImportSiteReport[];
   postorder: ({ uploaded: true; fileName: string } & PostorderRosterCompare) | { uploaded: false };
   needsHuman: string[];
@@ -259,6 +261,7 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
     shiftTypeDiff: 0,
     unresolved: 0,
     unresolvedByReason: {},
+    brokerTolerated: 0,
   };
   for (const u of uploads) {
     const { items, summary } = await reconcileUpload(u.id);
@@ -277,6 +280,7 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
       shiftTypeDiff: summary.byCategory.shift_type_diff,
       unresolved: summary.byCategory.unresolved,
       unresolvedByReason: byReason,
+      brokerTolerated: items.filter((it) => it.roster?.settlementReason === BROKER_CODE_UNMATCHED_TOLERATED).length,
     };
     perSite.push(row);
     totals.cells += row.cells;
@@ -286,6 +290,7 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
     totals.guardDiff += row.guardDiff;
     totals.shiftTypeDiff += row.shiftTypeDiff;
     totals.unresolved += row.unresolved;
+    totals.brokerTolerated += row.brokerTolerated;
     addBuckets(totals.unresolvedByReason, byReason);
   }
 

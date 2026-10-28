@@ -8,6 +8,7 @@ import { POST as createUpload } from "@/app/api/roster-uploads/route";
 import { markHistoricalMonth } from "@/lib/month-close/historical";
 import { runHistoricalImport, claimHistoricalImportRun, type HistImportReport } from "@/lib/month-close/historical-import";
 import { stepParseHealth } from "@/lib/month-close/one-click";
+import { reconcileUpload } from "@/lib/roster-upload/reconcile";
 
 const MAR = new Date(Date.UTC(2026, 2, 1));
 
@@ -142,5 +143,41 @@ describe("HIST-3 歷史導入：更種自動建立", () => {
     await upload(await rosterXlsx({ site: "測試現有盤", people: [{ staffNo: "T-A01", name: "測試保安員甲", broker: "TEST-BA", time: "1430-2330", codes: ["M", "M", "M"] }] }));
     await stepParseHealth(MAR, fx.userIds["老闆"]);
     expect(await prisma.shiftType.count({ where: { siteId: site.id } })).toBe(1);
+  });
+
+  it("項4：雞頭碼欄寫工時（11hrs）→ 歷史模式照寫入、結算雞頭 null、報告計 brokerTolerated；有效雞頭碼照舊", async () => {
+    const site = await prisma.site.create({ data: { canonicalName: "測試工時盤", clientName: "測試客戶Z", billingModel: "per_shift", createdBy: "test" } });
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date(Date.UTC(1970, 0, 1, 7, 0)), endTime: new Date(Date.UTC(1970, 0, 1, 19, 0)), hours: 12, billingGroup: "per_shift", createdBy: "test" } });
+    await upload(
+      await rosterXlsx({
+        site: "測試工時盤",
+        people: [
+          { staffNo: "T-A01", name: "測試保安員甲", broker: "11hrs", time: "0700-1900", codes: ["D", "D", "D"] },
+          { staffNo: "T-B01", name: "測試保安員乙", broker: "TEST-BA", time: "0700-1900", codes: ["D", "D", ""] },
+        ],
+      }),
+    );
+    const { report } = await runImport();
+    expect(report.perSite[0]!.unresolved).toBe(0);
+    expect(report.perSite[0]!.brokerTolerated).toBe(3);
+    expect(report.totals.brokerTolerated).toBe(3);
+    const recs = await prisma.shiftRecord.findMany({ where: { siteId: site.id }, select: { guardId: true, settlementBrokerId: true } });
+    expect(recs).toHaveLength(5);
+    expect(recs.filter((r) => r.guardId === fx.guardA.id).every((r) => r.settlementBrokerId === null)).toBe(true);
+    expect(recs.filter((r) => r.guardId === fx.guardB.id).every((r) => r.settlementBrokerId === fx.brokerA.id)).toBe(true);
+    // 冪等：再跑一次寫入數不變
+    await runImport();
+    expect(await prisma.shiftRecord.count({ where: { siteId: site.id } })).toBe(5);
+  });
+
+  it("項4 對照：非歷史月份雞頭碼對唔到照舊 unresolved（唔寫入）", async () => {
+    await prisma.monthClose.updateMany({ data: { historical: false } });
+    const site = await prisma.site.create({ data: { canonicalName: "測試工時盤", clientName: "測試客戶Z", billingModel: "per_shift", createdBy: "test" } });
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date(Date.UTC(1970, 0, 1, 7, 0)), endTime: new Date(Date.UTC(1970, 0, 1, 19, 0)), hours: 12, billingGroup: "per_shift", createdBy: "test" } });
+    await upload(await rosterXlsx({ site: "測試工時盤", people: [{ staffNo: "T-A01", name: "測試保安員甲", broker: "11hrs", time: "0700-1900", codes: ["D", "D", "D"] }] }));
+    const up = await prisma.rosterUpload.findFirstOrThrow({ where: { month: MAR } });
+    const { items, summary } = await reconcileUpload(up.id);
+    expect(summary.byCategory.unresolved).toBe(3);
+    expect(items.every((i) => (i.unresolvedReason ?? "").includes("雞頭碼"))).toBe(true);
   });
 });
