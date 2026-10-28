@@ -5,6 +5,7 @@ import { fakeTel } from "./fake-tel";
 import { buildGuardFixPlan } from "@/lib/guard-fix/plan";
 import { applyGuardFixPlan } from "@/lib/guard-fix/apply";
 import type { GuardFixPlan } from "@/lib/guard-fix/types";
+import type { UTeamRow } from "@/lib/guard-fix/sources";
 
 export const MAR = new Date(Date.UTC(2026, 2, 1));
 
@@ -62,9 +63,9 @@ export async function mkRows(opts: Parameters<typeof mkRow>[0], count: number) {
   for (let i = 0; i < count; i++) await mkRow({ ...opts, day: (opts.day ?? 1) + i, rowIndex: opts.rowIndex });
 }
 
-export async function planAndApply(historical = true): Promise<{ plan: GuardFixPlan; diffs: Awaited<ReturnType<typeof applyGuardFixPlan>> }> {
+export async function planAndApply(historical = true, uTeamRows: UTeamRow[] = []): Promise<{ plan: GuardFixPlan; diffs: Awaited<ReturnType<typeof applyGuardFixPlan>> }> {
   await prisma.broker.upsert({ where: { code: "Y" }, create: { code: "Y", name: "測試Y", kind: "internal_cash", settlementType: "cash", createdBy: "test" }, update: {} });
-  const plan = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows: [], historical });
+  const plan = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows, historical });
   const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, month: MAR, historicalRoster: historical });
   return { plan, diffs };
 }

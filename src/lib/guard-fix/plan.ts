@@ -10,11 +10,11 @@ import type { PrismaClient } from "@prisma/client";
 import { matchGuard, buildGuardMatchIndex, matchBroker, matchSite, isMergedAwayGuard, type BrokerCandidate, type GuardMatchIndex, type SiteCandidate } from "@/lib/roster-upload/match";
 import { normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
-import { buildUTeamIndex, canonicalHkid, type UTeamRow, type UTeamIndex } from "@/lib/guard-fix/sources";
+import { buildUTeamIndex, canonicalHkid, uNumberKey, type UTeamRow, type UTeamIndex } from "@/lib/guard-fix/sources";
 import { derivePostorderLongtermPostsFromPostorderCsv, type PostorderLongtermPostCell, type PostorderReferralRow, type PostorderVisaResult } from "@/lib/guard-fix/postorder";
 import { inferReferralBrokerFromRosters } from "@/lib/pricing/longterm-settlement";
 import type { GuardFixPlan, GuardFixIdentity, LinkAction, CreateAction, CreateMinimalAction, NeedsBossAction, MergeGuardsAction, GuardFixCellRef, SetLongtermAction, SetLongtermPostAction, SetReferralAction, SetReferralInferredAction, SetVisaAction } from "@/lib/guard-fix/types";
-import { buildHistPlanContext, conflictingMethodsRemaining, decideHistoricalIdentity, needsBossToRemaining, overrideKeyOf, type HistDecision, type HistIdentityInput, type HistPlanContext } from "@/lib/guard-fix/historical-plan";
+import { buildHistPlanContext, conflictingMethodsRemaining, decideHistoricalIdentity, decideUTeamDuplicateMinimal, needsBossToRemaining, overrideKeyOf, pickUTeamDuplicateRow, uteamPickInference, type HistDecision, type HistIdentityInput, type HistPlanContext } from "@/lib/guard-fix/historical-plan";
 import { isHistNameOnlyOverride } from "@/lib/roster-upload/guard-index";
 import { HIST_RULE_CONFIDENCE, foldName, type HistInference, type HistRemaining, type HistReviewHint } from "@/lib/month-close/hist-inference";
 
@@ -165,7 +165,7 @@ function findByTel(telRaw: string | null, telIndex: Map<string, Set<string>>): L
 }
 
 function findByHkid(staffNoRaw: string | null, nameRaw: string, uTeam: UTeamIndex, hkidIndex: Map<string, Set<string>>): LinkMethodResult | null {
-  const uNumber = staffNoRaw ? normalizeStaffNumber(staffNoRaw) : null;
+  const uNumber = staffNoRaw ? uNumberKey(staffNoRaw) : null;
   const uRow = (uNumber && uTeam.byUNumber.get(uNumber)) || (uTeam.byName.get(nameRaw)?.length === 1 ? uTeam.byName.get(nameRaw)![0] : null);
   const canon = canonicalHkid(uRow?.hkid);
   if (!canon) return null;
@@ -574,9 +574,11 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
         return true;
       case "create_minimal":
         createMinimal.push({ ...d.create, seq: identity.seq, defaultBrokerCode });
+        for (const h of d.hints ?? []) histHints.push({ ...h, cells: identity.totalCellCount, seq: identity.seq });
         return true;
       case "merge":
         mergeGuards.push({ ...d.merge, seq: identity.seq });
+        for (const h of d.hints ?? []) histHints.push({ ...h, cells: identity.totalCellCount, seq: identity.seq });
         return true;
       case "remaining":
         histRemaining.push({ ...d.remaining, seq: identity.seq });
@@ -693,14 +695,31 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       continue;
     }
 
-    const uNumber = identity.staffNoRaw ? normalizeStaffNumber(identity.staffNoRaw) : null;
-    const uRowByNumber = uNumber ? uTeam.byUNumber.get(uNumber) : undefined;
+    const uNumber = identity.staffNoRaw ? uNumberKey(identity.staffNoRaw) : null;
+    const uRowByNumberExact = uNumber ? uTeam.byUNumber.get(uNumber) : undefined;
     const uRowsByName = uTeam.byName.get(identity.nameRaw) ?? [];
-    const uRow = uRowByNumber ?? (uRowsByName.length === 1 ? uRowsByName[0] : undefined);
-
+    let uRow = uRowByNumberExact ?? (uRowsByName.length === 1 ? uRowsByName[0] : undefined);
+    let uRowByNumber = uRowByNumberExact;
+    // HIST-5.1 R6：歷史模式名單同名多行 → 分辨（工號／R6a 身份證一致／R6b 電話），唔再 needs_boss。
+    let dupPickRule: "R6a" | "R6b" | null = null;
+    let fromDup = false;
+    const rowTelNorm = identity.telRaw ? normalizeTel(identity.telRaw) : null;
     if (!uRow && uRowsByName.length > 1) {
-      needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: "U Team 名單同名多過一個，決定唔到用邊一行，交老闆睇", candidateGuardIds: [] });
-      continue;
+      if (!histCtx) {
+        needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: "U Team 名單同名多過一個，決定唔到用邊一行，交老闆睇", candidateGuardIds: [] });
+        continue;
+      }
+      const pick = pickUTeamDuplicateRow(uRowsByName, identity.staffNoRaw, identity.telRaw);
+      if (!pick) {
+        // R6c：分辨唔到 → 唔用名單資料，按更表姓名建獨立保安員（電話屬別人就留空，同 R2）。
+        const d = decideUTeamDuplicateMinimal(histCtx, histInputOf(identity), { tel: rowTelNorm && !telIndex.has(rowTelNorm) ? rowTelNorm : null, rowCount: uRowsByName.length });
+        applyHistDecision(d, identity, defaultBrokerCode);
+        continue;
+      }
+      uRow = pick.row;
+      fromDup = true;
+      if (pick.via === "number") uRowByNumber = pick.row;
+      else dupPickRule = pick.via;
     }
 
     if (uRow) {
@@ -714,7 +733,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
             ? "名單身份證已經喺 DB（同身份證已有保安員），唔可以再起一個"
             : uNumberForCreate && staffNoOwner.has(uNumberForCreate)
               ? "名單工號已經屬 DB 另一位保安員（任何狀態，含已取消——規則 8 唔復用）"
-              : !uRowByNumber && (!rowTel || !uRow.tel || rowTel !== uRow.tel)
+              : !uRowByNumber && !fromDup && (!rowTel || !uRow.tel || rowTel !== uRow.tel)
                 ? !rowTel || !uRow.tel
                   ? "淨係靠姓名喺名單搵到，更表／名單冇電話可以核對（可能同名唔同人）"
                   : "淨係靠姓名喺名單搵到，而更表電話同名單電話對唔上（可能同名唔同人）"
@@ -725,7 +744,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       // （cash_casual、無工號、無身份證），待核。其餘拒絕原因（身份證／
       // 工號已喺 DB）照舊交老闆（嗰啲係「DB 可能已經有呢個人」，唔可以
       // 再起一個）。
-      const nameOnlyUnverified = !uRowByNumber && !(uRow.hkidNote === "mentions_other_number") && !(uRowHkidCanon && hkidIndex.has(uRowHkidCanon)) && !(uNumberForCreate && staffNoOwner.has(uNumberForCreate));
+      const nameOnlyUnverified = !uRowByNumber && !fromDup && !(uRow.hkidNote === "mentions_other_number") && !(uRowHkidCanon && hkidIndex.has(uRowHkidCanon)) && !(uNumberForCreate && staffNoOwner.has(uNumberForCreate));
       if (refuse && nameOnlyUnverified && (guardIndex.byName.get(identity.nameRaw)?.length ?? 0) + (guardIndex.byAlias.get(identity.nameRaw)?.length ?? 0) === 0) {
         createMinimal.push({
           type: "create_minimal",
@@ -737,6 +756,12 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
           conservative: "name_only_unverified",
           matchOverrideStaffNo: null,
         });
+        continue;
+      }
+      if (refuse && fromDup && histCtx) {
+        // HIST-5.1 R6c：名單同名多行選中嘅行被原有 refuse 條件拒 → 唔再 needs_boss，改建獨立保安員（唔用名單資料）。
+        const d = decideUTeamDuplicateMinimal(histCtx, histInputOf(identity), { tel: rowTel && !telIndex.has(rowTel) ? rowTel : null, rowCount: uRowsByName.length, refuse });
+        applyHistDecision(d, identity, defaultBrokerCode);
         continue;
       }
       if (refuse) {
@@ -768,9 +793,10 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
         secondaryTel: claim(secondaryTel),
         hkid: uRow.hkid,
         hireDate: uRow.hireDate,
-        uNumber: uRow.uNumber ?? uNumber,
+        uNumber: uRow.uNumber ? uNumberKey(uRow.uNumber) : uNumber,
         defaultBrokerCode,
-        reason: uRowByNumber ? "U Team 名單 U 號搵到" : "U Team 名單姓名搵到（冇 U 號）",
+        reason: uRowByNumber ? "U Team 名單 U 號搵到" : dupPickRule ? `U Team 名單同名 ${uRowsByName.length} 行，${dupPickRule === "R6a" ? "身份證一致用第一行" : "更表電話對到其中一行"}（HIST5 ${dupPickRule}）` : "U Team 名單姓名搵到（冇 U 號）",
+        ...(dupPickRule && histCtx ? { inference: uteamPickInference(histInputOf(identity), dupPickRule, uRowsByName.length) } : {}),
       });
       continue;
     }
@@ -794,7 +820,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       if (!identity) continue;
       histRemaining.push({ ...(await needsBossToRemaining(histCtx, histInputOf(identity), nb)), seq: nb.seq });
     }
-    applyR4Clusters({ createMinimal, link, identities, histInputOf, staffNoOwner });
+    applyR4Clusters({ createMinimal, link, identities, histInputOf, staffNoOwner, histHints });
   }
 
   let setLongterm: SetLongtermAction[] = [];
@@ -895,8 +921,10 @@ function applyR4Clusters(params: {
   identities: GuardFixIdentity[];
   histInputOf: (i: GuardFixIdentity) => HistIdentityInput;
   staffNoOwner: Map<string, string>;
+  /** 被合併成員嘅抽查提示（例如 R6c）改掛喺主身份 seq，免得 apply 後收集唔到。 */
+  histHints: Array<HistReviewHint & { seq: string }>;
 }): void {
-  const { createMinimal, link, identities, histInputOf, staffNoOwner } = params;
+  const { createMinimal, link, identities, histInputOf, staffNoOwner, histHints } = params;
   const identityBySeq = new Map(identities.map((i) => [i.seq, i]));
   const groups = new Map<string, CreateMinimalAction[]>();
   for (const cm of createMinimal) {
@@ -941,6 +969,7 @@ function applyR4Clusters(params: {
       if (m.cm.extraInferences) extra.push(...m.cm.extraInferences);
       if (!pCm.tel && m.cm.tel) pCm.tel = m.cm.tel;
       drop.add(m.cm.seq);
+      for (const h of histHints) if (h.seq === m.cm.seq) h.seq = pCm.seq;
     }
     const overrides = [keyOf(primary.idn), ...rest.map((m) => keyOf(m.idn)), ...members.flatMap((m) => m.cm.overrides ?? [])];
     const uniqueOverrides = [...new Map(overrides.map((o) => [overrideKeyOf(o.staffNo, o.nameRaw), o])).values()];

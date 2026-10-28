@@ -5,12 +5,15 @@
 import type { PrismaClient } from "@prisma/client";
 import { normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
 import { HISTORICAL_ROSTER_SOURCE } from "@/lib/guard-fix/apply";
+import { normalizeTel } from "@/lib/guards/contacts";
 import { isMergedAwayGuard } from "@/lib/roster-upload/match";
+import { uNumberKey, type UTeamRow } from "@/lib/guard-fix/sources";
 import type { CreateMinimalAction, LinkAction, MergeGuardsAction } from "@/lib/guard-fix/types";
 import {
   HIST_RULE_CONFIDENCE,
   foldName,
   isNameVariant,
+  isStrictNameVariant,
   longestConsecutiveRunContaining,
   type HistInference,
   type HistInferenceRule,
@@ -64,8 +67,8 @@ export interface HistIdentityInput {
 
 export type HistDecision =
   | { kind: "link"; link: Omit<LinkAction, "seq">; hints: Array<Omit<HistReviewHint, "cells">> }
-  | { kind: "create_minimal"; create: Omit<CreateMinimalAction, "seq" | "defaultBrokerCode"> }
-  | { kind: "merge"; merge: Omit<MergeGuardsAction, "seq"> }
+  | { kind: "create_minimal"; create: Omit<CreateMinimalAction, "seq" | "defaultBrokerCode">; hints?: Array<Omit<HistReviewHint, "cells">> }
+  | { kind: "merge"; merge: Omit<MergeGuardsAction, "seq">; hints?: Array<Omit<HistReviewHint, "cells">> }
   | { kind: "remaining"; remaining: HistRemaining }
   | { kind: "fallthrough" };
 
@@ -286,10 +289,19 @@ export async function decideHistoricalIdentity(ctx: HistPlanContext, input: Hist
       const a = ctx.guards.get(telGuardId);
       if (!a) return { kind: "fallthrough" };
       if (overrideAlreadyThere) return overrideNotEffective(ctx, identity, [telGuardId]);
-      const variant = [a.nameZh, ...a.nameAliases].some((n) => isNameVariant(identity.nameRaw, n));
+      const aNames = [a.nameZh, ...a.nameAliases];
+      const variant = aNames.some((n) => isNameVariant(identity.nameRaw, n));
       if (variant) {
-        const evidence = [`更表電話屬「${a.nameZh}」（${numbersText(ctx, telGuardId)}）`, `更表姓名${nameText}同「${a.nameZh}」係變體（簡繁／NFKC／後綴／相差一字）`, ...(snOwnerId && snOwnerId !== telGuardId ? [`更表工號 ${sn} 屬另一位「${guardName(ctx, snOwnerId)}」，唔加工號`] : [])];
-        return { kind: "link", link: linkAction(ctx, identity, telGuardId, "R2b", `連結到「${a.nameZh}」並加更表用名做別名`, evidence, { addStaffNumber: true }), hints: [] };
+        // HIST-5.1：淨係「3 字名姓同、名差一字」（形近／同音）先中 → 信心降 0.05。
+        const loose = !aNames.some((n) => isStrictNameVariant(identity.nameRaw, n));
+        const evidence = [
+          `更表電話屬「${a.nameZh}」（${numbersText(ctx, telGuardId)}）`,
+          `更表姓名${nameText}同「${a.nameZh}」係變體（簡繁／NFKC／後綴／相差一字${loose ? "；3 字名姓相同、名差一字（形近／同音）" : ""}）`,
+          ...(snOwnerId && snOwnerId !== telGuardId ? [`更表工號 ${sn} 屬另一位「${guardName(ctx, snOwnerId)}」，唔加工號`] : []),
+        ];
+        const la = linkAction(ctx, identity, telGuardId, "R2b", `連結到「${a.nameZh}」並加更表用名做別名`, evidence, { addStaffNumber: true });
+        if (loose && la.inference) la.inference = { ...la.inference, confidence: Math.round((la.inference.confidence - 0.05) * 100) / 100 };
+        return { kind: "link", link: la, hints: [] };
       }
       const evidence = [`更表電話屬另一位保安員「${a.nameZh}」，但更表姓名${nameText}DB 冇、同「${a.nameZh}」亦唔係變體`, "疑共用電話（家人／雞頭電話）→ 建獨立保安員，電話留空"];
       return {
@@ -315,7 +327,7 @@ export async function decideHistoricalIdentity(ctx: HistPlanContext, input: Hist
   const allMinimal = candRows.every((g) => isHistoricalMinimalGuard(ctx, g));
   if (overrideAlreadyThere) return overrideNotEffective(ctx, identity, cands);
 
-  const mergeAction = (keeper: HistGuardRow, rule: "R3a" | "R3b", mergeIds: string[], evidence: string[]): HistDecision => ({
+  const mergeAction = (keeper: HistGuardRow, rule: "R3a" | "R3b" | "R3d", mergeIds: string[], evidence: string[]): HistDecision => ({
     kind: "merge",
     merge: {
       type: "merge_guards",
@@ -347,6 +359,25 @@ export async function decideHistoricalIdentity(ctx: HistPlanContext, input: Hist
     const keeper = [...candRows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))[0]!;
     const evidence = [`DB 同名候選 ${cands.length} 個，全部係歷史導入自己建嘅 minimal guard（冇工號冇電話）`, "保留最早建立嗰個，其餘 shift_records／長工崗位改指保留者"];
     return mergeAction(keeper, "R3a", cands.filter((id) => id !== keeper.id), evidence);
+  }
+
+  // R3d（HIST-5.1）：剛好一個真實 guard，其餘全部係歷史導入 minimal → 併入真實嗰個（真實有同盤盤史信心 0.75，否則 0.7）。
+  const realCands = candRows.filter((g) => !isHistoricalMinimalGuard(ctx, g));
+  if (realCands.length === 1) {
+    const keeper = realCands[0]!;
+    const minimalIds = candRows.filter((g) => g.id !== keeper.id).map((g) => g.id);
+    const keeperHist = (await historyCellsByGuard(ctx, [keeper.id], identity.siteIds)).get(keeper.id) ?? 0;
+    const evidence = [
+      `DB 同名候選 ${cands.length} 個：1 個真實保安員「${keeper.nameZh}」（${numbersText(ctx, keeper.id)}）＋${minimalIds.length} 個歷史導入 minimal guard（冇工號冇電話）`,
+      keeperHist > 0 ? `真實保安員喺同一盤（含子盤）±3 個月內有 ${keeperHist} 條更次` : "真實保安員喺同一盤±3 個月內冇更次",
+      "minimal 嘅 shift_records／長工崗位／覆寫併入真實保安員",
+    ];
+    const d = mergeAction(keeper, "R3d", minimalIds, evidence);
+    if (d.kind === "merge") {
+      if (keeperHist > 0) d.merge.inference = { ...d.merge.inference, confidence: 0.75 };
+      d.hints = [{ rule: "R3d", subject: d.merge.inference.subject, hint: "歷史 minimal 同名併入真實保安員", evidence: [...evidence] }];
+    }
+    return d;
   }
 
   // R3c：用盤史揀
@@ -421,3 +452,75 @@ export async function needsBossToRemaining(ctx: HistPlanContext, identity: HistI
   };
 }
 
+
+
+// ---------------------------------------------------------------------------
+// HIST-5.1 R6：U Team 名單同名多行（`uRowsByName.length > 1`）——分辨，唔再 needs_boss。
+// ---------------------------------------------------------------------------
+
+export interface UTeamDupPick {
+  via: "number" | "R6a" | "R6b";
+  row: UTeamRow;
+}
+
+/** 名單同名多行，按次序揀：(1) 更表工號等於其中一行 U 號；(2) R6a 各行身份證全部相同（≥1 行有身份證，其餘空）→ 有身份證嗰行優先；
+ * (3) R6b 更表電話剛好等於其中一行電話。都唔得＝null（caller 走 R6c）。純函數，唔睇 DB。 */
+export function pickUTeamDuplicateRow(rows: UTeamRow[], staffNoRaw: string | null, telRaw: string | null): UTeamDupPick | null {
+  const uNumber = staffNoRaw ? uNumberKey(staffNoRaw) : null;
+  if (uNumber) {
+    const hits = rows.filter((r) => r.uNumber && uNumberKey(r.uNumber) === uNumber);
+    if (hits.length > 0) return { via: "number", row: hits.find((r) => r.hkid) ?? hits[0]! };
+  }
+  const hkids = new Set(rows.map((r) => r.hkid).filter((h): h is string => !!h));
+  if (hkids.size === 1) return { via: "R6a", row: rows.find((r) => r.hkid) ?? rows[0]! };
+  const rowTel = telRaw ? normalizeTel(telRaw) : null;
+  if (rowTel) {
+    const hits = rows.filter((r) => r.tel && normalizeTel(r.tel) === rowTel);
+    if (hits.length === 1) return { via: "R6b", row: hits[0]! };
+  }
+  return null;
+}
+
+/** R6a／R6b 選中名單行之後照舊 `create`，帶呢個推斷（evidence 唔出電話／身份證值）。 */
+export function uteamPickInference(identity: HistIdentityInput, rule: "R6a" | "R6b", rowCount: number): HistInference {
+  const nameText = `「${identity.nameRaw}」`;
+  const evidence =
+    rule === "R6a"
+      ? [`U Team 名單有 ${rowCount} 個同名行${nameText}，身份證全部一致（有身份證嗰行優先）→ 判斷為名單重複行`, "用第一行（有身份證嗰行）建保安員（身份證／入職日／U 號照名單）"]
+      : [`U Team 名單有 ${rowCount} 個同名行${nameText}`, "更表電話剛好等於其中一行嘅電話 → 用嗰行建保安員（身份證／入職日／U 號照名單）"];
+  return inferenceOf(rule, identity, rule === "R6a" ? "名單同名重複行，用第一行建保安員" : "名單同名多行，按電話揀行建保安員", evidence);
+}
+
+/** R6c：分辨唔到邊行（或選中行被原有 refuse 條件拒）→ 唔用名單資料，按更表姓名建獨立保安員（待核）。
+ * tel：caller 已按 R2 規則處理（電話屬別人就傳 null）。更表工號 DB 冇人用就登記 current，否則只寫 override。 */
+export function decideUTeamDuplicateMinimal(ctx: HistPlanContext, identity: HistIdentityInput, opts: { tel: string | null; rowCount: number; refuse?: string }): Extract<HistDecision, { kind: "create_minimal" }> {
+  const nameText = `「${identity.nameRaw}」`;
+  const staffNumber = staffNumberAddition(ctx, identity, "");
+  const evidence = [
+    `U Team 名單有 ${opts.rowCount} 個同名行${nameText}，${opts.refuse ? `選中嘅行被拒（${opts.refuse}）` : "身份證唔一致、電話亦對唔上，分辨唔到邊一行"}`,
+    "唔用名單資料，按更表姓名建獨立保安員",
+    staffNumber ? `更表工號 ${staffNumber.number} DB 冇人用，登記做 current` : identity.staffNoRaw ? "更表工號 DB 已有人用／格式唔啱，唔登記，只寫配對覆寫" : "更表冇工號，只寫配對覆寫",
+    ...(opts.tel ? [] : ["電話留空（更表冇電話或電話屬別人）"]),
+  ];
+  const inference = inferenceOf("R6c", identity, "唔用名單資料，按更表姓名建獨立保安員", evidence);
+  return {
+    kind: "create_minimal",
+    create: {
+      type: "create_minimal",
+      nameZh: identity.nameRaw,
+      tel: opts.tel,
+      reason: `HIST5 R6c：U Team 名單同名 ${opts.rowCount} 行${opts.refuse ? `（${opts.refuse}）` : "分辨唔到"}——唔用名單資料，按更表姓名建獨立保安員，待核`,
+      staffNumber,
+      overrides: [identityOverrideKey(identity)],
+      inference,
+    },
+    hints: [
+      {
+        rule: "R6c",
+        subject: inference.subject,
+        hint: `名單有 ${opts.rowCount} 個同名行，未用名單資料（身份證／入職日未補）${opts.refuse ? `；選中行被拒：${opts.refuse}` : ""}`,
+        evidence: [...evidence],
+      },
+    ],
+  };
+}

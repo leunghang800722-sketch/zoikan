@@ -684,6 +684,8 @@ export function collectHistInferences(plan: GuardFixPlan, diffs: Awaited<ReturnT
   const created = (d: { create: string[] }) => new Set(d.create);
   const linkSeqs = created(diffs.link);
   for (const la of plan.actions.link) if (linkSeqs.has(la.seq)) add(la.inference);
+  const createSeqs = created(diffs.create);
+  for (const ca of plan.actions.create) if (createSeqs.has(ca.seq)) add(ca.inference);
   const cmSeqs = created(diffs.createMinimal);
   for (const cm of plan.actions.createMinimal) {
     if (!cmSeqs.has(cm.seq)) continue;
@@ -693,7 +695,7 @@ export function collectHistInferences(plan: GuardFixPlan, diffs: Awaited<ReturnT
   const mergeSeqs = created(diffs.mergeGuards);
   for (const ma of plan.actions.mergeGuards ?? []) if (mergeSeqs.has(ma.seq)) add(ma.inference);
   for (const h of plan.historical?.reviewHints ?? []) {
-    if (!linkSeqs.has(h.seq)) continue;
+    if (!linkSeqs.has(h.seq) && !cmSeqs.has(h.seq) && !mergeSeqs.has(h.seq)) continue;
     const rest = withoutSeq(h);
     hints.set(`${rest.rule}|${rest.subject.name ?? ""}|${rest.subject.staffNo ?? ""}`, rest);
   }

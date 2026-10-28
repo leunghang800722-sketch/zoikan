@@ -629,9 +629,15 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 | R3a | 同名多候選，全部係歷史導入 minimal guard（created_by 結尾 `:historical_roster`、冇工號冇電話） | 合併：保留最早建嗰個，其餘 shift_records／長工崗位／覆寫改指保留者（撞 `guardId_workDate_shiftTypeId` unique 嘅留喺原位），被合併者 inactive＋`merged_from` 記 `merged_into:<id>`（配對索引排除） | 0.9 |
 | R3b | 一個本名完全相同＋其餘係後綴／簡繁變體 | 揀本名相同嗰個；變體係 minimal 就合併，係真人就只連結 | 0.9 |
 | R3c | ≥2 個真實同名 guard | 盤史（同盤含子盤 ±3 個月、唔計 cancelled 更次）：只有一個有 → link；兩個都有／都冇 → `remaining`，`recommended` 揀同盤更多嗰個（都冇揀 active） | 0.8（自動 link）／0.6／0.5（recommended） |
+| R3d（HIST-5.1） | 同名候選剛好一個真實 guard、其餘全部係歷史導入 minimal（`:historical_roster`、冇工號冇電話）；`no_history`／`both_history` 都適用 | 併入真實嗰個（同 R3a 合併機制：shift_records／長工崗位／覆寫搬過去，minimal inactive＋`merged_into`），加別名／工號覆寫；另列 review_hint「歷史 minimal 同名併入真實保安員」 | 0.7（真實 guard 同盤±3 個月有更次 0.75） |
 | R4 | 同一次未配對集合內，姓名折返後相同但工號唔同／其一冇工號 | 當同一人：格數最多嗰個身份為主（工號 DB 冇人用就登記 current），其餘（含冇工號）寫覆寫；變體名加別名；同時套用 R2 電話規則 | 0.9 |
+| R6a（HIST-5.1） | U Team 名單同名多行（原本一律 needs_boss `other`），各行身份證（canonical）全部相同（只有部分行有、其餘空亦算；全部冇身份證唔算） | 用第一行（有身份證嗰行優先）照舊 `create`（身份證／入職日／U 號照名單），帶推斷 | 0.85 |
+| R6b（HIST-5.1） | 同上但身份證唔一致，更表電話（normalizeTel）剛好等於其中一行電話 | 用嗰行 `create` | 0.85 |
+| R6c（HIST-5.1） | 同上但 R6a／R6b 都唔中；或者選中嘅行被原有 refuse 條件拒（身份證已喺 DB／工號屬別人／備註話用緊另一個號） | 唔用名單資料，按更表姓名 `create_minimal`（tel 照 R2：電話屬別人就留空；更表工號 DB 冇人用就登記 current，否則只寫 override）＋ review_hint「名單有 N 個同名行，未用名單資料（身份證／入職日未補）」；同名多身份仍由 R4 合一 | 0.7 |
 | R5 | 原有 create_minimal（名單／DB 全部搵唔到），建人時電話撞 DB（`tel_skipped_duplicate`） | 電話留空（原本靜靜跳過，而家入 `inferences`） | 0.85 |
 | conflicting_methods | 電話同身份證指唔同人（歷史模式理論上冇） | `remaining`，recommended 用姓名規則揀 | 0.6 |
+
+**名單同名多行（HIST-5.1）**：順序＝(1) 更表工號等於其中一行 U 號（U 號索引 key 經 NFKC＋去空白＋大寫，名單帶全形／空白都命中）→ 用嗰行；(2) R6a；(3) R6b；(4) R6c。R2b 姓名變體加一條：3 字名「姓相同＋名其中一字相同、另一字唔同」（形近／同音筆誤）亦當變體，信心降 0.05（0.80）；姓唔同或名兩字都唔同唔算。正式月份（`historical` 唔傳）名單同名多行照舊 needs_boss。
 
 U Team 名單被拒（身份證／工號已喺 DB 等）等其餘 needs_boss 原因亦轉 `remaining`（recommended＝建獨立保安員待核）。guard_fix step 的 `needsHuman` 同 `numbers.remainingNeedsBoss` 同報告 `remaining` 一致（`describeHistRemaining`，姓名／工號可出，電話唔出）。歷史模式唔再開分診題。⚠ 注意：保安員修復仍要先上載 U Team 名單（冇名單整個 guard_fix 略過，同 HIST-3）。
 

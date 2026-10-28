@@ -117,6 +117,11 @@ export interface UTeamIndex {
   byName: Map<string, UTeamRow[]>;
 }
 
+/** U 號查表鍵：NFKC（全形→半形）＋trim＋大寫＋去全部空白。名單／更表兩邊都經呢個，避免格式差異（全形、空白）漏撞（HIST-5.1）。 */
+export function uNumberKey(raw: string): string {
+  return normalizeStaffNumber(raw.normalize("NFKC"));
+}
+
 export function buildUTeamIndex(rows: UTeamRow[]): UTeamIndex {
   const byUNumber = new Map<string, UTeamRow>();
   const byName = new Map<string, UTeamRow[]>();
@@ -128,7 +133,7 @@ export function buildUTeamIndex(rows: UTeamRow[]): UTeamIndex {
     byName.get(key)!.push(row);
   };
   for (const row of rows) {
-    if (row.uNumber) byUNumber.set(row.uNumber, row);
+    if (row.uNumber) byUNumber.set(uNumberKey(row.uNumber), row);
     addName(row.nameZh, row);
     if (row.displayName && row.displayName !== row.nameZh) addName(row.displayName, row);
   }
