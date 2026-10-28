@@ -173,7 +173,7 @@ export interface UpsertStaffNumberResult {
 export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberInput): Promise<UpsertStaffNumberResult> {
   const scheme = input.scheme.trim().toUpperCase();
   if (!STAFF_NUMBER_SCHEME_RE.test(scheme)) {
-    throw BadRequest(`scheme 格式唔啱（要 1-4 位大寫英文字母）：${input.scheme}`);
+    throw BadRequest(`scheme 格式唔啱（要 1-4 位大寫英文字母；長度 ${input.scheme.length}）`);
   }
   const number = normalizeStaffNumber(input.number);
   // 必修 5（Opus 驗收第三輪）：原本淨係 `number.startsWith(scheme)`——
@@ -187,14 +187,14 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
   const numberLeadingLetters = number.match(/^[A-Z]+/)?.[0] ?? "";
   if (numberLeadingLetters !== scheme) {
     throw BadRequest(
-      `number 開頭連續字母要同 scheme 逐字相等（scheme=${scheme}，number 讀到嘅開頭係「${numberLeadingLetters || "（冇字母前綴）"}」）：${number}`,
+      `number 開頭連續字母要同 scheme 逐字相等（scheme=${scheme}，number 讀到嘅開頭長度 ${numberLeadingLetters.length}）`,
     );
   }
   // S2（Opus 驗收）：正規化之後仲要符合 `STAFF_NUMBER_NUMBER_RE`
   // （scheme 前綴 1-4 位大寫英文字母 + 1-16 位英文數字／連字符，總長
   // ≤20）——冇呢層會漏收例如夾埋標點/emoji/超長字串嘅工號。
   if (!STAFF_NUMBER_NUMBER_RE.test(number)) {
-    throw BadRequest(`number 格式唔啱（正規化後要係 ${scheme}+1-16 位大寫英文字母／數字／連字符，總長 ≤20）：${number}`);
+    throw BadRequest(`number 格式唔啱（正規化後要係 ${scheme}+1-16 位大寫英文字母／數字／連字符，總長 ≤20；長度 ${number.length}）`);
   }
 
   const conflictingRow = await tx.guardStaffNumber.findUnique({ where: { number } });
@@ -504,13 +504,13 @@ export async function applyLegacyStaffNoPatch(
   const changes: UpsertStaffNumberResult[] = [];
   if (staffNo) {
     const scheme = schemeFromNumber(staffNo);
-    if (!scheme) throw BadRequest(`staff_no 格式推唔到 scheme（要以 1-4 位大寫英文字母開頭）：${staffNo}`);
+    if (!scheme) throw BadRequest(`staff_no 格式推唔到 scheme（要以 1-4 位大寫英文字母開頭）`);
     // S1（Opus 驗收）：`staff_no`（舊欄）呢條快速路淨係收 U 開頭——其他
     // 種類（MP／MG／MW／將來新種類）要用「員工編號」區（`POST/PATCH
     // .../staff-numbers*`，唔限 scheme）新增／管理，唔准借呢條 legacy
     // 路後門入。
     if (scheme !== "U") {
-      throw BadRequest(`staff_no 只收 U 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNo}`);
+      throw BadRequest(`staff_no 只收 U 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理`);
     }
     changes.push(
       await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNo, source: "manual:legacy-patch(staff_no)", createdBy, now, revealConflictGuardId, replacesCurrent: true, replacedEndReason: null }),
@@ -518,11 +518,11 @@ export async function applyLegacyStaffNoPatch(
   }
   if (staffNoMw) {
     const scheme = schemeFromNumber(staffNoMw);
-    if (!scheme) throw BadRequest(`staff_no_mw 格式推唔到 scheme（要以 1-4 位大寫英文字母開頭）：${staffNoMw}`);
+    if (!scheme) throw BadRequest(`staff_no_mw 格式推唔到 scheme（要以 1-4 位大寫英文字母開頭）`);
     // S1：`staff_no_mw`（舊欄）淨係收 MG／MW——同上，其他種類請用
     // 「員工編號」區。
     if (scheme !== "MG" && scheme !== "MW") {
-      throw BadRequest(`staff_no_mw 只收 MG／MW 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNoMw}`);
+      throw BadRequest(`staff_no_mw 只收 MG／MW 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理`);
     }
     changes.push(
       await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNoMw, source: "manual:legacy-patch(staff_no_mw)", createdBy, now, revealConflictGuardId, replacesCurrent: true, replacedEndReason: null }),

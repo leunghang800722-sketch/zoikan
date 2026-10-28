@@ -608,6 +608,8 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     }
     try {
       const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: start, historicalRoster: opts?.historical === true });
+      const telBlanked = (diffs.create.warnings?.length ?? 0) + (diffs.createMinimal.warnings?.length ?? 0);
+      if (telBlanked > 0) warnings.push(`保安員修復第 ${round} 輪：${telBlanked} 個電話格式唔啱，已留空（保安員照建，電話請人手補）`);
       const reparse = await reparseAllActiveUploads(prisma, start, reparseOpts);
       await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "applied", appliedAt: new Date(), resultJson: { diffs, reparse } as unknown as Prisma.InputJsonValue } });
     } catch (e) {
