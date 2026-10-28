@@ -15,6 +15,7 @@ import { derivePostorderLongtermPostsFromPostorderCsv, type PostorderLongtermPos
 import { inferReferralBrokerFromRosters } from "@/lib/pricing/longterm-settlement";
 import type { GuardFixPlan, GuardFixIdentity, LinkAction, CreateAction, CreateMinimalAction, NeedsBossAction, MergeGuardsAction, GuardFixCellRef, SetLongtermAction, SetLongtermPostAction, SetReferralAction, SetReferralInferredAction, SetVisaAction } from "@/lib/guard-fix/types";
 import { buildHistPlanContext, conflictingMethodsRemaining, decideHistoricalIdentity, needsBossToRemaining, overrideKeyOf, type HistDecision, type HistIdentityInput, type HistPlanContext } from "@/lib/guard-fix/historical-plan";
+import { isHistNameOnlyOverride } from "@/lib/roster-upload/guard-index";
 import { HIST_RULE_CONFIDENCE, foldName, type HistInference, type HistRemaining, type HistReviewHint } from "@/lib/month-close/hist-inference";
 
 export type { GuardFixPlan } from "@/lib/guard-fix/types";
@@ -459,7 +460,8 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
   const brokerCandidates: BrokerCandidate[] = brokersRaw.map((b) => ({ id: b.id, code: b.code, aliases: b.aliases }));
   const brokerCodeById = new Map(brokersRaw.map((b) => [b.id, b.code]));
 
-  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw, matchOverrides: matchOverridesRaw });
+  // HIST-5（Opus 驗收 M1）：正式月份唔用歷史導入 AI 推斷嘅淨姓名覆寫（同 loadGuardMatchIndex 一致）。
+  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw, matchOverrides: opts.historical === true ? matchOverridesRaw : matchOverridesRaw.filter((o) => !isHistNameOnlyOverride(o)) });
 
   const telIndex = new Map<string, Set<string>>();
   const addTel = (tel: string | null, guardId: string) => {

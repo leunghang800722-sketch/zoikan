@@ -161,10 +161,10 @@ async function matchRowsAndSummarize(
   // 時段完全一樣，例如數碼港 CP5「D」）嗰陣俾 rank_raw 第三層收窄用。
   const shiftTypes: ShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup }));
 
-  const guardIndex = await loadGuardMatchIndex(tx);
-
   // HIST-5：歷史月份（month_closes.historical）——unknown 代號推斷（S1 單字母＝呢行自己嘅更；S3 跨盤代號＝另一個盤嘅名／別名）。
   const historicalMonth = !!(await tx.monthClose.findUnique({ where: { month: monthStart(month) }, select: { historical: true } }))?.historical;
+  // HIST-5（Opus 驗收 M1）：歷史導入 AI 推斷嘅淨姓名覆寫只喺歷史月份生效（正式月份同名新人唔會被搶走）。
+  const guardIndex = await loadGuardMatchIndex(tx, { includeHistInferenceOverrides: historicalMonth });
   const siteCodeKey = (s: string): string => foldVariants(s).toUpperCase().replace(/[\s()（）]/g, "");
   const crossSiteTargetByKey = new Map<string, string>();
   if (historicalMonth) {

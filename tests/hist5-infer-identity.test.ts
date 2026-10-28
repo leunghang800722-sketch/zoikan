@@ -40,7 +40,8 @@ describe("HIST-5 身份推斷 plan＋apply", () => {
   });
 
   async function bind(staffNo: string | null, name: string, tel: string | null = null) {
-    return matchGuard({ staffNoRaw: staffNo, nameRaw: name, telRaw: tel }, await loadGuardMatchIndex(prisma));
+    // 模擬歷史月份 reparse（service.ts 喺歷史月份先載入 HIST5 淨姓名覆寫；正式月份唔載入，見 hist5-formal-isolation.test.ts）。
+    return matchGuard({ staffNoRaw: staffNo, nameRaw: name, telRaw: tel }, await loadGuardMatchIndex(prisma, { includeHistInferenceOverrides: true }));
   }
 
   it("R1：工號屬別人、姓名唯一（含簡繁＋後綴）→ link 姓名對到嗰位，寫 override，唔加工號；信心 0.9＋依據", async () => {
