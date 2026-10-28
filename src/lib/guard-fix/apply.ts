@@ -437,14 +437,16 @@ export interface ReparseAllResult {
 export async function reparseAllActiveUploads(
   prisma: PrismaClient,
   month: Date,
-  opts: { txTimeoutMs?: number; actorUserId?: string | null; ip?: string | null } = {},
+  // HIST-3：歷史導入 `includeConfirmed`——重跑（上載已 confirmed）時 guard-fix 每輪套用後都要 reparse confirmed 上載，
+  // 否則新配對唔反映落 rows，下一輪 plan 重複同一批動作（收斂唔到）。正式月份唔傳＝照舊跳過 confirmed。
+  opts: { txTimeoutMs?: number; actorUserId?: string | null; ip?: string | null; includeConfirmed?: boolean } = {},
 ): Promise<ReparseAllResult> {
   // P6.1e（H5）：整月重新解析會刪重建 roster_upload_rows，已鎖月份拒絕（lib 層
   // defense-in-depth；一鍵結算／guard-fix apply route 各自亦有 pre-check）。
   await assertMonthNotLocked({ workDate: month, actorUserId: opts.actorUserId ?? null, tableName: "roster_uploads", rowId: `month:${month.toISOString().slice(0, 7)}`, ip: opts.ip ?? null });
   const confirmedUploads = await prisma.rosterUpload.findMany({ where: { month, status: "confirmed" }, select: { id: true } });
   const uploads = await prisma.rosterUpload.findMany({
-    where: { month, status: { notIn: ["superseded", "voided", "confirmed"] } },
+    where: { month, status: { notIn: opts.includeConfirmed ? ["superseded", "voided"] : ["superseded", "voided", "confirmed"] } },
     select: { id: true, siteId: true, siteNameRaw: true },
   });
   const siteRows = await prisma.site.findMany({ select: { id: true, canonicalName: true } });
@@ -470,5 +472,5 @@ export async function reparseAllActiveUploads(
     totalAfter += after.unmatched + after.ambiguous;
     perUpload.push({ siteLabel: label, uploadId: u.id, before, after });
   }
-  return { confirmedSkippedCount: confirmedUploads.length, perUpload, totalBefore, totalAfter };
+  return { confirmedSkippedCount: opts.includeConfirmed ? 0 : confirmedUploads.length, perUpload, totalBefore, totalAfter };
 }

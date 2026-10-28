@@ -2,6 +2,7 @@
 // （測試…名、T- 工號、fakeTel），零真資料、零讀 data/。
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
+import { fakeTel } from "./helpers/fake-tel";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { POST as createUpload } from "@/app/api/roster-uploads/route";
@@ -179,5 +180,58 @@ describe("HIST-3 歷史導入：更種自動建立", () => {
     const { items, summary } = await reconcileUpload(up.id);
     expect(summary.byCategory.unresolved).toBe(3);
     expect(items.every((i) => (i.unresolvedReason ?? "").includes("雞頭碼"))).toBe(true);
+  });
+
+  it("項6：run 開頭自動 reparse 本月上載（刪咗 rows 都重建；upload id／version／status 不變）", async () => {
+    const site = await prisma.site.create({ data: { canonicalName: "測試重解析盤", clientName: "測試客戶R", billingModel: "per_shift", createdBy: "test" } });
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date(Date.UTC(1970, 0, 1, 7, 0)), endTime: new Date(Date.UTC(1970, 0, 1, 19, 0)), hours: 12, billingGroup: "per_shift", createdBy: "test" } });
+    await upload(await rosterXlsx({ site: "測試重解析盤", people: [{ staffNo: "T-A01", name: "測試保安員甲", broker: "TEST-BA", time: "0700-1900", codes: ["D", "D", "D"] }] }));
+    const first = await runImport();
+    expect(first.report.reparsedUploads).toBe(1);
+    const up1 = await prisma.rosterUpload.findFirstOrThrow({ where: { month: MAR } });
+    expect(up1.status).toBe("confirmed");
+    await prisma.rosterUploadRow.deleteMany({ where: { uploadId: up1.id } }); // 模擬舊 parser 結果過時
+    const second = await runImport();
+    expect(second.report.reparsedUploads).toBe(1);
+    const up2 = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: up1.id } });
+    expect([up2.status, up2.version]).toEqual(["confirmed", up1.version]);
+    expect(second.report.perSite[0]!.cells).toBe(3);
+    expect(await prisma.rosterUploadRow.count({ where: { uploadId: up1.id } })).toBe(3);
+    expect(await prisma.shiftRecord.count({ where: { siteId: site.id } })).toBe(3);
+  });
+
+  it("項6：重跑（上載已 confirmed）guard-fix 每輪 reparse confirmed 上載 → 一次收斂，唔報未收斂", async () => {
+    const site = await prisma.site.create({ data: { canonicalName: "測試收斂盤", clientName: "測試客戶C", billingModel: "per_shift", createdBy: "test" } });
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date(Date.UTC(1970, 0, 1, 7, 0)), endTime: new Date(Date.UTC(1970, 0, 1, 19, 0)), hours: 12, billingGroup: "per_shift", createdBy: "test" } });
+    const mtel = fakeTel();
+    const bytes = await rosterXlsx({
+      site: "測試收斂盤",
+      people: [
+        { staffNo: "T-A01", name: "測試保安員甲", broker: "TEST-BA", time: "0700-1900", codes: ["D", "D", "D"] },
+        { staffNo: "", name: "測試歷史新人", broker: "TEST-BA", time: "0700-1900", codes: ["D", "D", ""] },
+      ],
+    });
+    // 電話欄 E：rosterXlsx 冇寫，改為補一欄（新人靠電話＋姓名）
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(bytes as unknown as ExcelJS.Buffer);
+    wb.worksheets[0]!.getCell("E7").value = mtel;
+    await upload(Buffer.from(await wb.xlsx.writeBuffer()));
+    const first = await runImport(); // 冇 U Team 名單 → guard-fix 略過，新人 unresolved；甲嘅格落咗 → 上載 confirmed
+    expect(first.report.totals.unresolved).toBe(2);
+    await prisma.rosterUpload.updateMany({ where: { month: MAR }, data: { status: "confirmed" } }); // 模擬之前已對數確認
+
+    const sl = new ExcelJS.Workbook();
+    const ws = sl.addWorksheet("sheet1");
+    ws.getRow(1).getCell(14).value = "員工編號";
+    ws.getRow(2).getCell(14).value = "U99002";
+    ws.getRow(2).getCell(16).value = "測試歷史新人";
+    ws.getRow(2).getCell(10).value = mtel;
+    await prisma.staffListUpload.create({ data: { uploaderId: fx.userIds["老闆"], fileName: "u.xlsx", fileSha256: "u2", fileBytes: new Uint8Array(Buffer.from(await sl.xlsx.writeBuffer())), fileSize: 10, rowCount: 1, status: "parsed" } });
+
+    const second = await runImport();
+    expect(second.report.totals.unresolved).toBe(0);
+    expect(await prisma.guard.count({ where: { nameZh: "測試歷史新人" } })).toBe(1);
+    expect(await prisma.shiftRecord.count({ where: { siteId: site.id } })).toBe(5);
+    expect(second.report.needsHuman.some((x) => x.includes("未收斂"))).toBe(false);
   });
 });

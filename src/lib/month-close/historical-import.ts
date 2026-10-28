@@ -15,6 +15,7 @@ import { withReportContext } from "@/lib/reports/context";
 import { writeAudit } from "@/lib/audit";
 import { ApiError, Conflict } from "@/lib/api/errors";
 import { safeErrorSummary } from "@/lib/api/http";
+import { reparseRosterUpload } from "@/lib/roster-upload/service";
 import { reconcileUpload, BROKER_CODE_UNMATCHED_TOLERATED } from "@/lib/roster-upload/reconcile";
 import { HISTORICAL_ROSTER_SOURCE } from "@/lib/guard-fix/apply";
 import { AutoCollector } from "./auto/context";
@@ -64,6 +65,8 @@ interface HistImportSiteReport {
 
 export interface HistImportReport {
   month: string;
+  /** run 開頭用最新 parser 重新解析嘅上載數。 */
+  reparsedUploads: number;
   before: HistImportCounts;
   after: HistImportCounts;
   created: { sites: number; shiftTypes: number; guards: number; siteAliases: number; noTimeShiftTypes: Array<{ site: string; code: string }> };
@@ -149,6 +152,26 @@ async function stepHistPrecheck(month: Date): Promise<StepFnResult & { halt?: st
   return { numbers, warnings, needsHuman };
 }
 
+/** HIST-3：run 開頭先將本月所有未取代／未作廢上載（含 confirmed／parse_failed）用最新 parser 重新解析一次，
+ * 唔使人手逐張撳 reparse。`reparseRosterUpload` 保持 upload id／version／status 不變（confirmed 保持 confirmed）。
+ * 單張失敗唔擋整個 run（記警告，用舊 rows 繼續）。 */
+export async function reparseMonthUploadsForHistoricalImport(start: Date): Promise<StepFnResult> {
+  const uploads = await prisma.rosterUpload.findMany({ where: { month: start, status: { notIn: ["superseded", "voided"] } }, select: { id: true, siteNameRaw: true, fileName: true }, orderBy: { uploadedAt: "asc" } });
+  let reparsed = 0;
+  let failed = 0;
+  const warnings: string[] = [];
+  for (const u of uploads) {
+    try {
+      await reparseRosterUpload(u.id, { autoResolveSite: true, txTimeoutMs: 10 * 60 * 1000 });
+      reparsed++;
+    } catch (e) {
+      failed++;
+      warnings.push(`上載「${u.siteNameRaw}」開頭重新解析失敗（${safeErrorSummary(e)}），沿用舊解析結果`);
+    }
+  }
+  return { numbers: { reparsedUploads: reparsed, reparseFailedUploads: failed }, warnings };
+}
+
 export function runHistoricalImport(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
   return withReportContext(() => runHistoricalImportInner(runId, month, actorUserId, ip));
 }
@@ -171,7 +194,11 @@ async function runHistoricalImportInner(runId: string, month: Date, actorUserId:
       await prisma.historicalImportRun.update({ where: { id: runId }, data: { status: "failed", finishedAt: new Date(), errorMessage: halt } });
       return;
     }
-    await runner.run("parse_health", async () => cleanTriage(await stepParseHealth(start, actorUserId, auto, { historical: true })));
+    await runner.run("parse_health", async () => {
+      const rp = await reparseMonthUploadsForHistoricalImport(start);
+      const ph = cleanTriage(await stepParseHealth(start, actorUserId, auto, { historical: true }));
+      return { numbers: { ...rp.numbers, ...ph.numbers }, warnings: [...(rp.warnings ?? []), ...(ph.warnings ?? [])], needsHuman: ph.needsHuman };
+    });
     await runner.run("guard_fix", async () => cleanTriage(await stepGuardFix(start, actorUserId, auto, { historical: true })));
     await runner.run("reconcile_apply", async () => cleanTriage(await stepReconcileApply(start, actorUserId, ip)));
     await runner.run("postorder_compare", () => stepHistPostorderCompare(start));
@@ -301,6 +328,7 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
   const pf = runner.get("parse_health").numbers;
   return {
     month: monthLabel(start),
+    reparsedUploads: Number(pf.reparsedUploads ?? 0),
     before,
     after,
     created: {
