@@ -36,6 +36,7 @@ import { isValidMonth } from "@/lib/ui/month-store";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import GuardFixPanel from "./GuardFixPanel";
+import HistoricalMonthPanel from "./HistoricalMonthPanel";
 import { needsAction } from "@/lib/roster-upload/needs-action";
 import { CATEGORY_LABEL } from "@/lib/roster-upload/category-labels";
 
@@ -641,6 +642,8 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
       <EmptyMonthNotice month={month} isEmpty={!loading && !!list && allEntries.every((e) => !e.upload)} onJump={setMonth} />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+
+      {tab === "upload" && monthReady && <HistoricalMonthPanel month={month} onImported={() => void loadList()} />}
 
       {reconcileAllRunning && (
         <div className="rounded-lg border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base text-zk-text" data-testid="reconcile-all-running">
