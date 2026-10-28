@@ -204,7 +204,7 @@ async function rescueSharedNameQuestions(tx: Tx, superseded: ReadonlyArray<{ id:
     if (!q.group_key.startsWith("rn:")) continue;
     const cands = await tx.whatsappIntent.findMany({
       where: { resultRef: q.id, revokedAt: null, supersededByRevision: null, message: { revokedAt: null } },
-      include: { message: { select: { messageId: true, revision: true, ts: true, text: true, senderGuardId: true, senderTelNorm: true } } },
+      include: { message: { select: { messageId: true, revision: true, ts: true, text: true, senderGuardId: true, senderTelNorm: true, llmProvider: true } } },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
     const keep = cands.find((c) => !exceptMessageIds.has(c.messageId) && c.message.revision === c.messageRevision);
@@ -220,6 +220,11 @@ async function rescueSharedNameQuestions(tx: Tx, superseded: ReadonlyArray<{ id:
       sender: { guard_id: m.senderGuardId, tel_tail4: m.senderTelNorm ? m.senderTelNorm.slice(-4) : null },
       text: m.text,
     };
+    // dedupe_key 跟新擁有者來源：名單訊息保留（編輯唔作廢）；短訊擁有者就刪走，令之後編輯短訊可以作廢條題（唔變孤兒題），並補返 name_key
+    if (m.llmProvider !== "roster" && next.dedupe_key) {
+      next.name_key = next.dedupe_key;
+      delete next.dedupe_key;
+    }
     await tx.triageQuestion.update({ where: { id: q.id }, data: { status: "open", evidenceJson: JSON.parse(JSON.stringify(next)) as Prisma.InputJsonValue } });
     sessions.push(row.sessionId);
   }

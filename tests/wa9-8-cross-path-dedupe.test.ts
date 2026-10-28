@@ -16,9 +16,10 @@ const DUP = "徐測展"; // 兩個同名 guard → 揀人題
 let fx: Wp2Fixture;
 let llmCalls = 0;
 const llm: LlmClient = {
-  async chat() {
+  async chat(p) {
     llmCalls++;
-    const out = { noise: false, intents: [{ type: "shift", date: { raw: "今日", kind: "relative" }, site_raw: null, persons: [{ raw: DUP, role: "worker" }], self_reference: false, shift_raw: "開工", shift_code_guess: null, hours: null, leave_raw: null, leave_code_guess: null, confidence: 0.9, evidence: null }] };
+    const who = (JSON.stringify(p) ?? "").includes("孫測壹今日") ? "孫測壹" : DUP; // 睇文字回人名，編輯做另一個人先真係改人
+    const out = { noise: false, intents: [{ type: "shift", date: { raw: "今日", kind: "relative" }, site_raw: null, persons: [{ raw: who, role: "worker" }], self_reference: false, shift_raw: "開工", shift_code_guess: null, hours: null, leave_raw: null, leave_code_guess: null, confidence: 0.9, evidence: null }] };
     return { text: JSON.stringify(out), toolsUsed: [], inputTokens: 1, outputTokens: 1, provider: "fake", model: "m" };
   },
 };
@@ -139,5 +140,18 @@ describe("WA-9 (8) D：跨路徑 (群,日,名) 去重", () => {
     const open = await prisma.triageQuestion.findMany({ where: { status: "open", kind: "wa_person_ambiguous", session: { sourceType: "whatsapp" } } });
     expect(open).toHaveLength(1);
     expect((open[0]!.evidenceJson as { message: { message_id: string } }).message.message_id).toBe("r1");
+  });
+
+  it("M2：名單開題、短訊併入、撤回名單（題改歸屬去短訊）→ 編輯短訊做另一個人 → 舊題作廢，冇孤兒 open 題", async () => {
+    await ingest(ev("r1", ROSTER));
+    await run();
+    await ingest(ev("s1", SHORT, 60));
+    await run(new Date(NOW.getTime() + 120_000));
+    await revoke("r1", 120);
+    await expectSharedSurvives("s1");
+    await ingest({ ...ev("s1", "孫測壹今日開工", 200), kind: "edited", eventId: "s1-edit2" });
+    await run(new Date(NOW.getTime() + 400_000));
+    const open = await prisma.triageQuestion.findMany({ where: { status: "open", kind: "wa_person_ambiguous", session: { sourceType: "whatsapp" } } });
+    expect(open).toHaveLength(0);
   });
 });
