@@ -21,7 +21,7 @@ export interface StepRecordOf<K extends string> {
  * `safeErrorSummary()` 淨係攞最後一行＋長度上限，唔會將 query payload
  * （可能有姓名／電話）寫落 DB 俾主管睇到。 */
 export function jobErrorMessage(e: unknown): string {
-  if (e instanceof Error && e.constructor === Error) return (e.message.split("\n").pop() ?? "").replace(/\d{7,}/g, "***").slice(0, 300);
+  if (e instanceof Error && e.constructor === Error) return (e.message.split("\n").pop() ?? "").replace(/\d{7,}/g, "[num]").slice(0, 300);
   return safeErrorSummary(e);
 }
 

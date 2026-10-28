@@ -66,8 +66,8 @@ export function safeErrorSummary(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
   const lastLine = lines.length ? lines[lines.length - 1]! : "";
-  // HIST-4：防禦性遮罩——7 位或以上連續數字（電話／工號／身份證數字）一律 ***，避免任何漏網訊息將 PII 寫入 error_message／log。
-  const masked = lastLine.replace(/\d{7,}/g, "***");
+  // HIST-4：防禦性遮罩——7 位或以上連續數字（電話／工號／身份證數字）一律 [num]（同 app-error-log 遮罩一致），避免任何漏網訊息將 PII 寫入 error_message／log。
+  const masked = lastLine.replace(/\d{7,}/g, "[num]");
   return `${name}: ${masked}`.slice(0, 300);
 }
 

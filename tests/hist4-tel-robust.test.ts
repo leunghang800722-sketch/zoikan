@@ -78,7 +78,7 @@ describe("HIST-4 項3：錯誤訊息零原值", () => {
   it("safeErrorSummary 遮罩 7 位以上連續數字", () => {
     const s = safeErrorSummary(new Error("boom 90019999 end"));
     expect(s).not.toContain("90019999");
-    expect(s).toContain("***");
+    expect(s).toContain("[num]");
   });
 });
 
