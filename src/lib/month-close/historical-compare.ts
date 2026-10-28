@@ -2,6 +2,7 @@
 // 本機消化報告 script（scripts/report/hist-roster-digest.ts）同歷史一鍵導入報告共用同一套配盤邏輯（rowsForSite）。
 // 鐵則：輸出只有盤名／物業短代號＋數字，唔帶任何人名（Postorder「客戶名稱」尾段可能係人名，只用嚟配盤）。
 import { rowsForSite, type PostorderRosterRow } from "./auto/postorder-evidence";
+import { normalizeSiteKey } from "./auto/site-match";
 
 export interface RosterSiteCells {
   /** 報告顯示用盤名。 */
@@ -19,6 +20,8 @@ export interface SiteCompareRow {
   postorderCells: number | null;
   postorderRows: number;
   diff: number | null;
+  /** 只喺 `loose: true`（本機消化報告）出現：嚴格配唔到，改用「物業短代號／客戶名頭包含喺盤名」約略配對，要人手核。 */
+  loose?: boolean;
 }
 
 export interface PostorderRosterCompare {
@@ -28,15 +31,40 @@ export interface PostorderRosterCompare {
   totals: { rosterCells: number; postorderCells: number; matchedSites: number; unmatchedSites: number; sitesWithDiff: number };
 }
 
-export function compareRosterVsPostorder(sites: readonly RosterSiteCells[], postorderRows: readonly PostorderRosterRow[]): PostorderRosterCompare {
+export function compareRosterVsPostorder(sites: readonly RosterSiteCells[], postorderRows: readonly PostorderRosterRow[], opts: { loose?: boolean } = {}): PostorderRosterCompare {
   const used = new Set<number>();
   const perSite: SiteCompareRow[] = [];
+  // loose 第二輪：嚴格配唔到嘅盤，按盤名由短到長，逐個認領「物業短代號／客戶名頭（≥2 字）包含喺盤名」而且未被認領嘅崗位行。
+  const loosePicks = new Map<number, PostorderRosterRow[]>();
+  if (opts.loose) {
+    const strictUsed = new Set<number>();
+    const unmatchedIdx: number[] = [];
+    sites.forEach((s, i) => {
+      const rows = rowsForSite(postorderRows, s.names);
+      if (rows.length === 0) unmatchedIdx.push(i);
+      for (const r of rows) strictUsed.add(r.rowIndex);
+    });
+    const claimed = new Set<number>(strictUsed);
+    const keyOf = (i: number) => sites[i]!.names.map((n) => normalizeSiteKey(n)).filter(Boolean);
+    for (const i of [...unmatchedIdx].sort((a, b) => keyOf(a).join("").length - keyOf(b).join("").length)) {
+      const keys = keyOf(i);
+      const picks = postorderRows.filter((r) => {
+        if (claimed.has(r.rowIndex)) return false;
+        const cands = [r.propertyShort, r.labelHead].map((x) => (x ? normalizeSiteKey(x) : "")).filter((x) => x.length >= 2);
+        return cands.some((c) => keys.some((k) => k.includes(c)));
+      });
+      for (const r of picks) claimed.add(r.rowIndex);
+      if (picks.length) loosePicks.set(i, picks);
+    }
+  }
   let rosterTotal = 0;
   let postorderTotal = 0;
   let matchedSites = 0;
   let sitesWithDiff = 0;
-  for (const s of sites) {
-    const rows = rowsForSite(postorderRows, s.names);
+  for (const [idx, s] of sites.entries()) {
+    const strict = rowsForSite(postorderRows, s.names);
+    const rows = strict.length > 0 ? strict : (loosePicks.get(idx) ?? []);
+    const isLoose = strict.length === 0 && rows.length > 0;
     rosterTotal += s.cells;
     if (rows.length === 0) {
       perSite.push({ label: s.label, rosterCells: s.cells, postorderCells: null, postorderRows: 0, diff: null });
@@ -48,7 +76,7 @@ export function compareRosterVsPostorder(sites: readonly RosterSiteCells[], post
     postorderTotal += po;
     const diff = s.cells - po;
     if (diff !== 0) sitesWithDiff++;
-    perSite.push({ label: s.label, rosterCells: s.cells, postorderCells: po, postorderRows: rows.length, diff });
+    perSite.push({ label: s.label, rosterCells: s.cells, postorderCells: po, postorderRows: rows.length, diff, ...(isLoose ? { loose: true } : {}) });
   }
   const unmatched = new Map<string, number>();
   for (const r of postorderRows) {
