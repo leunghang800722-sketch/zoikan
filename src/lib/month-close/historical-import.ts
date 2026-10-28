@@ -155,7 +155,7 @@ async function stepHistPrecheck(month: Date): Promise<StepFnResult & { halt?: st
 /** HIST-3：run 開頭先將本月所有未取代／未作廢上載（含 confirmed／parse_failed）用最新 parser 重新解析一次，
  * 唔使人手逐張撳 reparse。`reparseRosterUpload` 保持 upload id／version／status 不變（confirmed 保持 confirmed）。
  * 單張失敗唔擋整個 run（記警告，用舊 rows 繼續）。 */
-export async function reparseMonthUploadsForHistoricalImport(start: Date): Promise<StepFnResult> {
+async function reparseMonthUploadsForHistoricalImport(start: Date): Promise<StepFnResult> {
   const uploads = await prisma.rosterUpload.findMany({ where: { month: start, status: { notIn: ["superseded", "voided"] } }, select: { id: true, siteNameRaw: true, fileName: true }, orderBy: { uploadedAt: "asc" } });
   let reparsed = 0;
   let failed = 0;
