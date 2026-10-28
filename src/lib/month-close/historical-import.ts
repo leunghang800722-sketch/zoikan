@@ -24,6 +24,8 @@ import { ONE_CLICK_ADVISORY_LOCK_KEY, HIST_IMPORT_STALE_MS } from "./one-click-l
 import { stepParseHealth, stepGuardFix, stepReconcileApply, ONE_CLICK_STALE_MS } from "./one-click";
 import { StepRunner, jobErrorMessage, type StepRecordOf } from "./step-runner";
 import { bucketUnresolvedReason, compareRosterVsPostorder, type PostorderRosterCompare, type UnresolvedBucket } from "./historical-compare";
+import { HIST_RULE_CONFIDENCE, S1_NO_TIME_ROW_WARNING, S1_ROW_WARNING, S3_ROW_WARNING, type HistInference, type HistRemaining, type HistReviewHint } from "./hist-inference";
+import { normalizeTimeRange, shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
 
 const HIST_IMPORT_STEP_KEYS = ["precheck", "parse_health", "guard_fix", "reconcile_apply", "postorder_compare", "report"] as const;
 type HistImportStepKey = (typeof HIST_IMPORT_STEP_KEYS)[number];
@@ -57,8 +59,13 @@ interface HistImportSiteReport {
   settlementDiff: number;
   guardDiff: number;
   shiftTypeDiff: number;
+  /** 真正未入（唔計 crossMonthDuplicate／outOfScope）。 */
   unresolved: number;
   unresolvedByReason: Partial<Record<UnresolvedBucket, number>>;
+  /** HIST-5 S4：跨月格已由另一月檔案寫入（純重複，唔算未入）。 */
+  crossMonthDuplicate: number;
+  /** HIST-5 S4：跨月格目標月份唔係未鎖歷史月份（範圍外，唔算未入）。 */
+  outOfScope: number;
   /** 雞頭碼對唔到、歷史模式容忍照寫入（結算雞頭留空，reason=broker_code_unmatched_tolerated）嘅格數。 */
   brokerTolerated: number;
 }
@@ -70,9 +77,15 @@ export interface HistImportReport {
   before: HistImportCounts;
   after: HistImportCounts;
   created: { sites: number; shiftTypes: number; guards: number; siteAliases: number; noTimeShiftTypes: Array<{ site: string; code: string }> };
-  totals: { uploads: number; parseFailedUploads: number; cells: number; written: number; rosterOnly: number; settlementDiff: number; guardDiff: number; shiftTypeDiff: number; unresolved: number; unresolvedByReason: Partial<Record<UnresolvedBucket, number>>; brokerTolerated: number };
+  totals: { uploads: number; parseFailedUploads: number; cells: number; written: number; rosterOnly: number; settlementDiff: number; guardDiff: number; shiftTypeDiff: number; unresolved: number; unresolvedByReason: Partial<Record<UnresolvedBucket, number>>; crossMonthDuplicate: number; outOfScope: number; brokerTolerated: number };
   perSite: HistImportSiteReport[];
   postorder: ({ uploaded: true; fileName: string } & PostorderRosterCompare) | { uploaded: false };
+  /** HIST-5：AI 推斷自動落地嘅決定（規則＋信心＋對象＋依據＋格數），方便抽查。姓名／工號可出，電話／身份證一律唔出。 */
+  inferences: HistInference[];
+  /** HIST-5：真係判斷唔到、要人決定嘅（連候選＋建議答案）。同 guard_fix step needsHuman 一致。 */
+  remaining: HistRemaining[];
+  /** HIST-5：抽查提示（唔算待答），例如懷疑 DB 工號登記錯。 */
+  reviewHints: HistReviewHint[];
   needsHuman: string[];
 }
 
@@ -288,14 +301,28 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
     shiftTypeDiff: 0,
     unresolved: 0,
     unresolvedByReason: {},
+    crossMonthDuplicate: 0,
+    outOfScope: 0,
     brokerTolerated: 0,
   };
   for (const u of uploads) {
     const { items, summary } = await reconcileUpload(u.id);
     const byReason: Partial<Record<UnresolvedBucket, number>> = {};
+    let crossMonthDuplicate = 0;
+    let outOfScope = 0;
+    let unresolvedCount = 0;
     for (const it of items) {
       if (it.category !== "unresolved") continue;
-      for (const b of bucketUnresolvedReason(it.unresolvedReason ?? "")) byReason[b] = (byReason[b] ?? 0) + 1;
+      const buckets = bucketUnresolvedReason(it.unresolvedReason ?? "");
+      // HIST-5 S4：跨月重複／範圍外唔算「未入」（只要冇其他未入原因）。
+      const genuine = buckets.filter((b) => b !== "cross_month_duplicate" && b !== "out_of_scope");
+      if (genuine.length === 0) {
+        if (buckets.includes("cross_month_duplicate")) crossMonthDuplicate++;
+        else outOfScope++;
+        continue;
+      }
+      unresolvedCount++;
+      for (const b of genuine) byReason[b] = (byReason[b] ?? 0) + 1;
     }
     const row: HistImportSiteReport = {
       siteLabel: u.site?.canonicalName ?? u.siteNameRaw,
@@ -305,8 +332,10 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
       settlementDiff: summary.byCategory.settlement_diff,
       guardDiff: summary.byCategory.guard_diff,
       shiftTypeDiff: summary.byCategory.shift_type_diff,
-      unresolved: summary.byCategory.unresolved,
+      unresolved: unresolvedCount,
       unresolvedByReason: byReason,
+      crossMonthDuplicate,
+      outOfScope,
       brokerTolerated: items.filter((it) => it.roster?.settlementReason === BROKER_CODE_UNMATCHED_TOLERATED).length,
     };
     perSite.push(row);
@@ -317,6 +346,8 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
     totals.guardDiff += row.guardDiff;
     totals.shiftTypeDiff += row.shiftTypeDiff;
     totals.unresolved += row.unresolved;
+    totals.crossMonthDuplicate += row.crossMonthDuplicate;
+    totals.outOfScope += row.outOfScope;
     totals.brokerTolerated += row.brokerTolerated;
     addBuckets(totals.unresolvedByReason, byReason);
   }
@@ -326,6 +357,7 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
     pn.uploaded === true && pn.hasRoster === true && pn.compare ? { uploaded: true, fileName: String(pn.fileName ?? ""), ...(pn.compare as PostorderRosterCompare) } : { uploaded: false };
 
   const pf = runner.get("parse_health").numbers;
+  const gf = runner.get("guard_fix").numbers;
   return {
     month: monthLabel(start),
     reparsedUploads: Number(pf.reparsedUploads ?? 0),
@@ -342,7 +374,113 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
     totals,
     perSite,
     postorder,
+    inferences: [...((gf.inferences as HistInference[] | undefined) ?? []), ...(await deriveStageInferences(start, uploads.map((u) => u.id)))],
+    remaining: (gf.remaining as HistRemaining[] | undefined) ?? [],
+    reviewHints: (gf.reviewHints as HistReviewHint[] | undefined) ?? [],
     needsHuman: runner.allNeedsHuman(),
   };
 }
 
+
+const S_MARKERS = [S1_ROW_WARNING, S1_NO_TIME_ROW_WARNING, S3_ROW_WARNING];
+
+/** HIST-5 S1／S2／S3／S4 推斷——由 DB 狀態反推（rows.warnings 記號、auto 建更種 audit、跨月寫入嘅 provenance），
+ * 唔靠 run 內存，所以重跑導入（冪等、冇新建嘢）報告都仲見到呢月嘅推斷。報告只有盤名＋代號＋時段＋格數。 */
+async function deriveStageInferences(start: Date, uploadIds: string[]): Promise<HistInference[]> {
+  if (uploadIds.length === 0) return [];
+  const out: HistInference[] = [];
+  const siteRows = await prisma.site.findMany({ select: { id: true, canonicalName: true } });
+  const siteName = new Map(siteRows.map((x) => [x.id, x.canonicalName]));
+
+  // ---- S1／S1n／S3：rows.warnings 記號 ----
+  const marked = await prisma.rosterUploadRow.findMany({
+    where: { uploadId: { in: uploadIds }, codeKind: "shift", OR: S_MARKERS.map((m) => ({ warnings: { array_contains: [m] } })) },
+    select: { rawCode: true, timeRaw: true, warnings: true, shiftTypeId: true, resolvedSiteId: true },
+  });
+  const typeIds = [...new Set(marked.map((r) => r.shiftTypeId).filter((x): x is string => !!x))];
+  const types = typeIds.length ? await prisma.shiftType.findMany({ where: { id: { in: typeIds } }, select: { id: true, code: true, startTime: true, endTime: true } }) : [];
+  const typeById = new Map(types.map((t) => [t.id, t]));
+  const groups = new Map<string, { rule: "S1" | "S1n" | "S3"; site: string; code: string; slot: string | null; matched: string | null; cells: number }>();
+  for (const r of marked) {
+    const warns = Array.isArray(r.warnings) ? (r.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
+    const rule = warns.includes(S3_ROW_WARNING) ? "S3" : warns.includes(S1_NO_TIME_ROW_WARNING) ? "S1n" : "S1";
+    const site = (r.resolvedSiteId && siteName.get(r.resolvedSiteId)) || "（盤名未定）";
+    const slot = normalizeTimeRange(r.timeRaw);
+    const st = r.shiftTypeId ? typeById.get(r.shiftTypeId) : undefined;
+    const matched = st ? `${st.code}${shiftTypeTimeSlot(st.startTime, st.endTime) ? `（${shiftTypeTimeSlot(st.startTime, st.endTime)}）` : "（冇開始時間）"}` : null;
+    const key = `${rule}|${site}|${r.rawCode.trim()}|${slot ?? ""}|${matched ?? ""}`;
+    const g = groups.get(key) ?? { rule, site, code: r.rawCode.trim(), slot, matched, cells: 0 };
+    g.cells++;
+    groups.set(key, g);
+  }
+  for (const g of groups.values()) {
+    const base = { confidence: HIST_RULE_CONFIDENCE[g.rule], subject: { site: g.site, code: g.code, ...(g.slot ? { timeSlot: g.slot } : {}) }, cells: g.cells };
+    if (g.rule === "S3") {
+      out.push({ ...base, rule: "S3", decision: `代號「${g.code}」係另一個盤嘅名／別名 → 寫落「${g.site}」，${g.matched ? `配／建更種「${g.matched}」` : "未能配到更種"}`, evidence: [`代號「${g.code}」等於盤「${g.site}」嘅名稱或別名（跨盤標記）`, g.slot ? `該行時段 ${g.slot}` : "該行時段解析唔到，只計出勤"] });
+    } else if (g.rule === "S1n") {
+      out.push({ ...base, rule: "S1n", decision: `單字母代號「${g.code}」按「呢行自己嘅更」計出勤，更種「${g.matched ?? "未建"}」（冇開始時間）`, evidence: ["單字母代號（A–Z）喺對照表冇定義", "該行時段欄解析唔到時間"] });
+    } else {
+      out.push({ ...base, rule: "S1", decision: `單字母代號「${g.code}」按該行時段 ${g.slot} 當出更，配到更種「${g.matched ?? "未建"}」`, evidence: ["單字母代號（A–Z）喺對照表冇定義", `該行時段欄 ${g.slot}；該盤${g.matched?.startsWith(`${g.code}（`) ? "自動建同代號更種" : "已有同時段更種（任何 code）就沿用"}`] });
+    }
+  }
+
+  // ---- S2：歷史導入自動建嘅更種（audit auto_source）——扣走 S1／S3 記號行 ----
+  const created = await prisma.auditLog.findMany({
+    where: { tableName: "shift_types", action: "create", after: { path: ["auto_source"], string_starts_with: "auto:historical-import:" } },
+    select: { rowId: true },
+  });
+  const createdIds = [...new Set(created.map((c) => c.rowId))];
+  if (createdIds.length > 0) {
+    const rows = await prisma.rosterUploadRow.findMany({
+      where: { uploadId: { in: uploadIds }, shiftTypeId: { in: createdIds } },
+      select: { shiftTypeId: true, warnings: true, codeKind: true },
+    });
+    const cellsByType = new Map<string, number>();
+    for (const r of rows) {
+      const warns = Array.isArray(r.warnings) ? (r.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
+      if (warns.some((w) => S_MARKERS.includes(w))) continue;
+      cellsByType.set(r.shiftTypeId!, (cellsByType.get(r.shiftTypeId!) ?? 0) + 1);
+    }
+    const st2 = await prisma.shiftType.findMany({ where: { id: { in: [...cellsByType.keys()] } }, select: { id: true, siteId: true, code: true, startTime: true, endTime: true, hours: true } });
+    for (const t of st2) {
+      const slot = shiftTypeTimeSlot(t.startTime, t.endTime);
+      const isOt = /^OT\d/i.test(t.code);
+      out.push({
+        rule: "S2",
+        confidence: HIST_RULE_CONFIDENCE.S2,
+        subject: { site: siteName.get(t.siteId) ?? "（盤名未定）", code: t.code, ...(slot ? { timeSlot: slot } : {}) },
+        decision: `自動建更種「${t.code}」${slot ? `（${slot}）` : isOt ? `（OT ${t.hours === null ? "—" : Number(t.hours)} 小時）` : "（冇開始時間，只計出勤）"}`,
+        evidence: ["更表代號喺該盤冇對應更種（冇同 code，或者同 code 但時段唔同）", slot ? `由更表該行時段 ${slot} 取開始／收工時間` : isOt ? "OT 小時由代號數字取" : "時段欄唔係時間，建冇開始時間更種"],
+        cells: cellsByType.get(t.id) ?? 0,
+      });
+    }
+  }
+
+  // ---- S4：跨月格直接寫入目標歷史月份（source=roster_upload，provenance.upload_id 屬今月上載，workDate 唔喺今月）----
+  const monthEnd = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+  const crossWritten: Array<{ siteId: string; workDate: Date }> = [];
+  for (const uid of uploadIds) {
+    const recs = await prisma.shiftRecord.findMany({
+      where: { source: "roster_upload", provenance: { path: ["upload_id"], equals: uid }, OR: [{ workDate: { lt: start } }, { workDate: { gte: monthEnd } }] },
+      select: { siteId: true, workDate: true },
+    });
+    crossWritten.push(...recs);
+  }
+  const s4 = new Map<string, number>();
+  for (const r of crossWritten) {
+    const key = `${siteName.get(r.siteId) ?? "（盤名未定）"}|${r.workDate.toISOString().slice(0, 7)}`;
+    s4.set(key, (s4.get(key) ?? 0) + 1);
+  }
+  for (const [key, cells] of s4) {
+    const [site, target] = key.split("|") as [string, string];
+    out.push({
+      rule: "S4",
+      confidence: HIST_RULE_CONFIDENCE.S4,
+      subject: { site },
+      decision: `跨月格直接寫入 ${target}（歷史月份、未鎖，該 (保安員,日期,盤) 原本冇更次）`,
+      evidence: [`格仔日期屬 ${target}，唔係上載月份 ${start.toISOString().slice(0, 7)}`, `${target} 係未鎖歷史月份，冇既有更次 → 同一 upsert 路徑寫入`],
+      cells,
+    });
+  }
+  return out;
+}

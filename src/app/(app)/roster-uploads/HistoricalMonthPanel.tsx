@@ -35,10 +35,42 @@ interface PostorderRow {
   postorder_cells: number | null;
   diff: number | null;
 }
+interface SubjectDTO {
+  name?: string;
+  staff_no?: string;
+  site?: string;
+  code?: string;
+  time_slot?: string;
+}
+interface InferenceDTO {
+  rule: string;
+  confidence: number;
+  subject: SubjectDTO;
+  decision: string;
+  evidence: string[];
+  cells: number;
+}
+interface RemainingDTO {
+  subject: SubjectDTO;
+  reason_code: string;
+  cells: number;
+  candidates: Array<{ guard_id: string; name: string; staff_numbers: string[]; status: string; same_site_history_cells: number }>;
+  recommended: { action: "link" | "create" | "none"; guard_id?: string; name?: string; confidence: number; why: string };
+}
+interface HintDTO {
+  rule: string;
+  subject: SubjectDTO;
+  hint: string;
+  evidence: string[];
+  cells: number;
+}
 interface ReportDTO {
   month: string;
   created: { sites: number; shift_types: number; guards: number; site_aliases: number };
-  totals: { uploads: number; parse_failed_uploads: number; cells: number; written: number; unresolved: number; unresolved_by_reason: Record<string, number> };
+  totals: { uploads: number; parse_failed_uploads: number; cells: number; written: number; unresolved: number; unresolved_by_reason: Record<string, number>; cross_month_duplicate?: number; out_of_scope?: number };
+  inferences?: InferenceDTO[];
+  remaining?: RemainingDTO[];
+  review_hints?: HintDTO[];
   per_site: SiteRow[];
   postorder: { uploaded: boolean; per_site?: PostorderRow[]; unmatched_postorder?: Array<{ property: string; cells: number }>; totals?: { roster_cells: number; postorder_cells: number; matched_sites: number; unmatched_sites: number; sites_with_diff: number } };
   needs_human: string[];
@@ -59,10 +91,41 @@ const REASON_LABEL: Record<string, string> = {
   shift_type_unmatched: "更別／更種未配對",
   date_outside_month: "日期唔係本月",
   site_unresolved: "盤／子盤未定",
+  cross_month_duplicate: "跨月重複",
+  out_of_scope: "範圍外",
   broker_code_unmatched: "雞頭碼對唔到",
   leave_shift_type_unknown: "請假推斷唔到更別",
   other: "其他",
 };
+
+/** HIST-5 規則表（規則碼 → 一句講法＋預設信心），同 docs/ops.md「HIST-5」一致。 */
+const RULE_LABEL: Record<string, string> = {
+  R1: "工號屬別人、姓名唯一 → 連結姓名對到嗰位",
+  R2a: "電話屬別人、姓名唯一對到另一位 → 連結該位（唔加電話）",
+  R2b: "姓名變體（簡繁／後綴／相差一字）→ 連結並加別名",
+  R2c: "疑共用電話 → 新建保安員、電話留空",
+  R3a: "同名多個歷史導入 minimal → 合併",
+  R3b: "本名相同＋後綴變體 → 揀本名相同嗰個",
+  R3c: "多個真人同名 → 用盤史揀",
+  R4: "同名多個身份 → 當同一人",
+  R5: "建人時電話撞 DB → 電話留空",
+  S1: "單字母代號 → 按該行時段當出更",
+  S1n: "單字母代號、時段解析唔到 → 只計出勤",
+  S2: "更表代號冇對應更種 → 自動建更種",
+  S3: "跨盤代號 → 寫落該盤",
+  S4: "跨月格 → 直接寫入目標歷史月份",
+};
+const REMAINING_REASON: Record<string, string> = {
+  same_name_multi_no_history: "同名多位，同盤冇歷史可分辨",
+  same_name_multi_both_history: "同名多位，同盤歷史都有更次",
+  conflicting_methods: "電話同身份證指唔同人",
+  uteam_refused: "名單路徑被拒",
+  override_exists_but_unmatched: "已有覆寫但仍未配對",
+};
+
+function subjectText(s: SubjectDTO): string {
+  return [s.name ? `「${s.name}」` : null, s.staff_no ?? null, s.site ?? null, s.code ? `代號 ${s.code}` : null, s.time_slot ?? null].filter(Boolean).join(" ");
+}
 
 function isHistoricalCandidateMonth(month: string): boolean {
   return /^\d{4}-\d{2}$/.test(month) && month < HIST_MAX;
@@ -203,7 +266,7 @@ function RunView({ run }: { run: RunDTO }) {
       {report && (
         <>
           <div className="text-zk-text" data-testid="hist-report-summary">
-            {report.month}：{report.totals.uploads} 個上載、{report.totals.cells} 格，已寫入 {report.totals.written} 格，未解決 {report.totals.unresolved} 格
+            {report.month}：{report.totals.uploads} 個上載、{report.totals.cells} 格，已寫入 {report.totals.written} 格，未解決 {report.totals.unresolved} 格{(report.totals.cross_month_duplicate ?? 0) + (report.totals.out_of_scope ?? 0) > 0 && `（另有跨月重複 ${report.totals.cross_month_duplicate ?? 0}、範圍外 ${report.totals.out_of_scope ?? 0} 格，唔算未入）`}
             {Object.keys(report.totals.unresolved_by_reason).length > 0 && `（${Object.entries(report.totals.unresolved_by_reason).map(([k, v]) => `${REASON_LABEL[k] ?? k} ${v}`).join("、")}）`}。 新建盤 {report.created.sites}、更種 {report.created.shift_types}、停用保安員 {report.created.guards}、盤別名 {report.created.site_aliases}。
             {report.totals.parse_failed_uploads > 0 && <span className="text-zk-danger-dark"> {report.totals.parse_failed_uploads} 份上載解析失敗。</span>}
           </div>
@@ -237,6 +300,7 @@ function RunView({ run }: { run: RunDTO }) {
               </ul>
             </details>
           )}
+          <InferencePanels report={report} />
           {report.needs_human.length > 0 && (
             <details>
               <summary className="cursor-pointer text-zk-warning-dark">要你睇（{report.needs_human.length}）</summary>
@@ -248,6 +312,96 @@ function RunView({ run }: { run: RunDTO }) {
             </details>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/** HIST-5：「AI 推斷」可摺疊表＋「仍需決定」表（連候選＋建議答案）＋抽查提示。 */
+function InferencePanels({ report }: { report: ReportDTO }) {
+  const inferences = report.inferences ?? [];
+  const remaining = report.remaining ?? [];
+  const hints = report.review_hints ?? [];
+  if (inferences.length === 0 && remaining.length === 0 && hints.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2" data-testid="hist-inference-panels">
+      {remaining.length > 0 && (
+        <details open data-testid="hist-remaining">
+          <summary className="cursor-pointer font-semibold text-zk-warning-dark">仍需決定（{remaining.length} 條）</summary>
+          <div className="mt-2 overflow-x-auto rounded border border-zk-border">
+            <table className="min-w-full text-left text-zk-sm">
+              <thead className="bg-zk-bg text-zk-muted">
+                <tr>
+                  <th className="px-2 py-1">對象</th>
+                  <th className="px-2 py-1">原因</th>
+                  <th className="px-2 py-1">格數</th>
+                  <th className="px-2 py-1">候選</th>
+                  <th className="px-2 py-1">建議答案</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zk-border">
+                {remaining.map((r, i) => (
+                  <tr key={i} className="align-top">
+                    <td className="px-2 py-1">{subjectText(r.subject)}</td>
+                    <td className="px-2 py-1">{REMAINING_REASON[r.reason_code] ?? r.reason_code}</td>
+                    <td className="px-2 py-1 tabular-nums">{r.cells}</td>
+                    <td className="px-2 py-1">
+                      {r.candidates.length === 0 ? "—" : r.candidates.map((c) => `「${c.name}」${c.staff_numbers.length ? ` ${c.staff_numbers.join("、")}` : "（冇工號）"}・${c.status}・同盤歷史 ${c.same_site_history_cells} 格`).join("；")}
+                    </td>
+                    <td className="px-2 py-1">
+                      {r.recommended.action === "none" ? "冇建議" : r.recommended.action === "link" ? `連結「${r.recommended.name ?? ""}」` : "建獨立保安員"}（信心 {r.recommended.confidence}）：{r.recommended.why}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      {hints.length > 0 && (
+        <details data-testid="hist-review-hints">
+          <summary className="cursor-pointer text-zk-primary">抽查提示（{hints.length} 條，唔算待答）</summary>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-zk-text">
+            {hints.map((h, i) => (
+              <li key={i}>
+                {subjectText(h.subject)}：{h.hint}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {inferences.length > 0 && (
+        <details data-testid="hist-inferences">
+          <summary className="cursor-pointer text-zk-primary">AI 推斷（{inferences.length} 條）——系統自動落地，請抽查</summary>
+          <div className="mt-2 max-h-96 overflow-auto rounded border border-zk-border">
+            <table className="min-w-full text-left text-zk-sm">
+              <thead className="bg-zk-bg text-zk-muted">
+                <tr>
+                  <th className="px-2 py-1">規則</th>
+                  <th className="px-2 py-1">信心</th>
+                  <th className="px-2 py-1">對象</th>
+                  <th className="px-2 py-1">決定</th>
+                  <th className="px-2 py-1">依據</th>
+                  <th className="px-2 py-1">格數</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zk-border">
+                {inferences.map((x, i) => (
+                  <tr key={i} className="align-top">
+                    <td className="px-2 py-1" title={RULE_LABEL[x.rule] ?? ""}>
+                      {x.rule}
+                    </td>
+                    <td className="px-2 py-1 tabular-nums">{x.confidence}</td>
+                    <td className="px-2 py-1">{subjectText(x.subject)}</td>
+                    <td className="px-2 py-1">{x.decision}</td>
+                    <td className="px-2 py-1">{x.evidence.join("；")}</td>
+                    <td className="px-2 py-1 tabular-nums">{x.cells}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
     </div>
   );

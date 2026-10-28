@@ -614,6 +614,40 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 **修正上線後操作**：喺各歷史月份撳「歷史月份：一鍵導入」即可（run 自己 reparse，唔使再逐張撳 `/reparse`）。
 
+### HIST-5 歷史導入「未入格」AI 推斷自動落地（2026-10-28）
+
+老闆原則：**凡系統有數據可以推斷嘅一律自動寫入，報告列明「AI 推斷＋規則＋信心＋依據」方便抽查；真係判斷唔到先留極細清單，每條附建議答案。** 全部只限歷史模式（`month_closes.historical=true` 嘅一鍵導入）；正式月份行為不變（`buildGuardFixPlan` 冇傳 `historical` 就同以前一模一樣，`plan.historical`／`actions.mergeGuards` 唔存在）。
+
+**A. 身份推斷（guard-fix plan 歷史分支，取代 needs_boss）** `src/lib/guard-fix/historical-plan.ts`。候選唔限 status（active／inactive 都計）；姓名比對用「本名∪別名」，NFKC＋簡→繁＋去尾部 1–4 字括號後綴（「X (上)」「X(摩)」）折返（`foldName`，重用 `src/lib/names/variants.ts`）。每條落地動作帶 `inference { rule, confidence, evidence[] }`，同時寫入：run 報告 `inferences[]`、`guard_match_overrides.reason`（前綴 `HIST5 <rule>（信心 …）：…`，最多 1500 字）、audit（`guard_fix_inference`／`guard_fix_merge`，只有規則／信心／依據，無電話）。`guard_match_overrides.staff_no = ''` 代表「淨姓名」覆寫（更表冇工號嗰啲格）；`matchGuard` 將覆寫排喺工號／電話／姓名層之前。
+
+| 規則 | 條件 | 動作 | 信心 |
+|---|---|---|---|
+| R1 | 更表工號屬 DB 另一人，更表姓名（折返後）唯一對到 guard B | link B（寫覆寫，**唔**加工號）；連續 ≥3 個月同一（工號＋姓名）→ 照 link，另列 `review_hints[]`「懷疑 DB 工號登記錯」 | 0.9 |
+| R2a | 電話屬別人 A，姓名唯一對到另一位 B | link B（唔加電話） | 0.9 |
+| R2b | 姓名 DB 冇，但同電話主人 A（或唯一折返對象）係變體（簡繁／NFKC／後綴／≥4 字相差一字） | link＋加別名 | 0.85 |
+| R2c | 姓名 DB 冇、亦唔係變體（電話屬別人） | create_minimal，**tel 留空**（疑共用電話），inactive／`historical_roster` 來源 | 0.85 |
+| R3a | 同名多候選，全部係歷史導入 minimal guard（created_by 結尾 `:historical_roster`、冇工號冇電話） | 合併：保留最早建嗰個，其餘 shift_records／長工崗位／覆寫改指保留者（撞 `guardId_workDate_shiftTypeId` unique 嘅留喺原位），被合併者 inactive＋`merged_from` 記 `merged_into:<id>`（配對索引排除） | 0.9 |
+| R3b | 一個本名完全相同＋其餘係後綴／簡繁變體 | 揀本名相同嗰個；變體係 minimal 就合併，係真人就只連結 | 0.9 |
+| R3c | ≥2 個真實同名 guard | 盤史（同盤含子盤 ±3 個月、唔計 cancelled 更次）：只有一個有 → link；兩個都有／都冇 → `remaining`，`recommended` 揀同盤更多嗰個（都冇揀 active） | 0.8（自動 link）／0.6／0.5（recommended） |
+| R4 | 同一次未配對集合內，姓名折返後相同但工號唔同／其一冇工號 | 當同一人：格數最多嗰個身份為主（工號 DB 冇人用就登記 current），其餘（含冇工號）寫覆寫；變體名加別名；同時套用 R2 電話規則 | 0.9 |
+| R5 | 原有 create_minimal（名單／DB 全部搵唔到），建人時電話撞 DB（`tel_skipped_duplicate`） | 電話留空（原本靜靜跳過，而家入 `inferences`） | 0.85 |
+| conflicting_methods | 電話同身份證指唔同人（歷史模式理論上冇） | `remaining`，recommended 用姓名規則揀 | 0.6 |
+
+U Team 名單被拒（身份證／工號已喺 DB 等）等其餘 needs_boss 原因亦轉 `remaining`（recommended＝建獨立保安員待核）。guard_fix step 的 `needsHuman` 同 `numbers.remainingNeedsBoss` 同報告 `remaining` 一致（`describeHistRemaining`，姓名／工號可出，電話唔出）。歷史模式唔再開分診題。⚠ 注意：保安員修復仍要先上載 U Team 名單（冇名單整個 guard_fix 略過，同 HIST-3）。
+
+**B. 更種／代號推斷**
+- **S1 單字母 unknown 代號（A–Z，`x`／`X` 空缺標記除外）**：當「呢行自己嘅更」。順序：該盤同代號＋時段 → 該盤同時段更種（任何 code，多個用 rank 收窄）→ 都冇就經 `deriveShiftTypeGroups` 自動建（code＝該字母，同 code 唔同時段建第二個）。row 存 `code_kind=shift`＋警告「單字母代號按該行時段當出更（AI 推斷）」；時段解析唔到 → 警告「…只計出勤」，建冇開始時間更種（S1n，信心 0.7）。報告每個 (盤,字母,時段) 一條，信心 0.85。
+- **S2 code 認到但該盤冇該 code＋時段嘅更種**：歷史模式自動建。根因兩個：(1) 母盤（有子盤，如 HKU座頭、城巴車廠）本身被 `planShiftTypesForSite` 一律跳過，歷史模式而家容許（只計 `resolved_site_id` 就係母盤嘅格）；(2) DB unique `(site, code, start_time)`——同 code＋同開工時間但收工時間唔同（如 D 0700-1900 vs 0700-1515）唔可以另建同 code，用現有慣例「-N」後綴（`D-2`，`matchShiftType` 用 `codeFamily` 當同一代號家族再按時段收窄）。OT 嘅 `hours` 由 code 數字取。報告 S2 信心 0.9（由 audit `auto_source=auto:historical-import:*` 反推，重跑仍見到）。
+- **S3 跨盤代號**：代號（折返＋大寫＋去空白括號）等於另一個盤嘅 canonical／別名（唯一）→ 寫落嗰個盤，更種用該行時段喺目標盤配／建（同 S1），警告「跨盤代號（AI 推斷）」，信心 0.85。結算雞頭照該行。
+- **S4 跨月格分類**（`date_outside_month` 唔再一律 unresolved）：(i) 目標月份係歷史月份、而該 (保安員,日期,盤) 已有非 cancelled 更次 → bucket `cross_month_duplicate`（純重複）；(ii) 目標月份唔係歷史月份或已鎖 → `out_of_scope`；(iii) 目標係未鎖歷史月份而冇記錄 → 直接寫入（同一 `roster_only` upsert 路徑，套用前再驗目標月份未鎖），信心 0.95。(i)(ii) 唔計入「未入」（`totals.unresolved`），另列 `totals.crossMonthDuplicate`／`outOfScope`；由呢份上載寫入嘅跨月更次（`provenance.upload_id`）下次對數配返 match，唔會變重複。
+
+**C. 報告／UI／API**
+- `HistImportReport` 新增 `inferences[]`（`{rule, confidence, subject:{name?,staffNo?,site?,code?,timeSlot?}, decision, evidence[], cells}`）、`remaining[]`（`{subject, reasonCode, cells, candidates:[{guardId,name,staffNumbers,status,sameSiteHistoryCells}], recommended:{action,guardId?,name?,confidence,why}}`）、`reviewHints[]`；API 回傳 snake_case。**電話／身份證／銀行／住址／出生日期一律唔准出**（姓名／工號可以，老闆 2026-10-20）。
+- 更表上載頁歷史導入報告：「AI 推斷（n 條）」可摺疊表（規則／信心／對象／決定／依據／格數）、「仍需決定（n 條）」表（候選＋建議答案）、抽查提示。
+- `GET /api/month-close/historical-import/inferences?from=YYYY-MM&to=YYYY-MM`（「一鍵結算」view：老闆／主管／會計；最多 12 個月）：合併每月最新 `done` run 嘅 `inferences`／`remaining`／`review_hints`（每條帶 `month`），`months[]` 列每月 run／條數，冇 done run 嘅月份 `run_id=null`。
+
+**抽查建議**：先睇 `remaining`（要答）→ `review_hints` → 信心 <0.9 嘅 `inferences`（R2b/R2c/R3c/R5/S1/S1n/S3）。合併（R3a/R3b）可由被合併 guard 的 `merged_from`＋audit `guard_fix_merge`（`moved_shift_records`／`skipped_conflicts`）核對。
+
 ## SITE-SCHEME-1 盤工號體系預設建議（2026-10）
 
 老闆唔想逐個盤揀體系。流程：

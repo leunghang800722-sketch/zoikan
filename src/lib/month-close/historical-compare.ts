@@ -3,6 +3,7 @@
 // 鐵則：輸出只有盤名／物業短代號＋數字，唔帶任何人名（Postorder「客戶名稱」尾段可能係人名，只用嚟配盤）。
 import { rowsForSite, type PostorderRosterRow } from "./auto/postorder-evidence";
 import { normalizeSiteKey } from "./auto/site-match";
+import { CROSS_MONTH_DUPLICATE_MARK, OUT_OF_SCOPE_MARK } from "./hist-inference";
 
 export interface RosterSiteCells {
   /** 報告顯示用盤名。 */
@@ -97,6 +98,8 @@ const UNRESOLVED_BUCKETS = {
   guard_unmatched: "保安員未配對",
   shift_type_unmatched: "更別／更種未配對或已作廢",
   date_outside_month: "格仔日期唔係上載月份",
+  cross_month_duplicate: "跨月重複（已由另一月檔案寫入）",
+  out_of_scope: "範圍外（目標月份唔係未鎖歷史月份）",
   site_unresolved: "盤／子盤未定",
   broker_code_unmatched: "雞頭碼對唔到",
   leave_shift_type_unknown: "請假格推斷唔到更別",
@@ -108,7 +111,10 @@ export function bucketUnresolvedReason(reason: string): UnresolvedBucket[] {
   const out = new Set<UnresolvedBucket>();
   for (const part of reason.split("；")) {
     if (!part.trim()) continue;
-    if (part.includes("保安員未配對")) out.add("guard_unmatched");
+    // HIST-5 S4：跨月格分類字面（reconcile.ts CROSS_MONTH_DUPLICATE_MARK／OUT_OF_SCOPE_MARK），要排喺「唔係上載月份」之前。
+    if (part.includes(CROSS_MONTH_DUPLICATE_MARK)) out.add("cross_month_duplicate");
+    else if (part.includes(OUT_OF_SCOPE_MARK)) out.add("out_of_scope");
+    else if (part.includes("保安員未配對")) out.add("guard_unmatched");
     else if (part.includes("更別未配對") || part.includes("更種已作廢")) out.add("shift_type_unmatched");
     else if (part.includes("唔係上載月份")) out.add("date_outside_month");
     else if (part.includes("子盤") || part.includes("未指定盤")) out.add("site_unresolved");

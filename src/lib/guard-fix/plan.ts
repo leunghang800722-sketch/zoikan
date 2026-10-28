@@ -7,13 +7,15 @@
 // 邊度／印唔印）。
 import { readFileSync, existsSync } from "fs";
 import type { PrismaClient } from "@prisma/client";
-import { matchGuard, buildGuardMatchIndex, matchBroker, matchSite, type BrokerCandidate, type GuardMatchIndex, type SiteCandidate } from "@/lib/roster-upload/match";
-import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
+import { matchGuard, buildGuardMatchIndex, matchBroker, matchSite, isMergedAwayGuard, type BrokerCandidate, type GuardMatchIndex, type SiteCandidate } from "@/lib/roster-upload/match";
+import { normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
 import { buildUTeamIndex, canonicalHkid, type UTeamRow, type UTeamIndex } from "@/lib/guard-fix/sources";
 import { derivePostorderLongtermPostsFromPostorderCsv, type PostorderLongtermPostCell, type PostorderReferralRow, type PostorderVisaResult } from "@/lib/guard-fix/postorder";
 import { inferReferralBrokerFromRosters } from "@/lib/pricing/longterm-settlement";
-import type { GuardFixPlan, GuardFixIdentity, LinkAction, CreateAction, CreateMinimalAction, NeedsBossAction, GuardFixCellRef, SetLongtermAction, SetLongtermPostAction, SetReferralAction, SetReferralInferredAction, SetVisaAction } from "@/lib/guard-fix/types";
+import type { GuardFixPlan, GuardFixIdentity, LinkAction, CreateAction, CreateMinimalAction, NeedsBossAction, MergeGuardsAction, GuardFixCellRef, SetLongtermAction, SetLongtermPostAction, SetReferralAction, SetReferralInferredAction, SetVisaAction } from "@/lib/guard-fix/types";
+import { buildHistPlanContext, conflictingMethodsRemaining, decideHistoricalIdentity, needsBossToRemaining, overrideKeyOf, type HistDecision, type HistIdentityInput, type HistPlanContext } from "@/lib/guard-fix/historical-plan";
+import { HIST_RULE_CONFIDENCE, foldName, type HistInference, type HistRemaining, type HistReviewHint } from "@/lib/month-close/hist-inference";
 
 export type { GuardFixPlan } from "@/lib/guard-fix/types";
 
@@ -46,6 +48,8 @@ interface RawUnmatchedCell {
   nameRaw: string;
   telRaw: string | null;
   siteLabel: string;
+  /** HIST-5：解析後實際盤（resolved_site_id ?? 上載掛嘅盤）；jsonl fallback 冇。 */
+  siteId: string | null;
   brokerCodeRaw: string | null;
   settlementBrokerId: string | null;
 }
@@ -74,6 +78,7 @@ async function loadFromDbRows(prisma: PrismaClient, month: Date): Promise<RawUnm
       nameRaw: r.nameRaw!.trim(),
       telRaw: r.telRaw,
       siteLabel,
+      siteId: r.resolvedSiteId ?? upload.siteId ?? null,
       brokerCodeRaw: r.brokerCodeRaw,
       settlementBrokerId: r.settlementBrokerId,
     };
@@ -107,6 +112,7 @@ async function loadFromRecordsJsonl(recordsJsonlPath: string, guardIndex: GuardM
       nameRaw,
       telRaw: rec.tel ?? null,
       siteLabel: rec.site_raw?.trim() || "（盤名未定）",
+      siteId: null,
       brokerCodeRaw: rec.broker_code ?? null,
       settlementBrokerId: null,
     });
@@ -192,6 +198,8 @@ function resolveDefaultBrokerCode(
 
 export interface BuildGuardFixPlanOptions {
   prisma: PrismaClient;
+  /** HIST-5：歷史月份導入——needs_boss 改由 AI 推斷規則（R1–R4）自動落地，剩低嘅入 `plan.historical.remaining`。正式月份唔傳。 */
+  historical?: boolean;
   /** 目標月份（第一日，UTC）。 */
   month: Date;
   /** U Team 名單 rows（由 xlsx 解析、記憶體，caller 負責攞——script 讀
@@ -420,15 +428,15 @@ function buildPostorderActions(params: {
 
 export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise<GuardFixPlan> {
   const { prisma, month } = opts;
-  const [guardsRaw, staffNumbersRaw, phonesRaw, brokersRaw, siteAssignments, siteRows, existingLongtermPostRows] = await Promise.all([
+  const [guardsAll, staffNumbersRaw, phonesRaw, brokersRaw, siteAssignments, siteRows, existingLongtermPostRows] = await Promise.all([
     prisma.guard.findMany({
-      select: { id: true, nameZh: true, tel: true, hkid: true, staffNo: true, staffNoMw: true, nameAliases: true, employmentType: true, referralBrokerId: true },
+      select: { id: true, nameZh: true, tel: true, hkid: true, staffNo: true, staffNoMw: true, nameAliases: true, employmentType: true, referralBrokerId: true, status: true, createdAt: true, createdBy: true, mergedFrom: true },
     }),
     prisma.guardStaffNumber.findMany({ select: { number: true, guardId: true, status: true, scheme: true } }),
     prisma.guardPhone.findMany({ select: { guardId: true, tel: true } }),
     prisma.broker.findMany({ select: { id: true, code: true, aliases: true } }),
     prisma.brokerSiteAssignment.findMany({ where: { month }, select: { siteId: true, broker: { select: { code: true } } } }),
-    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, parentSiteId: true } }),
     // 驗收（Opus 5.5）：淨係 `source=manual` 先當「已經有崗位」——`inferred`
     // （占比推算）／`july_backfill`（7 月反推）喺 Postorder 生效之後結算判斷
     // 度會被忽略（見 longterm-settlement.ts），所以總表
@@ -437,7 +445,9 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     // 嘅次序會令呢啲組合被當成已有崗位跳過（dev 重演：setPost 由 56 跌到 17）。
     prisma.guardLongtermPost.findMany({ where: { voidedAt: null, source: "manual" }, select: { guardId: true, siteId: true } }),
   ]);
-  const matchOverridesRaw = await prisma.guardMatchOverride.findMany({ where: { voidedAt: null }, select: { staffNo: true, nameRaw: true, guardId: true } });
+  // HIST-5：已被歷史導入合併走嘅 guard 唔再參與任何配對／候選。
+  const guardsRaw = guardsAll.filter((g) => !isMergedAwayGuard(g));
+  const matchOverridesRaw = await prisma.guardMatchOverride.findMany({ where: { voidedAt: null }, select: { staffNo: true, nameRaw: true, guardId: true, reason: true } });
   const siteNameById = new Map(siteRows.map((s) => [s.id, s.canonicalName]));
   const siteAssignmentBrokerCodeBySite = new Map<string, string[]>();
   for (const a of siteAssignments) {
@@ -517,6 +527,63 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     cellsByIdentitySeq.get(identity.seq)!.push(c);
   }
 
+  // -------------------------------------------------------------------
+  // HIST-5：歷史模式 AI 推斷設定（正式月份 hist=false，以下全部唔行）。
+  // -------------------------------------------------------------------
+  const hist = opts.historical === true;
+  const histCtx: HistPlanContext | null = hist
+    ? buildHistPlanContext({
+        prisma,
+        month,
+        guardsRaw: guardsRaw.map((g) => ({ id: g.id, nameZh: g.nameZh, nameAliases: g.nameAliases, status: g.status, createdAt: g.createdAt, createdBy: g.createdBy, tel: g.tel, mergedFrom: g.mergedFrom })),
+        staffNumbersRaw: staffNumbersRaw.map((n) => ({ number: n.number, guardId: n.guardId, status: n.status, scheme: n.scheme })),
+        phonesRaw,
+        siteRows,
+        activeOverrides: matchOverridesRaw,
+        staffNoOwner,
+      })
+    : null;
+  const mergeGuards: MergeGuardsAction[] = [];
+  const histRemaining: Array<HistRemaining & { seq: string }> = [];
+  const histHints: Array<HistReviewHint & { seq: string }> = [];
+  const identityInputs = new Map<string, HistIdentityInput>();
+  const histInputOf = (identity: GuardFixIdentity): HistIdentityInput => {
+    const cached = identityInputs.get(identity.seq);
+    if (cached) return cached;
+    const idCells = cellsByIdentitySeq.get(identity.seq) ?? [];
+    const input: HistIdentityInput = {
+      seq: identity.seq,
+      nameRaw: identity.nameRaw,
+      staffNoRaw: identity.staffNoRaw,
+      totalCellCount: identity.totalCellCount,
+      siteLabels: identity.cells.map((c) => c.siteLabel),
+      siteIds: [...new Set(idCells.map((c) => c.siteId).filter((x): x is string => !!x))],
+      staffNoRawVariants: [...new Set(idCells.map((c) => c.staffNoRaw).filter((x): x is string => !!x))],
+    };
+    identityInputs.set(identity.seq, input);
+    return input;
+  };
+  /** 套用歷史決定；回傳 true＝已處理（caller continue），false＝fallthrough（交返原有邏輯）。 */
+  const applyHistDecision = (d: HistDecision, identity: GuardFixIdentity, defaultBrokerCode: string): boolean => {
+    switch (d.kind) {
+      case "link":
+        link.push({ ...d.link, seq: identity.seq });
+        for (const h of d.hints) histHints.push({ ...h, cells: identity.totalCellCount, seq: identity.seq });
+        return true;
+      case "create_minimal":
+        createMinimal.push({ ...d.create, seq: identity.seq, defaultBrokerCode });
+        return true;
+      case "merge":
+        mergeGuards.push({ ...d.merge, seq: identity.seq });
+        return true;
+      case "remaining":
+        histRemaining.push({ ...d.remaining, seq: identity.seq });
+        return true;
+      case "fallthrough":
+        return false;
+    }
+  };
+
   for (const identity of identities) {
     const representativeCell = cellsByIdentitySeq.get(identity.seq)?.[0] ?? { brokerCodeRaw: null, settlementBrokerId: null };
     const siteLabel = identity.cells[0]?.siteLabel ?? "（盤名未定）";
@@ -528,6 +595,10 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     const distinctGuardIds = new Set(methodsFound.map((m) => m.guardId));
 
     if (distinctGuardIds.size > 1) {
+      if (histCtx) {
+        histRemaining.push({ ...(await conflictingMethodsRemaining(histCtx, histInputOf(identity), [...distinctGuardIds])), seq: identity.seq });
+        continue;
+      }
       needsBoss.push({
         type: "needs_boss",
         code: "conflicting_methods",
@@ -559,6 +630,11 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
               ? `淨係一種弱證據（${methodsFound.map((m) => m.method).join("／")}），可能係家人／雞頭共用電話或同名唔同人`
               : null;
       if (refuse) {
+        if (histCtx) {
+          // HIST-5：refuse（電話共用／工號屬別人／現有號唔同）→ 按姓名規則（R1／R2a／R2b／R2c／R3）自動落地。
+          const d = await decideHistoricalIdentity(histCtx, { identity: histInputOf(identity), telGuardId: guardId });
+          if (applyHistDecision(d, identity, defaultBrokerCode)) continue;
+        }
         needsBoss.push({ type: "needs_boss", code: snOwner && snOwner !== guardId ? "staff_no_conflict" : hasOtherCurrentSameScheme ? "staff_no_conflict" : "weak_evidence", seq: identity.seq, reason: `${refuse}，唔自動 link，交老闆睇`, candidateGuardIds: [guardId] });
         continue;
       }
@@ -573,6 +649,12 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
         addAlias: !nameMatches && !alreadyHasAlias ? identity.nameRaw : null,
       });
       continue;
+    }
+
+    if (histCtx) {
+      // HIST-5：冇電話／身份證硬鍵嘅 ambiguous／unmatched——先按姓名（本名∪別名，簡繁／後綴折返）規則 R1／R2b／R3 試落地。
+      const d = await decideHistoricalIdentity(histCtx, { identity: histInputOf(identity), telGuardId: null });
+      if (applyHistDecision(d, identity, defaultBrokerCode)) continue;
     }
 
     if (identity.kind === "ambiguous") {
@@ -701,6 +783,18 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     });
   }
 
+  // -------------------------------------------------------------------
+  // HIST-5：歷史模式收尾——其餘 needs_boss 轉 remaining；R4 同名合併（同一次未配對集合內同名 create_minimal 當同一人）。
+  // -------------------------------------------------------------------
+  if (histCtx) {
+    for (const nb of needsBoss.splice(0)) {
+      const identity = identities.find((i) => i.seq === nb.seq);
+      if (!identity) continue;
+      histRemaining.push({ ...(await needsBossToRemaining(histCtx, histInputOf(identity), nb)), seq: nb.seq });
+    }
+    applyR4Clusters({ createMinimal, link, identities, histInputOf, staffNoOwner });
+  }
+
   let setLongterm: SetLongtermAction[] = [];
   let setLongtermPost: SetLongtermPostAction[] = [];
   let setReferral: SetReferralAction[] = [];
@@ -783,10 +877,90 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     dbTarget: describeDbTarget(),
     sourceMode,
     identities,
-    actions: { link, create, createMinimal, needsBoss, setLongterm, setLongtermPost, setReferral, setReferralInferred, setVisa },
+    actions: { link, create, createMinimal, needsBoss, ...(hist ? { mergeGuards } : {}), setLongterm, setLongtermPost, setReferral, setReferralInferred, setVisa },
     hkidDroppedCount,
+    ...(hist ? { historical: { remaining: histRemaining, reviewHints: histHints } } : {}),
     postorder: postorderSummary,
   };
+}
+
+/** HIST-5 R4：同一次未配對集合內，姓名相同（NFKC／簡繁／後綴折返）但工號唔同／其一冇工號嘅 create_minimal 當同一人——
+ * 以格數最多嗰個身份為主（佢嘅工號如果 DB 未有人用就登記做 current），其餘身份寫 guard_match_overrides 併入同一 guard。
+ * 如果同名組入面已經有 link 去同一位 guard，create 成員改為併入嗰位（寫 override），唔再另建。 */
+function applyR4Clusters(params: {
+  createMinimal: CreateMinimalAction[];
+  link: LinkAction[];
+  identities: GuardFixIdentity[];
+  histInputOf: (i: GuardFixIdentity) => HistIdentityInput;
+  staffNoOwner: Map<string, string>;
+}): void {
+  const { createMinimal, link, identities, histInputOf, staffNoOwner } = params;
+  const identityBySeq = new Map(identities.map((i) => [i.seq, i]));
+  const groups = new Map<string, CreateMinimalAction[]>();
+  for (const cm of createMinimal) {
+    const k = foldName(cm.nameZh);
+    if (!k) continue;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(cm);
+  }
+  const keyOf = (i: GuardFixIdentity) => ({ staffNo: i.staffNoRaw ? normalizeStaffNumber(i.staffNoRaw) : "", nameRaw: i.nameRaw.trim() });
+  const drop = new Set<string>();
+  for (const [foldKey, group] of groups) {
+    const linksSameName = link.filter((l) => {
+      const idn = identityBySeq.get(l.seq);
+      return !!idn && foldName(idn.nameRaw) === foldKey;
+    });
+    const linkTargets = new Set(linksSameName.map((l) => l.guardId));
+    if (linkTargets.size === 1) {
+      // 同名已經 link 去某位 guard：create 成員併入嗰位。
+      const target = linksSameName[0]!;
+      for (const cm of group) {
+        const idn = identityBySeq.get(cm.seq)!;
+        target.addOverrides = [...(target.addOverrides ?? []), keyOf(idn)];
+        const a = idn.nameRaw.trim();
+        drop.add(cm.seq);
+        target.inference = target.inference ? { ...target.inference, evidence: [...target.inference.evidence, `同一次未配對集合內同名身份（${idn.staffNoRaw ? `工號 ${normalizeStaffNumber(idn.staffNoRaw)}` : "冇工號"}，${idn.totalCellCount} 格）併入同一位：${a}`] } : target.inference;
+      }
+      continue;
+    }
+    if (group.length < 2) continue;
+    const members = group.map((cm) => ({ cm, idn: identityBySeq.get(cm.seq)! })).sort((a, b) => b.idn.totalCellCount - a.idn.totalCellCount || a.cm.seq.localeCompare(b.cm.seq));
+    const primary = members[0]!;
+    const rest = members.slice(1);
+    const pCm = primary.cm;
+    const pInput = histInputOf(primary.idn);
+    const pSn = pInput.staffNoRaw ? normalizeStaffNumber(pInput.staffNoRaw) : null;
+    const scheme = pSn?.match(/^[A-Z]+/)?.[0];
+    const registerStaffNo = pSn && scheme && scheme.length <= 4 && STAFF_NUMBER_NUMBER_RE.test(pSn) && !staffNoOwner.has(pSn) ? { scheme, number: pSn } : null;
+    const extra: HistInference[] = [];
+    if (pCm.inference) extra.push(pCm.inference);
+    for (const m of rest) {
+      if (m.cm.inference) extra.push(m.cm.inference);
+      if (m.cm.extraInferences) extra.push(...m.cm.extraInferences);
+      if (!pCm.tel && m.cm.tel) pCm.tel = m.cm.tel;
+      drop.add(m.cm.seq);
+    }
+    const overrides = [keyOf(primary.idn), ...rest.map((m) => keyOf(m.idn)), ...members.flatMap((m) => m.cm.overrides ?? [])];
+    const uniqueOverrides = [...new Map(overrides.map((o) => [overrideKeyOf(o.staffNo, o.nameRaw), o])).values()];
+    pCm.overrides = uniqueOverrides;
+    pCm.aliases = [...new Set(rest.map((m) => m.idn.nameRaw.trim()).filter((n) => n && n !== pCm.nameZh.trim()))];
+    pCm.staffNumber = pCm.staffNumber ?? registerStaffNo;
+    const totalCells = members.reduce((sum, m) => sum + m.idn.totalCellCount, 0);
+    const memberText = members.map((m) => `${m.idn.staffNoRaw ? `工號 ${normalizeStaffNumber(m.idn.staffNoRaw)}` : "冇工號"}（${m.idn.totalCellCount} 格）`).join("、");
+    pCm.inference = {
+      rule: "R4",
+      confidence: HIST_RULE_CONFIDENCE.R4,
+      subject: { name: pCm.nameZh, ...(pSn ? { staffNo: pSn } : {}), site: [...new Set(members.flatMap((m) => m.idn.cells.map((c) => c.siteLabel)))].join("、") },
+      decision: `${members.length} 個同名身份當同一人，建一位保安員${registerStaffNo ? `並登記工號 ${registerStaffNo.number}` : ""}；其餘工號／無工號身份寫配對覆寫併入（疑工號筆誤）`,
+      evidence: [`同一次未配對集合內姓名相同（NFKC／簡繁／後綴折返）：${memberText}`, `以格數最多嗰個身份為主${pSn ? `（工號 ${pSn}${registerStaffNo ? "，DB 冇人用，登記做 current" : "，DB 已有人用，唔登記"}）` : "（冇工號）"}`],
+      cells: totalCells,
+    };
+    pCm.extraInferences = extra;
+    pCm.reason = "同名身份合併（疑工號筆誤）";
+  }
+  if (drop.size > 0) {
+    for (let i = createMinimal.length - 1; i >= 0; i--) if (drop.has(createMinimal[i]!.seq)) createMinimal.splice(i, 1);
+  }
 }
 
 /** plan-summary.md——淨係數目／盤名／格數，唔列名（鐵則），script 同

@@ -3,6 +3,8 @@
 // plan.ts／apply.ts（舊 apply-guard-fix-plan.ts script 已刪）共用，保證兩邊讀寫同一份契約。同
 // scripts/opening/lib/types.ts 一致模式。
 //
+import type { HistInference, HistRemaining, HistReviewHint } from "@/lib/month-close/hist-inference";
+
 // 鐵則：呢個型別入面嘅 `nameZh`／`aliases`／`tel`／`hkid` 等 PII 只可以
 // 出現喺 gitignored 嘅 `data/2026-09/guard-fix/plan.json`——`build-guard-
 // fix-plan.ts` 印落 console／`plan-summary.md` 嘅嘢一律唔准帶呢啲值。
@@ -42,6 +44,29 @@ export interface LinkAction {
   addStaffNumber: { scheme: string; number: string } | null;
   /** 冇喺 `name_aliases` 先加（唔可以等於本名）。 */
   addAlias: string | null;
+  /** HIST-5：寫 guard_match_overrides（staffNo 空字串＝淨姓名）令 reparse 配到 guardId，唔使加工號／電話。歷史模式專用。 */
+  addOverrides?: OverrideKey[];
+  /** HIST-5：AI 推斷（規則＋信心＋依據）——寫入 override.reason／audit，同導入報告 `inferences[]`。 */
+  inference?: HistInference;
+}
+
+/** HIST-5：guard_match_overrides 嘅鍵（staffNo 已正規化；空字串＝更表冇工號嘅格）。 */
+export interface OverrideKey {
+  staffNo: string;
+  nameRaw: string;
+}
+
+/** HIST-5 R3：合併歷史導入自己建嘅同名 minimal guard——保留者承接 shift_records／長工崗位，被合併者 inactive＋`merged_into:<id>`。 */
+export interface MergeGuardsAction {
+  type: "merge_guards";
+  seq: string;
+  keepGuardId: string;
+  mergeGuardIds: string[];
+  reason: string;
+  addStaffNumber: { scheme: string; number: string } | null;
+  addAlias: string | null;
+  addOverrides: OverrideKey[];
+  inference: HistInference;
 }
 
 export interface CreateAction {
@@ -76,6 +101,16 @@ export interface CreateMinimalAction {
    * 姓名 → 新保安員），reparse 先配得返。optional：舊 plan.json 冇呢兩欄。 */
   conservative?: "staff_no_conflict" | "name_only_unverified";
   matchOverrideStaffNo?: string | null;
+  /** HIST-5：額外別名（R4 合併嘅變體名）。 */
+  aliases?: string[];
+  /** HIST-5：建人時登記為 current 嘅工號（DB 冇人用先出）。 */
+  staffNumber?: { scheme: string; number: string } | null;
+  /** HIST-5：建完寫 guard_match_overrides（每個併入嘅身份一條）。 */
+  overrides?: OverrideKey[];
+  /** HIST-5：AI 推斷。 */
+  inference?: HistInference;
+  /** HIST-5 R4：併入嘅其他身份各自原有嘅推斷（例如 R2c），一齊入報告。 */
+  extraInferences?: HistInference[];
 }
 
 export interface NeedsBossAction {
@@ -175,6 +210,8 @@ export interface GuardFixPlan {
     create: CreateAction[];
     createMinimal: CreateMinimalAction[];
     needsBoss: NeedsBossAction[];
+    /** HIST-5：歷史模式 R3 合併（舊 plan.json 冇呢欄）。 */
+    mergeGuards?: MergeGuardsAction[];
     /** WP-LTSHIFT §19：冇 Postorder 上載就係空 array（唔影響 link/
      * create 嗰四類原有行為）。 */
     setLongterm: SetLongtermAction[];
@@ -189,6 +226,11 @@ export interface GuardFixPlan {
    * （要 HR 補）——唔係 PII 本身（淨係數目），plan-summary／頁面摘要卡
    * 都可以印。 */
   hkidDroppedCount: number;
+  /** HIST-5：歷史模式專用——取代 needs_boss 嘅「仍需決定」清單＋抽查提示（正式月份恆 undefined）。 */
+  historical?: {
+    remaining: Array<HistRemaining & { seq: string }>;
+    reviewHints: Array<HistReviewHint & { seq: string }>;
+  };
   /** WP-LTSHIFT §19：呢次計劃有冇用到 Postorder 上載（同埋，如果有，
    * 佢自己嗰份 parse summary／警告——冇上載就 null）。 */
   postorder: {

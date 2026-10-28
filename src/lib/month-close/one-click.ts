@@ -39,6 +39,8 @@ import { runReconcileAllForMonth, RECONCILE_ALL_ADVISORY_LOCK_KEY, RECONCILE_ALL
 import { buildGuardFixPlan, summarizePlan } from "@/lib/guard-fix/plan";
 import { applyGuardFixPlan, reparseAllActiveUploads, GUARD_FIX_ADVISORY_LOCK_KEY } from "@/lib/guard-fix/apply";
 import { APPLY_STALE_MS } from "@/lib/guard-fix/view";
+import type { GuardFixPlan } from "@/lib/guard-fix/types";
+import { HIST_RULE_CONFIDENCE, type HistInference, type HistRemaining, type HistReviewHint } from "./hist-inference";
 import { safeErrorSummary } from "@/lib/api/http";
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
@@ -524,6 +526,11 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
   let postorderUpload: Awaited<ReturnType<typeof prisma.postorderUpload.findFirst>> = null;
   let postorder: Awaited<ReturnType<typeof loadPostorderForPlan>> = undefined;
   let converged = false;
+  // HIST-5：歷史模式 AI 推斷結果（跨輪累積；remaining／reviewHints 取最後一輪 plan）。
+  const histInferences = new Map<string, HistInference>();
+  let histRemaining: HistRemaining[] = [];
+  let histRemainingSeqs: string[] = [];
+  const histHints = new Map<string, HistReviewHint>();
   const maxRounds = opts?.historical ? HIST_GUARD_FIX_MAX_ROUNDS : GUARD_FIX_MAX_ROUNDS;
   const reparseOpts = { txTimeoutMs: 10 * 60 * 1000, includeConfirmed: opts?.historical === true };
   for (let round = 1; round <= maxRounds; round++) {
@@ -548,15 +555,20 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
 
     let plan;
     try {
-      plan = await buildGuardFixPlan({ prisma, month: start, uTeamRows, postorder });
+      plan = await buildGuardFixPlan({ prisma, month: start, uTeamRows, postorder, historical: opts?.historical === true });
     } catch (e) {
       // 冇 active 上載（NoActiveUploadsError）等——保安員修復對呢個月冇嘢做。
       warnings.push(`保安員修復計劃計算唔到（${safeErrorSummary(e)}），略過`);
       break;
     }
     const summary = summarizePlan(plan);
-    const actionable = summary.link + summary.create + summary.createMinimal + summary.setLongterm + summary.setLongtermPost + summary.setReferral + summary.setReferralInferred + summary.setVisa;
-    rounds.push({ round, link: summary.link, create: summary.create, createMinimal: summary.createMinimal, needsBoss: summary.needsBoss, setLongterm: summary.setLongterm, setLongtermPost: summary.setLongtermPost, setReferral: summary.setReferral, setReferralInferred: summary.setReferralInferred, setVisa: summary.setVisa });
+    const mergeCount = plan.actions.mergeGuards?.length ?? 0;
+    const actionable = summary.link + summary.create + summary.createMinimal + mergeCount + summary.setLongterm + summary.setLongtermPost + summary.setReferral + summary.setReferralInferred + summary.setVisa;
+    rounds.push({ round, link: summary.link, create: summary.create, createMinimal: summary.createMinimal, ...(opts?.historical ? { mergeGuards: mergeCount, remaining: plan.historical?.remaining.length ?? 0 } : {}), needsBoss: summary.needsBoss, setLongterm: summary.setLongterm, setLongtermPost: summary.setLongtermPost, setReferral: summary.setReferral, setReferralInferred: summary.setReferralInferred, setVisa: summary.setVisa });
+    if (opts?.historical) {
+      histRemaining = (plan.historical?.remaining ?? []).map(withoutSeq);
+      histRemainingSeqs = (plan.historical?.remaining ?? []).map((r) => r.seq);
+    }
 
     lastPlanNeedsBoss = plan.actions.needsBoss.map((a) => {
       const identity = plan.identities.find((i) => i.seq === a.seq);
@@ -608,6 +620,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     }
     try {
       const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: start, historicalRoster: opts?.historical === true });
+      if (opts?.historical) collectHistInferences(plan, diffs, histInferences, histHints);
       const telBlanked = (diffs.create.warnings?.length ?? 0) + (diffs.createMinimal.warnings?.length ?? 0);
       if (telBlanked > 0) warnings.push(`保安員修復第 ${round} 輪：${telBlanked} 個電話格式唔啱，已留空（保安員照建，電話請人手補）`);
       const reparse = await reparseAllActiveUploads(prisma, start, reparseOpts);
@@ -628,7 +641,11 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
   let autoLinked = 0;
   let autoLinkedCells = 0;
   let remaining = lastPlanNeedsBoss.length;
-  if (lastPlanNeedsBoss.length > 0) {
+  if (opts?.historical) {
+    // HIST-5：歷史模式唔開分診題；剩低「真係判斷唔到」嘅（R3c 兩個都有盤史等）直接列入 needsHuman，連候選＋建議答案（同報告 remaining 一致）。
+    remaining = histRemaining.length;
+    histRemaining.forEach((r, i) => needsHuman.push(describeHistRemaining(histRemainingSeqs[i] ?? `#${i + 1}`, r)));
+  } else if (lastPlanNeedsBoss.length > 0) {
     const ctx = auto ?? new AutoCollector(null, start, actorUserId, null);
     const res = await autoResolveNeedsBoss(ctx, start, lastPlanNeedsBoss);
     autoLinked = res.autoLinked;
@@ -645,7 +662,70 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     }
   }
 
-  return { numbers: { rounds, remainingNeedsBoss: remaining, autoLinked, autoLinkedCells }, warnings, needsHuman };
+  return {
+    numbers: { rounds, remainingNeedsBoss: remaining, autoLinked, autoLinkedCells, ...(opts?.historical ? { inferences: [...histInferences.values()], remaining: histRemaining, reviewHints: [...histHints.values()] } : {}) },
+    warnings,
+    needsHuman,
+  };
+}
+
+function withoutSeq<T extends { seq: string }>(x: T): Omit<T, "seq"> {
+  const { seq, ...rest } = x;
+  void seq;
+  return rest;
+}
+
+/** HIST-5：收集今輪「真係套用咗」（diff.create）嘅推斷同抽查提示。R5：create_minimal 建人時電話撞 DB（tel_skipped_duplicate）要講明。 */
+export function collectHistInferences(plan: GuardFixPlan, diffs: Awaited<ReturnType<typeof applyGuardFixPlan>>, into: Map<string, HistInference>, hints: Map<string, HistReviewHint>): void {
+  const add = (inf: HistInference | undefined) => {
+    if (!inf) return;
+    into.set(`${inf.rule}|${inf.subject.name ?? ""}|${inf.subject.staffNo ?? ""}|${inf.subject.site ?? ""}|${inf.subject.code ?? ""}|${inf.subject.timeSlot ?? ""}|${inf.decision}`, inf);
+  };
+  const created = (d: { create: string[] }) => new Set(d.create);
+  const linkSeqs = created(diffs.link);
+  for (const la of plan.actions.link) if (linkSeqs.has(la.seq)) add(la.inference);
+  const cmSeqs = created(diffs.createMinimal);
+  for (const cm of plan.actions.createMinimal) {
+    if (!cmSeqs.has(cm.seq)) continue;
+    add(cm.inference);
+    for (const extra of cm.extraInferences ?? []) add(extra);
+  }
+  const mergeSeqs = created(diffs.mergeGuards);
+  for (const ma of plan.actions.mergeGuards ?? []) if (mergeSeqs.has(ma.seq)) add(ma.inference);
+  for (const h of plan.historical?.reviewHints ?? []) {
+    if (!linkSeqs.has(h.seq)) continue;
+    const rest = withoutSeq(h);
+    hints.set(`${rest.rule}|${rest.subject.name ?? ""}|${rest.subject.staffNo ?? ""}`, rest);
+  }
+  // R5：原有 create_minimal（名單／DB 全部搵唔到）建人時電話撞 DB，電話靜靜跳過——而家要講明。
+  for (const t of diffs.createMinimal.telSkipped ?? []) {
+    const seq = t.split(":")[0]!;
+    const identity = plan.identities.find((i) => i.seq === seq);
+    if (!identity) continue;
+    add({
+      rule: "R5",
+      confidence: HIST_RULE_CONFIDENCE.R5,
+      subject: { name: identity.nameRaw, ...(identity.staffNoRaw ? { staffNo: identity.staffNoRaw.trim().toUpperCase().replace(/\s+/g, "") } : {}), site: identity.cells.map((c) => c.siteLabel).join("、") },
+      decision: "建人時電話留空（電話屬另一人）",
+      evidence: ["更表電話已屬 DB 另一位保安員（電話全表唯一），新建保安員唔寫電話", "疑家人／雞頭共用電話"],
+      cells: identity.totalCellCount,
+    });
+  }
+}
+
+const HIST_REMAINING_REASON: Record<string, string> = {
+  same_name_multi_no_history: "同名多位保安員，同盤歷史冇更次可分辨",
+  same_name_multi_both_history: "同名多位保安員，同盤歷史都有更次",
+  conflicting_methods: "電話同身份證指唔同人",
+  uteam_refused: "名單路徑被拒",
+  override_exists_but_unmatched: "已有配對覆寫但仍未配對",
+};
+
+/** needsHuman 一行（姓名／工號可出；唔帶電話）。 */
+function describeHistRemaining(seq: string, r: HistRemaining): string {
+  const who = `${r.subject.name ? `「${r.subject.name}」` : ""}${r.subject.staffNo ? ` ${r.subject.staffNo}` : ""}`;
+  const rec = r.recommended.action === "none" ? "冇建議" : r.recommended.action === "link" ? `建議連結到「${r.recommended.name ?? ""}」（信心 ${r.recommended.confidence}）` : `建議按更表姓名建獨立保安員（信心 ${r.recommended.confidence}）`;
+  return `未配對保安員（${seq}）${who}：${r.subject.site ?? "（盤名未定）"}，共 ${r.cells} 格——${HIST_REMAINING_REASON[r.reasonCode] ?? r.reasonCode}；${rec}（${r.recommended.why}）`;
 }
 
 // ---------------------------------------------------------------------------
