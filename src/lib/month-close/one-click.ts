@@ -364,6 +364,8 @@ export async function stepPrecheck(month: Date, _actorUserId: string, _ip: strin
 export async function stepParseHealth(month: Date, actorUserId: string, auto?: AutoCollector, opts?: { historical?: boolean }) {
   const { start } = monthRange(month);
   const ctx = auto ?? new AutoCollector(null, start, actorUserId, null);
+  // HIST-3：歷史模式——自動建更種容許冇開始時間，同現有盤補新代號／新時段。
+  if (opts?.historical) ctx.historical = true;
   const warnings: string[] = [];
   const needsHuman: string[] = [];
 
@@ -432,6 +434,11 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
     needsHuman.push(`自動補更種失敗（${safeErrorSummary(e)}）——請去「盤」管理手動加更種`);
   }
 
+  // HIST-3：歷史模式建咗冇開始時間更種（時段欄唔係時間）——逐盤講明「時段未知，只計出勤」。
+  const noTimeBySite = new Map<string, string[]>();
+  for (const x of ctx.noTimeShiftTypes) noTimeBySite.set(x.siteName, [...(noTimeBySite.get(x.siteName) ?? []), x.code]);
+  for (const [siteName, codes] of noTimeBySite) warnings.push(`盤「${siteName}」更種「${[...new Set(codes)].join("、")}」時段欄唔係時間，已建冇開始時間更種（時段未知，只計出勤）`);
+
   // B. 更數異常自動拆解（重新讀返上載：有新指定嘅盤、rows 已經 reparse）。
   const assigned = await prisma.rosterUpload.findMany({
     where: { month: start, status: { notIn: ["superseded", "voided", "parse_failed"] }, siteId: { not: null } },
@@ -477,6 +484,7 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
       proposedSites,
       sitesAliased: ctx.summary.sitesAliased,
       shiftTypesCreated: ctx.summary.shiftTypesCreated,
+      noTimeShiftTypes: ctx.noTimeShiftTypes.map((x) => ({ site: x.siteName, code: x.code })),
       formatDiffWarnings: variance.legacyFlagged,
       varianceFlagged: variance.findings.length,
       varianceExplained: explainedCount,

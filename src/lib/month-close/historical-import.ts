@@ -64,7 +64,7 @@ export interface HistImportReport {
   month: string;
   before: HistImportCounts;
   after: HistImportCounts;
-  created: { sites: number; shiftTypes: number; guards: number; siteAliases: number };
+  created: { sites: number; shiftTypes: number; guards: number; siteAliases: number; noTimeShiftTypes: Array<{ site: string; code: string }> };
   totals: { uploads: number; parseFailedUploads: number; cells: number; written: number; rosterOnly: number; settlementDiff: number; guardDiff: number; shiftTypeDiff: number; unresolved: number; unresolvedByReason: Partial<Record<UnresolvedBucket, number>> };
   perSite: HistImportSiteReport[];
   postorder: ({ uploaded: true; fileName: string } & PostorderRosterCompare) | { uploaded: false };
@@ -155,6 +155,7 @@ async function runHistoricalImportInner(runId: string, month: Date, actorUserId:
   const start = toMonthStart(month);
   const runner = newRunner(runId);
   const auto = new AutoCollector(null, start, actorUserId, ip, `auto:historical-import:${runId}`);
+  auto.historical = true;
   try {
     let halt: string | undefined;
     await runner.run("precheck", async () => {
@@ -302,6 +303,8 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
       shiftTypes: Number(pf.shiftTypesCreated ?? 0),
       guards: after.historicalGuards - before.historicalGuards,
       siteAliases: Number(pf.sitesAliased ?? 0),
+      // 時段欄唔係時間而建嘅冇開始時間更種（以代號為鍵）——時段未知，只計出勤。
+      noTimeShiftTypes: (pf.noTimeShiftTypes as Array<{ site: string; code: string }> | undefined) ?? [],
     },
     totals,
     perSite,

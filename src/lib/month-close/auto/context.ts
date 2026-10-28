@@ -66,6 +66,10 @@ export class AutoCollector implements ChangeWriter {
   readonly warnings: string[] = [];
   /** 呢個 run 自動建嘅新盤（site_new 分診用）。 */
   readonly newSiteIds = new Set<string>();
+  /** HIST-3：歷史導入 run 設 true——自動建更種容許冇開始時間（時段欄唔係時間）同現有盤補新代號／新時段。正式月份恆 false。 */
+  historical = false;
+  /** HIST-3：歷史導入建出嚟嘅「冇開始時間」更種（只計出勤），報告逐盤列出（盤名＋代號，冇 PII）。 */
+  readonly noTimeShiftTypes: Array<{ siteName: string; code: string }> = [];
   /** P8 M1：分診 session 擁有人（自動 run＝該月最新上載者／系統帳號）；冇設＝actorUserId（人手撳一鍵嗰個人）。 */
   triageOwnerUserId?: string;
   private postorderP: Promise<PostorderEvidence | null> | null = null;
