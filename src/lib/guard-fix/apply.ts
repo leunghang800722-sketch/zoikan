@@ -11,7 +11,7 @@ import type { PrismaClient, Prisma } from "@prisma/client";
 import { writeAuditTx } from "@/lib/audit";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
 import { telLookupVariants } from "@/lib/guards/identity";
-import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
+import { createGuardPhone, syncLegacyGuardContactColumns, normalizeTel, isValidTel } from "@/lib/guards/contacts";
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
 import { assertMonthNotLocked } from "@/lib/month-lock";
 import { canonicalHkid } from "@/lib/guard-fix/sources";
@@ -32,6 +32,8 @@ interface Diff {
   skip: string[]; // seq（（原因））
   /** WP-STAFF-IMPORT B-fix M1：電話撞咗現有 guard_phones（全表唯一）→ 跳過唔寫，記 `seq:tel_skipped_duplicate`。有先出現。 */
   telSkipped?: string[];
+  /** HIST-4：單一欄位驗證失敗（例如電話格式唔啱）→ 該欄留空、照建人，記 `seq：電話格式唔啱，已留空`（唔帶原值）。有先出現。 */
+  warnings?: string[];
 }
 function emptyDiff(): Diff {
   return { create: [], skip: [] };
@@ -210,6 +212,11 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       }
       // 電話全表唯一：撞咗現有電話（或者本次 apply 較早建嘅人）→ 跳過唔寫，guard 照建，唔 rollback。
       const addTel = async (rawTel: string, isPrimary: boolean) => {
+        // HIST-4：電話格式唔啱 → 該欄留空（警告，唔帶原值），guard 照建，唔准令成輪 apply 失敗。
+        if (!isValidTel(normalizeTel(rawTel))) {
+          (input.diff.warnings ??= []).push(`${input.seq}：電話格式唔啱，已留空`);
+          return;
+        }
         const variants = telLookupVariants(rawTel);
         const clash = variants.length ? await tx.guardPhone.findFirst({ where: { tel: { in: variants } }, select: { id: true } }) : null;
         if (clash) {
