@@ -468,7 +468,8 @@ function buildLayoutKey(sheets: ParsedSheet[]): string {
 }
 
 /** 解析一份更表 xlsx（buffer）。純結構輸出，冇任何 DB 依賴。 */
-export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName: string): Promise<ParseResult> {
+export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName: string, opts: { uploadMonth?: Date } = {}): Promise<ParseResult> {
+  const monthPrefix = opts.uploadMonth ? `${opts.uploadMonth.getUTCFullYear()}-${String(opts.uploadMonth.getUTCMonth() + 1).padStart(2, "0")}-` : null;
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(buffer as ExcelJS.Buffer);
@@ -514,17 +515,19 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
     if (fallbackCandidates.length > 0) {
       let best = fallbackCandidates[0]!;
       if (fallbackCandidates.length > 1) {
-        let bestRows = -1;
+        // 有上載月份：先睇「Date 表頭落喺上載月份嘅日數」最多，平手先睇格數；冇上載月份只睇格數。
+        let bestScore: [number, number] = [-1, -1];
         for (const ws of fallbackCandidates) {
           const r = extractSheet(ws, ws.name);
-          const n = "error" in r ? 0 : r.rows.length;
-          if (n > bestRows) {
+          const rows = "error" in r ? 0 : r.rows.length;
+          const inMonth = "error" in r || !monthPrefix ? 0 : r.headerDates.filter((x) => x.startsWith(monthPrefix)).length;
+          if (inMonth > bestScore[0] || (inMonth === bestScore[0] && rows > bestScore[1])) {
             best = ws;
-            bestRows = n;
+            bestScore = [inMonth, rows];
           }
         }
         for (const ws of fallbackCandidates) {
-          if (ws !== best) skippedSheets.push({ name: ws.name, reason: `分頁名唔符標準格式，同時有 Date 表頭嘅分頁超過一個，只採用格數最多嘅「${best.name}」，此分頁跳過（避免重複計格），人手覆核` });
+          if (ws !== best) skippedSheets.push({ name: ws.name, reason: `分頁名唔符標準格式，同時有 Date 表頭嘅分頁超過一個，只採用上載月份表頭日數最多（平手睇格數）嘅「${best.name}」，此分頁跳過（避免重複計格），人手覆核` });
         }
         fallbackWarnings.push(`[分頁名 fallback] 有 ${fallbackCandidates.length} 個唔符標準名而有 Date 表頭嘅分頁，只採用「${best.name}」，需要人手覆核`);
       }

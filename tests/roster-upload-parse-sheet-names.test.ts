@@ -124,4 +124,39 @@ describe("roster parse：fallback 分頁", () => {
     expect(r.skippedSheets.map((s) => s.name)).toEqual(["Feb"]);
     expect(r.warnings.some((w) => w.includes("只採用"))).toBe(true);
   });
+
+  async function parseM(wb: ExcelJS.Workbook, month?: Date) {
+    return parseRosterWorkbook(Buffer.from(await wb.xlsx.writeBuffer()), "synthetic.xlsx", month ? { uploadMonth: month } : {});
+  }
+  function fillPeople(ws: ExcelJS.Worksheet, dates: Date[], people: number): void {
+    fillRoster(ws, "測試活動D", dates);
+    for (let i = 1; i < people; i++) {
+      ws.getCell(`D${6 + i}`).value = `U9123${i}`;
+      ws.getCell(`F${6 + i}`).value = `測試保安員${i}`;
+      dates.forEach((_x, j) => (ws.getRow(6 + i).getCell(7 + j).value = "D"));
+    }
+  }
+
+  it("S1：「Mar」(1 人)＋「Total」(3 人，表頭落 4 月) 以 3 月上載 → 揀 Mar；唔傳 uploadMonth 照舊睇格數（揀 Total）", async () => {
+    const wb = new ExcelJS.Workbook();
+    fillPeople(wb.addWorksheet("Mar"), [d(3, 1), d(3, 2)], 1);
+    fillPeople(wb.addWorksheet("Total"), [d(4, 1), d(4, 2)], 3);
+    const r = await parseM(wb, d(3, 1));
+    expect(r.ok && r.sheets.map((s) => s.sheetName)).toEqual(["Mar"]);
+    const r0 = await parseM(wb);
+    expect(r0.ok && r0.sheets.map((s) => s.sheetName)).toEqual(["Total"]);
+  });
+
+  it("S1：「Feb」「Mar」兩頁以 3 月上載 → 揀 Mar；平手先睇格數", async () => {
+    const wb = new ExcelJS.Workbook();
+    fillPeople(wb.addWorksheet("Feb"), [d(2, 1), d(2, 2), d(2, 3)], 2);
+    fillPeople(wb.addWorksheet("Mar"), [d(3, 1), d(3, 2)], 1);
+    const r = await parseM(wb, d(3, 1));
+    expect(r.ok && r.sheets.map((s) => s.sheetName)).toEqual(["Mar"]);
+    const wb2 = new ExcelJS.Workbook();
+    fillPeople(wb2.addWorksheet("A1x"), [d(3, 1), d(3, 2)], 1);
+    fillPeople(wb2.addWorksheet("B1x"), [d(3, 1), d(3, 2)], 2);
+    const r2 = await parseM(wb2, d(3, 1));
+    expect(r2.ok && r2.sheets.map((s) => s.sheetName)).toEqual(["B1x"]);
+  });
 });

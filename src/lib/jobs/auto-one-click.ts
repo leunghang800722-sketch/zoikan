@@ -13,6 +13,7 @@ import { isHistoricalMonth } from "@/lib/month-close/historical";
 import { writeAudit } from "@/lib/audit";
 import { createNotification } from "@/lib/notify/create";
 import { ONE_CLICK_ADVISORY_LOCK_KEY, ONE_CLICK_STALE_MS, runOneClickMonthClose } from "@/lib/month-close/one-click";
+import { HIST_IMPORT_STALE_MS } from "@/lib/month-close/one-click-lock";
 import { mergeJobState, readJobState } from "@/lib/scheduler/state";
 import { ensureSystemUser } from "@/lib/system-user";
 import { withAuditJob } from "@/lib/audit-job-context";
@@ -115,7 +116,9 @@ async function runAutoOneClickInner(now: Date): Promise<JobResult> {
     const runId = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${ONE_CLICK_ADVISORY_LOCK_KEY})`);
       const other = await tx.monthCloseRun.findFirst({ where: { status: "running", applyStartedAt: { gt: staleBefore } }, select: { id: true } });
-      if (other) return null;
+      // HIST-2 M1：歷史月份一鍵導入跑緊（未卡死，30 分鐘門檻）亦互斥，否則兩邊同時 guard-fix。
+      const otherHist = await tx.historicalImportRun.findFirst({ where: { status: "running", applyStartedAt: { gt: new Date(now.getTime() - HIST_IMPORT_STALE_MS) } }, select: { id: true } });
+      if (other || otherHist) return null;
       const created = await tx.monthCloseRun.create({ data: { month, status: "running", startedById: actor.userId, applyStartedAt: now } });
       return created.id;
     });

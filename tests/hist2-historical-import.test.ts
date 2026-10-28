@@ -18,6 +18,9 @@ import { POST as startOneClick } from "@/app/api/month-close/one-click/route";
 import { POST as rerunOneClick } from "@/app/api/month-close/one-click/[id]/rerun/route";
 import { POST as createUpload } from "@/app/api/roster-uploads/route";
 import { POST as postPostorder } from "@/app/api/guard-fix/postorder/route";
+import { runAutoOneClick, autoOneClickJob, AUTO_ONE_CLICK_KEY } from "@/lib/jobs/auto-one-click";
+import { ensureJobRows } from "@/lib/scheduler/runner";
+import { mergeJobState } from "@/lib/scheduler/state";
 import { markHistoricalMonth } from "@/lib/month-close/historical";
 import { runHistoricalImport, claimHistoricalImportRun, rewriteTriageClaims, histImportRunStalled, type HistImportReport } from "@/lib/month-close/historical-import";
 import { runReconcileAllForMonth } from "@/lib/roster-upload/reconcile-all";
@@ -220,6 +223,18 @@ describe("HIST-2 POST/GET /api/month-close/historical-import", () => {
     expect((await startOneClick(jsonReq("http://x/api/month-close/one-click", cookie, "POST", { month: "2026-09" }))).status).toBe(409);
     await prisma.historicalImportRun.update({ where: { id: hist.id }, data: { applyStartedAt: new Date(Date.now() - 35 * 60_000) } });
     expect((await startOneClick(jsonReq("http://x/api/month-close/one-click", cookie, "POST", { month: "2026-09" }))).status).not.toBe(409);
+  });
+
+  it("M1：排程自動一鍵結算（runAutoOneClick）見到未卡死歷史導入 run → skipped busy", async () => {
+    const NOW = new Date();
+    await ensureJobRows([autoOneClickJob], NOW);
+    await mergeJobState(AUTO_ONE_CLICK_KEY, { last_trigger_upload_at: {} });
+    const DEC = new Date(Date.UTC(2026, 11, 1));
+    await prisma.rosterUpload.create({ data: { month: DEC, siteNameRaw: "A1", uploaderUserId: fx.userIds["老闆"], fileName: "dec.xlsx", fileSha256: "0".repeat(64), fileBytes: new Uint8Array(Buffer.from("fake")), fileSize: 4, status: "parsed", uploadedAt: new Date(NOW.getTime() - 60 * 60_000) } });
+    await prisma.historicalImportRun.create({ data: { month: MAR, status: "running", startedById: fx.userIds["老闆"], applyStartedAt: new Date() } });
+    const r = await runAutoOneClick(NOW);
+    expect((r.summary as { skipped: Record<string, string> }).skipped["2026-12"]).toBe("busy");
+    expect(await prisma.monthCloseRun.count()).toBe(0);
   });
 
   it("非歷史月份 409 not_historical_month；冇 month 400", async () => {
