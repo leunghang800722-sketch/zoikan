@@ -30,6 +30,7 @@ import { filterCounts, filterLines, runWarnGuardSet, isLeaverLine, isZeroDayLine
 import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
 import { VoidMonthPanel } from "./VoidMonthPanel";
 import { LeaverAdwCard } from "./LeaverAdwCard";
+import { HistoricalLeaveOpeningCard } from "./HistoricalLeaveOpeningCard";
 import { DraftInputsPanel, BonusEligiblePanel, SlConfirmPanel, type DraftInputDTO } from "./DraftPanels";
 
 // ---------------------------------------------------------------------------
@@ -253,6 +254,8 @@ export default function LongtermPayrollPage() {
       {payroll?.locked && <Banner kind="info" message={`${month} 已鎖定——人手輸入／合約編輯唯讀，重算掣已停用`} />}
 
       {loading && <div className="text-sm text-zk-muted">載入緊…</div>}
+
+      <HistoricalLeaveOpeningCard />
 
       {payroll?.run && <LeaverAdwCard month={month} locked={!!payroll.locked} refreshKey={payroll.run.id} onChanged={() => load(month)} onError={setError} onNotice={setNotice} />}
 
