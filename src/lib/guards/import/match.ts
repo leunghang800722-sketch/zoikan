@@ -75,7 +75,7 @@ export function buildDbIndex(gs: DbGuard[], roster?: Map<string, RosterEvidence>
 
 const escRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** 更表原始工號（正規化後）係咪包含導入者其中一個工號（要喺英數字邊界，U123 唔會撞 U9234）。 */
+/** 更表原始工號（正規化後）係咪包含導入者其中一個工號（要喺英數字邊界：較短嘅 U923 係 U9234 嘅前綴，唔可以當撞中）。 */
 export function rosterHasStaffNo(raws: readonly string[], nos: readonly string[]): boolean {
   for (const raw of raws) {
     const up = raw.toUpperCase();

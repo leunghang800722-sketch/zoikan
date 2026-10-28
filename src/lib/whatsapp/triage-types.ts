@@ -103,6 +103,8 @@ export interface WaEvidence {
   mismatch?: { day: string; roster_only: string[]; photo_only: string[] };
   /** WA-9 (7)：固定 groupKey 嘅題（名單配唔到嘅名）；round 1 先用 */
   dedupe_key?: string;
+  /** WA-9 (8)：短訊（LLM）路徑嘅揀人題亦帶同一把 (群,日,名) key（`rn:`）→ 同名單路徑互相去重；唔影響 supersede（撤回／編輯照舊作廢） */
+  name_key?: string;
   /** 工作月（YYYY-MM-01）；鎖月檢查／session 月份用。未知日期就用訊息月。 */
   month: string;
 }

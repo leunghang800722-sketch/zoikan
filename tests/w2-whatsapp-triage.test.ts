@@ -125,7 +125,8 @@ describe("W2 產題：六種 kind、session、owner、冪等、通知", () => {
     const qs = await qsOf("p1");
     expect(qs).toHaveLength(1);
     const q = qs[0]!;
-    expect(q).toMatchObject({ kind: "wa_person_ambiguous", status: "open", groupKey: "p1:1:0" });
+    expect(q).toMatchObject({ kind: "wa_person_ambiguous", status: "open" });
+    expect(q.groupKey).toMatch(/^rn:/); // WA-9 (8)：揀人題用 (群,日,名) key，同名單路徑共用
     const session = await prisma.triageSession.findUniqueOrThrow({ where: { id: q.sessionId }, include: { owner: { include: { role: true } } } });
     expect(session).toMatchObject({ sourceType: "whatsapp", sourceRef: `${G1}:2026-10`, status: "open" });
     expect(session.owner.role.baseRole).toBe("老闆");
@@ -200,12 +201,14 @@ describe("W2 產題：六種 kind、session、owner、冪等、通知", () => {
     expect(await pickWaOwner(prisma, ids.site)).toBe(boss);
   });
 
-  it("revision supersede：編輯 → 舊 revision open 題 superseded，新題 groupKey 帶 revision 2；撤回 → 全部 superseded", async () => {
+  it("revision supersede：編輯 → 舊 revision open 題 superseded，新題重開；撤回 → 全部 superseded", async () => {
     await feed("r1", "阿明聽日夜更", llmJson(person("阿明")));
     await ingest(ev("edited", "r1", "阿明聽日夜更，唔該", 60));
     await run(fakeLlm(() => llmJson(person("阿明"))));
     const qs = await qsOf("r1");
-    expect(qs.map((q) => [q.groupKey, q.status])).toEqual([["r1:1:0", "superseded"], ["r1:2:0", "open"]]);
+    // WA-9 (8)：揀人題用 (群,日,名) rn: key（同名單路徑共用）；編輯後舊題 superseded、新題以同一把 key 重開
+    expect(qs.map((q) => q.status)).toEqual(["superseded", "open"]);
+    expect(qs.every((q) => q.groupKey.startsWith("rn:"))).toBe(true);
     expect(evidence(qs[1]!).text).toBe("阿明聽日夜更，唔該");
     await ingest(ev("revoked", "r1", "", 120));
     await run(fakeLlm(() => llmJson(person("阿明"))));

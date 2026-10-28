@@ -93,6 +93,7 @@ function draftFromIntent(msg: WaMessageCtx, group: WaGroupCtx, row: WaIntentRow,
     ...(src?.card ? { card: src.card } : {}),
     ...(src?.mismatch ? { mismatch: src.mismatch } : {}),
     ...(src?.dedupe_key ? { dedupe_key: src.dedupe_key } : {}),
+    ...(src?.name_key ? { name_key: src.name_key } : {}),
     reasons,
     notes: strArr(res.notes),
     candidates: { guard_ids: strArr(cands.guard_ids), site_ids: strArr(cands.site_ids), dates: strArr(cands.dates), shift_type_ids: strArr(cands.shift_type_ids), existing_record_ids: strArr((res as { existing_record_ids?: unknown }).existing_record_ids) },
@@ -119,7 +120,7 @@ export function buildDraft(ev: WaEvidence, group: Pick<WaGroupCtx, "label">, ts:
   const title = `${group.label || "WhatsApp 群組"}｜${hk.slice(5, 10)} ${hk.slice(11, 16)}`;
   return {
     kind,
-    groupKey: kind === "wa_roster_mismatch" && ev.mismatch ? rosterMismatchKey(ev.group.id, ev.mismatch.day) : ev.dedupe_key && ev.round === 1 ? ev.dedupe_key : groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
+    groupKey: kind === "wa_roster_mismatch" && ev.mismatch ? rosterMismatchKey(ev.group.id, ev.mismatch.day) : ev.dedupe_key && ev.round === 1 ? ev.dedupe_key : ev.name_key && ev.round === 1 && ev.intent.kind === "shift" && (kind === "wa_person_ambiguous" || kind === "wa_person_unknown") ? ev.name_key : groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
     sort: sortOfTs(ts), // 同一訊息嘅跟進輪次維持原次序
     title,
     evidence: ev,
@@ -160,11 +161,17 @@ export interface InsertedQuestion {
 }
 
 /** 冪等插入題目（同 session 已有同 groupKey → 唔再建）。 */
-export async function insertWaQuestions(tx: Tx, sessionId: string, drafts: readonly WaQuestionDraft[]): Promise<{ created: InsertedQuestion[]; existing: Map<string, string> }> {
+export async function insertWaQuestions(tx: Tx, sessionId: string, draftsIn: readonly WaQuestionDraft[]): Promise<{ created: InsertedQuestion[]; existing: Map<string, string> }> {
+  let drafts = [...draftsIn];
+  // 同一批內 groupKey 重複（例：同一訊息兩個 intent 指同一人同日）只留第一張
+  const seenKeys = new Set<string>();
+  drafts = drafts.filter((d) => (seenKeys.has(d.groupKey) ? false : (seenKeys.add(d.groupKey), true)));
   const keys = drafts.map((d) => d.groupKey);
-  const prior = keys.length ? await tx.triageQuestion.findMany({ where: { sessionId, groupKey: { in: keys } }, select: { id: true, groupKey: true, status: true } }) : [];
-  // 名單「配唔到」題（rn:）撤回後 superseded → 重發同一個名要可以再開（唔計 superseded）
-  const existing = new Map(prior.filter((p) => !(p.status === "superseded" && p.groupKey.startsWith("rn:"))).map((p) => [p.groupKey, p.id]));
+  // `rn:`（群,日,名）key 跨來源去重：名單路徑同短訊路徑可能落喺唔同 session（按訊息月份），所以 rn: 唔限 session 查
+  const prior = keys.length ? await tx.triageQuestion.findMany({ where: { groupKey: { in: keys }, OR: [{ sessionId }, { groupKey: { startsWith: "rn:" }, session: { sourceType: "whatsapp" } }] }, select: { id: true, groupKey: true, status: true } }) : [];
+  // `rn:` 題撤回後 superseded → 重發同一個名要可以再開（只計 open／answered／skipped）
+  const existing = new Map<string, string>();
+  for (const p of prior) if (!(p.status === "superseded" && p.groupKey.startsWith("rn:")) && !existing.has(p.groupKey)) existing.set(p.groupKey, p.id);
   const fresh = drafts.filter((d) => !existing.has(d.groupKey));
   const created: InsertedQuestion[] = [];
   if (fresh.length > 0) {
@@ -186,16 +193,55 @@ export async function insertWaQuestions(tx: Tx, sessionId: string, drafts: reado
   return { created, existing };
 }
 
-/** 同一訊息舊 revision（< belowRevision）嘅 open 題 → superseded。回受影響 session id。 */
+/**
+ * WA-9 (8)：被作廢嘅 `rn:`（群,日,名）共用題，如果仍有「其他訊息、未撤回、最新 revision」嘅 intent 指住佢（result_ref），
+ * 就唔可以靜靜雞冇咗——重開條題，並將歸屬（evidence.message／text／sent_at／sender）改去嗰個 intent 所屬訊息。
+ * 呼叫者已持有 TRIAGE_LOCK。回受影響 session id。
+ */
+async function rescueSharedNameQuestions(tx: Tx, superseded: ReadonlyArray<{ id: string; group_key: string }>, exceptMessageIds: ReadonlySet<string>): Promise<string[]> {
+  const sessions: string[] = [];
+  for (const q of superseded) {
+    if (!q.group_key.startsWith("rn:")) continue;
+    const cands = await tx.whatsappIntent.findMany({
+      where: { resultRef: q.id, revokedAt: null, supersededByRevision: null, message: { revokedAt: null } },
+      include: { message: { select: { messageId: true, revision: true, ts: true, text: true, senderGuardId: true, senderTelNorm: true, llmProvider: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const keep = cands.find((c) => !exceptMessageIds.has(c.messageId) && c.message.revision === c.messageRevision);
+    if (!keep) continue;
+    const row = await tx.triageQuestion.findUnique({ where: { id: q.id }, select: { sessionId: true, evidenceJson: true } });
+    if (!row) continue;
+    const ev = row.evidenceJson as unknown as WaEvidence;
+    const m = keep.message;
+    const next: WaEvidence = {
+      ...ev,
+      message: { message_id: m.messageId, revision: m.revision, idx: keep.idx, intent_id: keep.id },
+      sent_at: m.ts.toISOString(),
+      sender: { guard_id: m.senderGuardId, tel_tail4: m.senderTelNorm ? m.senderTelNorm.slice(-4) : null },
+      text: m.text,
+    };
+    // dedupe_key 跟新擁有者來源：名單訊息保留（編輯唔作廢）；短訊擁有者就刪走，令之後編輯短訊可以作廢條題（唔變孤兒題），並補返 name_key
+    if (m.llmProvider !== "roster" && next.dedupe_key) {
+      next.name_key = next.dedupe_key;
+      delete next.dedupe_key;
+    }
+    await tx.triageQuestion.update({ where: { id: q.id }, data: { status: "open", evidenceJson: JSON.parse(JSON.stringify(next)) as Prisma.InputJsonValue } });
+    sessions.push(row.sessionId);
+  }
+  return sessions;
+}
+
+/** 同一訊息舊 revision（< belowRevision）嘅 open 題 → superseded（仍被其他訊息共用嘅 rn: 題會重開並改歸屬）。回受影響 session id。 */
 export async function supersedeWaQuestions(tx: Tx, messageId: string, belowRevision: number): Promise<string[]> {
-  const rows = await tx.$queryRaw<{ session_id: string }[]>`
+  const rows = await tx.$queryRaw<{ id: string; session_id: string; group_key: string }[]>`
     UPDATE triage_questions q SET status = 'superseded', updated_at = now()
     FROM triage_sessions s
     WHERE s.id = q.session_id AND s.source_type = 'whatsapp' AND q.status = 'open'
       AND q.evidence_json->'message'->>'message_id' = ${messageId}
       AND q.evidence_json->>'dedupe_key' IS NULL
       AND (q.evidence_json->'message'->>'revision')::int < ${belowRevision}::int
-    RETURNING q.session_id`;
+    RETURNING q.id, q.session_id, q.group_key`;
+  await rescueSharedNameQuestions(tx, rows, new Set([messageId]));
   const ids = [...new Set(rows.map((r) => r.session_id))];
   for (const id of ids) await refreshWaSession(tx, id);
   return ids;
@@ -225,8 +271,9 @@ export async function createWaQuestionsTx(tx: Tx, args: { msg: WaMessageCtx; gro
   const { created, existing } = await insertWaQuestions(tx, session.id, drafts);
   for (const c of created) await tx.whatsappIntent.update({ where: { id: c.intentId }, data: { resultRef: c.id } });
   // 已存在嘅題（重送／重跑）：result_ref 補返
+  const createdByKey = new Map(created.map((c) => [c.groupKey, c.id]));
   for (const d of drafts) {
-    const qid = existing.get(d.groupKey);
+    const qid = existing.get(d.groupKey) ?? createdByKey.get(d.groupKey); // 同批重複 key 嘅後尾 intent 亦指向同一題
     if (qid) await tx.whatsappIntent.update({ where: { id: d.evidence.message.intent_id }, data: { resultRef: qid } });
   }
   let madeMismatch = 0;
@@ -283,14 +330,16 @@ export async function supersedeRevokedWaQuestions(): Promise<number> {
   if (Number(pending[0]?.n ?? 0) === 0) return 0;
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
-    const rows = await tx.$queryRaw<{ session_id: string }[]>`
+    const rows = await tx.$queryRaw<{ id: string; session_id: string; group_key: string }[]>`
       UPDATE triage_questions q SET status = 'superseded', updated_at = now()
       FROM triage_sessions s
       WHERE s.id = q.session_id AND s.source_type = 'whatsapp' AND q.status = 'open'
         AND q.evidence_json->'message'->>'message_id' IN (SELECT message_id FROM whatsapp_messages WHERE revoked_at IS NOT NULL)
-      RETURNING q.session_id`;
+      RETURNING q.id, q.session_id, q.group_key`;
+    // 共用 rn: 題如果另一條未撤回訊息仍指住佢 → 重開並改歸屬（唔好令另一邊靜靜雞冇題）
+    const rescued = await rescueSharedNameQuestions(tx, rows, new Set()); // 已撤回訊息嘅 intent 會被 revokedAt／message.revokedAt 條件排除
     for (const id of new Set(rows.map((r) => r.session_id))) await refreshWaSession(tx, id);
-    return rows.length;
+    return rows.length - rescued.length;
   });
 }
 

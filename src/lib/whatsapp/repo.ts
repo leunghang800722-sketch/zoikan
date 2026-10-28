@@ -15,7 +15,7 @@ export function createPrismaResolveRepo(excludeIds: readonly string[] = []): Res
       const hit = typeCache.get(siteId);
       if (hit) return hit;
       const rows = await prisma.shiftType.findMany({ where: { siteId, voidedAt: null }, select: { id: true, siteId: true, code: true, label: true, startTime: true }, orderBy: [{ code: "asc" }, { id: "asc" }] });
-      const out = rows.map((r) => ({ id: r.id, siteId: r.siteId, code: r.code, label: r.label, startHour: r.startTime ? r.startTime.getUTCHours() : null }));
+      const out = rows.map((r) => ({ id: r.id, siteId: r.siteId, code: r.code, label: r.label, startHour: r.startTime ? r.startTime.getUTCHours() : null, startMinute: r.startTime ? r.startTime.getUTCMinutes() : null }));
       typeCache.set(siteId, out);
       return out;
     },

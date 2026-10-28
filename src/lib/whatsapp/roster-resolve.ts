@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { addDays, dateInWindow, hkDateOf, isoToDbDate } from "./dates";
 import type { ParsedIntent } from "./parse";
 import { prismaCardDeps, siteAndShiftFor, type CardDeps } from "./card-resolve";
-import { createHash } from "node:crypto";
+import { rosterNameKey } from "./name-key";
 import { normNameVariant } from "@/lib/names/variants";
 import { guardsByName, nameViewOf } from "./name-index";
 import { refineNames, type RosterList } from "./roster-list";
@@ -25,6 +25,8 @@ export interface RosterDeps extends CardDeps {
   priorIntentKeys(chatJid: string, guardIds: string[], dates: string[], exceptMessageId: string): Promise<Set<string>>;
   /** 已存在嘅 dedupe 題 groupKey（只計 open／answered／skipped；撤回後 superseded 嘅唔計，重發可再開） */
   questionKeys(keys: string[]): Promise<Set<string>>;
+  /** WA-9 (8)：上面嗰啲 key 之中，題係短訊（LLM）路徑開嘅（evidence 冇 dedupe_key）——名單要留一個指向佢嘅 intent，原訊息撤回／編輯時題先可以改歸屬而唔會冇咗 */
+  llmOriginKeys?(keys: string[]): Promise<Set<string>>;
 }
 
 export function prismaRosterDeps(): RosterDeps {
@@ -51,6 +53,13 @@ export function prismaRosterDeps(): RosterDeps {
       if (keys.length === 0) return new Set();
       const rows = await prisma.triageQuestion.findMany({ where: { groupKey: { in: keys }, status: { in: ["open", "answered", "skipped"] }, session: { sourceType: "whatsapp" } }, select: { groupKey: true } });
       return new Set(rows.map((r) => r.groupKey));
+    },
+    async llmOriginKeys(keys) {
+      if (keys.length === 0) return new Set();
+      const rows = await prisma.$queryRaw<{ group_key: string }[]>`
+        SELECT DISTINCT q.group_key FROM triage_questions q JOIN triage_sessions s ON s.id = q.session_id
+        WHERE s.source_type = 'whatsapp' AND q.status IN ('open','answered','skipped') AND q.group_key = ANY(${keys}) AND q.evidence_json->>'dedupe_key' IS NULL`;
+      return new Set(rows.map((r) => r.group_key));
     },
   };
 }
@@ -95,8 +104,7 @@ export interface RosterStats {
 }
 const emptyRosterStats = (): RosterStats => ({ days: 0, names: 0, new: 0, already: 0, unmatched_new: 0, unmatched_dup: 0, skipped_old: 0, skipped_future: 0, skipped_locked: 0 });
 
-/** 配唔到／同名多人嘅名，同一 (群, 日, 名) 只開一張題：groupKey 固定，之後重發唔再開。 */
-const rosterNameKey = (groupId: string, date: string, name: string): string => `rn:${groupId}:${date}:${createHash("sha1").update(normNameVariant(name)).digest("hex").slice(0, 12)}`;
+// 配唔到／同名多人嘅名，同一 (群, 日, 名) 只開一張題：groupKey 固定（rosterNameKey，短訊路徑共用），之後重發唔再開。
 
 export async function resolveRosterList(args: { ctx: ResolveContext; list: RosterList; chatJid: string; messageId?: string; staleIds?: ReadonlySet<string>; deps?: RosterDeps }): Promise<{ resolved: ResolvedIntent[]; stats: RosterStats }> {
   const { ctx, list } = args;
@@ -140,11 +148,13 @@ export async function resolveRosterList(args: { ctx: ResolveContext; list: Roste
   const dated = items.filter((i) => i.date);
   const guardIds = [...new Set(dated.flatMap((i) => (i.person.guardId ? [i.person.guardId] : [])))];
   const dates = [...new Set(dated.map((i) => i.date!))];
+  const wantKeys = items.flatMap((i) => (i.key ? [i.key] : []));
   const [have, prior, qkeys] = await Promise.all([
     deps.existingKeys(guardIds, dates, args.staleIds ?? new Set()),
     deps.priorIntentKeys(args.chatJid, guardIds, dates, args.messageId ?? ""),
-    deps.questionKeys(items.flatMap((i) => (i.key ? [i.key] : []))),
+    deps.questionKeys(wantKeys),
   ]);
+  const llmKeys = deps.llmOriginKeys && qkeys.size > 0 ? await deps.llmOriginKeys([...qkeys]) : new Set<string>();
   const survivors: Item[] = [];
   const seenKey = new Set<string>();
   for (const it of items) {
@@ -154,7 +164,12 @@ export async function resolveRosterList(args: { ctx: ResolveContext; list: Roste
       seenKey.add(k);
       stats.new += 1;
     } else if (it.key) {
-      if (qkeys.has(it.key) || seenKey.has(it.key)) { stats.unmatched_dup += 1; continue; }
+      if (qkeys.has(it.key) || seenKey.has(it.key)) {
+        stats.unmatched_dup += 1;
+        // 題係短訊路徑開嘅：留一行 intent 指向佢（insertWaQuestions 會併入既有題，唔另開）
+        if (qkeys.has(it.key) && !seenKey.has(it.key) && llmKeys.has(it.key)) { seenKey.add(it.key); survivors.push(it); }
+        continue;
+      }
       seenKey.add(it.key);
       stats.unmatched_new += 1;
       stats.new += 1;
