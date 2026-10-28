@@ -510,7 +510,7 @@ async function lockVersionGroup(tx: Prisma.TransactionClient, siteId: string | n
 export async function processRosterUpload(input: ProcessRosterUploadInput): Promise<ProcessRosterUploadResult> {
   const month = monthStart(input.month);
   const sha256 = crypto.createHash("sha256").update(input.fileBuffer).digest("hex");
-  const parseResult = await parseRosterWorkbook(input.fileBuffer, input.fileName);
+  const parseResult = await parseRosterWorkbook(input.fileBuffer, input.fileName, { uploadMonth: month });
 
   const [sitesRaw, brokersRaw] = await Promise.all([
     prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, parentSiteId: true, rosterFileKeys: true } }),
@@ -601,7 +601,7 @@ export async function reparseRosterUpload(
   const autoResolveSite = opts.autoResolveSite ?? true;
   const existing = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
   const buffer = Buffer.from(existing.fileBytes);
-  const parseResult = await parseRosterWorkbook(buffer, existing.fileName);
+  const parseResult = await parseRosterWorkbook(buffer, existing.fileName, { uploadMonth: existing.month });
 
   const [sitesRaw, brokersRaw] = await Promise.all([
     prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, parentSiteId: true, rosterFileKeys: true } }),

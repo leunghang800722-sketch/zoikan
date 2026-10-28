@@ -44,6 +44,7 @@ export type AuditAction =
   // 姓名對到名單）建嘅獨立保安員——guards 表冇 note 欄，喺度留「待核」原因
   // （after 淨係 {id, conservative, note}，冇 PII）。
   | "guard_fix_conservative_default"
+  | "guard_fix_historical_roster"
   // WP-PRICE（老闆 2026-09-16 拍板）：`POST /api/shift-records/reprice`
   // 一個月/一個盤重新計價，一次過覆蓋整段範圍嘅 snapshot（價目卡改咗
   // 要生效）——一行 audit（table_name="shift_records"，row_id=

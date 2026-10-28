@@ -56,6 +56,21 @@ export interface PostorderEvidence {
   /** key = `${normalizeSiteKey(物業名稱)}|${shiftLabel}|${YYYY-MM-DD}` → 雞頭名（去咗「(n) 」前綴；「長工」另計）。 */
   dayBrokers: Map<string, Set<string>>;
   hasRoster: boolean;
+  /** HIST-2：Roster 分頁逐崗位行嘅「有人當值日數」（雞頭名非空格數），歷史月份更表 vs Postorder 逐盤比對用。冇 Roster 分頁＝空陣列。 */
+  rosterRows?: PostorderRosterRow[];
+}
+
+/** HIST-2：Roster 分頁一個崗位行（物業名稱＋更份）喺該月有幾多日有人當值。 */
+export interface PostorderRosterRow {
+  rowIndex: number;
+  /** col「客戶名稱」原文（向下補值）。只用嚟配盤，唔輸出（尾段可能係人名）。 */
+  clientLabel: string;
+  /** 去咗尾 token 之後。 */
+  labelHead: string;
+  propertyShort: string | null;
+  shiftLabel: PostorderShiftLabel | null;
+  /** 該月內「雞頭名」非空嘅日數（≤ 該月日數）。 */
+  cells: number;
 }
 
 const PRICE_HEADERS = { client: "客戶名稱", prop: "物業名稱", shift: "更份", clientPrice: "上單價", payout: "外判價", time: "時間", total: "Total Shift" };
@@ -209,6 +224,37 @@ function parsePostorderDayBrokers(grid: PostorderGrid, month: Date): Map<string,
   return out;
 }
 
+/** HIST-2：Roster 分頁每個崗位行當月有人當值日數（雞頭名子欄非空；逐日 block 同 `parsePostorderDayBrokers` 同一套表頭偵測）。 */
+export function parsePostorderRosterRows(grid: PostorderGrid, month: Date): PostorderRosterRow[] {
+  const out: PostorderRosterRow[] = [];
+  const header = detectRosterHeader(grid);
+  if (!header || header.brokerCols.length === 0) return out;
+  const daysInMonth = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0)).getUTCDate();
+  const rowCount = grid.length - 1;
+  let shiftCol = 4;
+  const headerRow = grid[header.headerRow];
+  if (headerRow) for (let c = 1; c < headerRow.length; c++) if (headerRow[c] === "更份") shiftCol = c;
+  let lastProp: string | null = null;
+  let lastClient: string | null = null;
+  for (let r = header.headerRow + 1; r <= rowCount; r++) {
+    const propRaw = gridText(grid, r, header.propCol);
+    const clientRaw = gridText(grid, r, header.clientCol);
+    if (propRaw !== null) lastProp = propRaw;
+    if (clientRaw !== null) lastClient = clientRaw;
+    const prop = propRaw ?? lastProp;
+    const client = clientRaw ?? lastClient;
+    const shift = shiftLabelOf(gridText(grid, r, shiftCol));
+    if (!prop || !client || !shift) continue;
+    let cells = 0;
+    for (let i = 0; i < header.brokerCols.length && i < daysInMonth; i++) {
+      const raw = gridText(grid, r, header.brokerCols[i]!);
+      if (raw && raw.replace(BROKER_LABEL_PREFIX_RE, "").trim()) cells++;
+    }
+    out.push({ rowIndex: r, clientLabel: client, labelHead: splitTrailing(client).head, propertyShort: prop, shiftLabel: shift, cells });
+  }
+  return out;
+}
+
 /** 由 `postorder_uploads` 一行讀出證據。xlsm 路徑要載入成個 workbook（同現有 guard-fix 一樣）；
  * CSV 路徑（PostOrder／Roster 分頁各一份）直接讀文字。冇可讀嘅 PostOrder 分頁就 priceRows 空。 */
 export async function loadPostorderEvidence(
@@ -220,15 +266,17 @@ export async function loadPostorderEvidence(
   const rosterCsv = text(row.rosterCsvBytes);
   if (poCsv || rosterCsv) {
     const priceRows = poCsv ? parsePostorderPriceRows(gridFromCsvText(poCsv)) : [];
-    const dayBrokers = rosterCsv ? parsePostorderDayBrokers(gridFromCsvText(rosterCsv), month) : new Map<string, Set<string>>();
-    return { uploadId: row.id, fileName: row.fileName, priceRows, dayBrokers, hasRoster: !!rosterCsv };
+    const rosterGrid = rosterCsv ? gridFromCsvText(rosterCsv) : null;
+    const dayBrokers = rosterGrid ? parsePostorderDayBrokers(rosterGrid, month) : new Map<string, Set<string>>();
+    return { uploadId: row.id, fileName: row.fileName, priceRows, dayBrokers, hasRoster: !!rosterCsv, rosterRows: rosterGrid ? parsePostorderRosterRows(rosterGrid, month) : [] };
   }
   const wb = await loadPostorderWorkbook(Buffer.from(row.fileBytes));
   const po = wb.getWorksheet(POSTORDER_SHEET_NAME);
   const ro = wb.getWorksheet(ROSTER_SHEET_NAME);
   const priceRows = po ? parsePostorderPriceRows(gridFromWorksheet(po, AM_COLUMN)) : [];
-  const dayBrokers = ro ? parsePostorderDayBrokers(gridFromWorksheet(ro, ROSTER_MIN_COLS), month) : new Map<string, Set<string>>();
-  return { uploadId: row.id, fileName: row.fileName, priceRows, dayBrokers, hasRoster: !!ro };
+  const rosterGrid = ro ? gridFromWorksheet(ro, ROSTER_MIN_COLS) : null;
+  const dayBrokers = rosterGrid ? parsePostorderDayBrokers(rosterGrid, month) : new Map<string, Set<string>>();
+  return { uploadId: row.id, fileName: row.fileName, priceRows, dayBrokers, hasRoster: !!ro, rosterRows: rosterGrid ? parsePostorderRosterRows(rosterGrid, month) : [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +331,7 @@ function siteKeys(names: readonly string[]): Set<string> {
 
 /** 呢個盤（canonical＋aliases）喺 Postorder 對應嘅崗位行：整個 col A、盤名部分、
  * 盤名＋物業名稱、或者物業名稱本身（要係盤嘅 alias）正規化後等於盤名／別名。 */
-export function rowsForSite(rows: readonly PostorderPriceRow[], names: readonly string[]): PostorderPriceRow[] {
+export function rowsForSite<T extends Pick<PostorderPriceRow, "clientLabel" | "labelHead" | "propertyShort">>(rows: readonly T[], names: readonly string[]): T[] {
   const keys = siteKeys(names);
   if (keys.size === 0) return [];
   return rows.filter((r) => {

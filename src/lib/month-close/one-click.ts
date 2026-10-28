@@ -60,7 +60,8 @@ import { withAuditJob } from "@/lib/audit-job-context";
 import { ensureSystemUser } from "@/lib/system-user";
 import { buildMonthHealth, summarizeHealthForReport } from "@/lib/ops/month-health";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import { STEP_KEYS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
+import { emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
+import { StepRunner, jobErrorMessage } from "./step-runner";
 import { AutoCollector } from "./auto/context";
 import { ensureShiftTypesForEmptySites, planShiftTypesForSite, resolveUploadSite } from "./auto/site-setup";
 import { explainVariances } from "./auto/variance";
@@ -89,15 +90,6 @@ export function monthCloseRunRerunAllowed(run: { status: string; applyStartedAt:
   return false;
 }
 
-/** 寫入 `error_message`／step warnings 嘅錯誤訊息——自己 throw 嘅
- * `Error`（中文說明句）原文保留；其他（Prisma／lib）錯誤一律經
- * `safeErrorSummary()` 淨係攞最後一行＋長度上限，唔會將 query payload
- * （可能有姓名／電話）寫落 DB 俾主管睇到。 */
-function jobErrorMessage(e: unknown): string {
-  if (e instanceof Error && e.constructor === Error) return (e.message.split("\n").pop() ?? "").slice(0, 300);
-  return safeErrorSummary(e);
-}
-
 /** 內部用嘅「全權限」session——一鍵結算 job 喺伺服器背景執行，數字本身
  * 唔應該因為邊個撳咗一鍵而唔同（`buildUnpricedSummary()`／`buildMonthDiagnostics()`
  * 呢類函數嘅 `session` 參數本意係雞頭端 broker 範圍縮窄，內部角色一律
@@ -118,79 +110,11 @@ function systemSession(actorUserId: string): AuthedSession {
   };
 }
 
-// ---------------------------------------------------------------------------
-// steps_json 讀寫 helper——單一 run 由頭到尾一個 async function 順序執行
-// （冇並發），淨係呢個 job 自己會寫呢個 run 嘅 steps_json，唔使樂觀鎖。
-// ---------------------------------------------------------------------------
-class StepRunner {
-  private steps: StepRecord[];
-  constructor(
-    private readonly runId: string,
-    initial?: StepRecord[],
-  ) {
-    this.steps = initial && initial.length === STEP_KEYS.length ? initial : emptySteps();
-  }
-
-  private async persist(currentStep: StepKey | null): Promise<void> {
-    await prisma.monthCloseRun.update({
-      where: { id: this.runId },
-      data: { stepsJson: this.steps as unknown as Prisma.InputJsonValue, currentStep },
-    });
-  }
-
-  get(key: StepKey): StepRecord {
-    return this.steps.find((s) => s.key === key)!;
-  }
-
-  /** 執行一步：寫 running → 跑 fn() → 寫 done（或者 failed，然後 rethrow
-   * 俾外層決定成個 run 停唔停）。`fn` 回傳嘅 `numbers`/`warnings`/
-   * `needsHuman` 冧咗就直接覆蓋（每步重跑安全，唔會累積舊值）。 */
-  async run(key: StepKey, fn: () => Promise<{ numbers: Record<string, unknown>; warnings?: string[]; needsHuman?: string[] }>): Promise<StepRecord> {
-    const rec = this.get(key);
-    rec.status = "running";
-    rec.startedAt = new Date().toISOString();
-    rec.finishedAt = null;
-    await this.persist(key);
-    try {
-      const { numbers, warnings, needsHuman } = await fn();
-      rec.status = "done";
-      rec.numbers = numbers;
-      rec.warnings = warnings ?? [];
-      rec.needsHuman = needsHuman ?? [];
-      rec.finishedAt = new Date().toISOString();
-      await this.persist(key);
-      return rec;
-    } catch (e) {
-      rec.status = "failed";
-      rec.warnings = [...rec.warnings, jobErrorMessage(e)];
-      rec.finishedAt = new Date().toISOString();
-      await this.persist(key);
-      throw e;
-    }
-  }
-
-  skipRest(fromKey: StepKey, reason: string): void {
-    const idx = STEP_KEYS.indexOf(fromKey);
-    for (let i = idx; i < STEP_KEYS.length; i++) {
-      const rec = this.steps[i];
-      if (rec.status === "pending") {
-        rec.status = "skipped";
-        rec.warnings = [reason];
-      }
-    }
-  }
-
-  async flush(currentStep: StepKey | null): Promise<void> {
-    await this.persist(currentStep);
-  }
-
-  allNeedsHuman(): string[] {
-    return this.steps.flatMap((s) => s.needsHuman.map((h) => `【${s.label}】${h}`));
-  }
-
-  allWarnings(): string[] {
-    return this.steps.flatMap((s) => s.warnings.map((w) => `【${s.label}】${w}`));
-  }
+// steps_json 讀寫 helper：`StepRunner`（HIST-2 抽出到 ./step-runner，歷史月份一鍵導入共用）。
+function newRunner(runId: string): StepRunner<StepKey, StepRecord> {
+  return new StepRunner<StepKey, StepRecord>(emptySteps(), (steps, currentStep) =>
+    prisma.monthCloseRun.update({ where: { id: runId }, data: { stepsJson: steps as unknown as Prisma.InputJsonValue, currentStep } }).then(() => undefined),
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 簽名保留 _actorUserId／_ip：呼叫方（runOneClickMonthClose）一律傳呢兩個參數，Phase 3 之後 step0 唔再寫卡／audit（見下面大註解），暫時用唔著，但保留簽名等日後 step0 加返其他需要 actor/ip 嘅動作唔使改晒 call site。
@@ -437,7 +361,7 @@ export async function stepPrecheck(month: Date, _actorUserId: string, _ip: strin
 //      自動建齊更種＋Postorder 客戶名／別名）；
 //   B. 更數異常自動拆解（external、公司兵、重複行、子盤、截短、雞頭組成、Postorder 更數）。
 // ---------------------------------------------------------------------------
-export async function stepParseHealth(month: Date, actorUserId: string, auto?: AutoCollector) {
+export async function stepParseHealth(month: Date, actorUserId: string, auto?: AutoCollector, opts?: { historical?: boolean }) {
   const { start } = monthRange(month);
   const ctx = auto ?? new AutoCollector(null, start, actorUserId, null);
   const warnings: string[] = [];
@@ -514,11 +438,14 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
     select: { id: true, siteId: true, siteNameRaw: true, parseSummary: true },
     orderBy: { uploadedAt: "asc" },
   });
-  const variance = await explainVariances(
-    ctx,
-    start,
-    assigned.map((u) => ({ id: u.id, siteId: u.siteId!, siteNameRaw: u.siteNameRaw, parseSummary: u.parseSummary })),
-  );
+  // HIST-2：歷史月份（1–6 月）冇「上月」可比，更數異常拆解純噪音，略過。
+  const variance: Awaited<ReturnType<typeof explainVariances>> = opts?.historical
+    ? { warnings: [], needsHuman: [], findings: [], legacyFlagged: 0 }
+    : await explainVariances(
+        ctx,
+        start,
+        assigned.map((u) => ({ id: u.id, siteId: u.siteId!, siteNameRaw: u.siteNameRaw, parseSummary: u.parseSummary })),
+      );
   warnings.push(...variance.warnings);
   // 代號唔識（codeKind=unknown，例如 D-2）——呢啲格唔會計入，要明確提示。
   const unknownCodes = await prisma.rosterUploadRow.groupBy({
@@ -568,7 +495,7 @@ async function loadPostorderForPlan(postorderUpload: Awaited<ReturnType<typeof p
   return postorderUpload ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderUploadRow(postorderUpload)) } : undefined;
 }
 
-export async function stepGuardFix(month: Date, actorUserId: string, auto?: AutoCollector) {
+export async function stepGuardFix(month: Date, actorUserId: string, auto?: AutoCollector, opts?: { historical?: boolean }) {
   const warnings: string[] = [];
   const needsHuman: string[] = [];
   const rounds: Array<Record<string, number>> = [];
@@ -668,7 +595,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
       throw new Error(`保安員修復第 ${round} 輪開始唔到：${safeErrorSummary(e)}——等「保安員配對修復」頁嗰個套用完成，再撳「重新執行」`);
     }
     try {
-      const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: start });
+      const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: start, historicalRoster: opts?.historical === true });
       const reparse = await reparseAllActiveUploads(prisma, start, { txTimeoutMs: 10 * 60 * 1000 });
       await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "applied", appliedAt: new Date(), resultJson: { diffs, reparse } as unknown as Prisma.InputJsonValue } });
     } catch (e) {
@@ -1006,7 +933,7 @@ async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserI
   const monthStartDate = toMonthStart(month);
   // 每次（重新）執行都由全新 steps 開始——唔好保留上一次失敗／停低嘅
   // 狀態（Opus 驗收：原版重新執行停低時，舊 run 嘅 done/skipped 會殘留）。
-  const runner = new StepRunner(runId);
+  const runner = newRunner(runId);
   // WP-ONE-CLICK-AUTO：呢個 run 嘅自動處理收集器（journal／audit／report／分診題草稿）。
   const auto = new AutoCollector(runId, monthStartDate, actorUserId, ip);
   if (opts?.triageOwnerUserId) auto.triageOwnerUserId = opts.triageOwnerUserId;

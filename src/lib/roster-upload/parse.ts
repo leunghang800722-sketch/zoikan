@@ -51,7 +51,16 @@ function asDate(value: unknown): Date | null {
 // 工作表叫 `2026.08`）——`相`（相片分頁）、`工作表1`（隱藏舊分頁）呢類
 // 一律唔啱呢個 pattern，跳過。驗收 2026-09-23：原本寫死 `2026`，2027 年
 // 1 月嘅更表（分頁叫 `2027`）會成個 parse_failed——改做任何 20xx 年份。
-const ROSTER_SHEET_RE = /^20\d{2}(\.\d{1,2})?$/;
+//
+// HIST-2：1–3 月歷史更表分頁名係 `202601`（YYYYMM，冇點）——再容許
+// `<年>[.|-]?<月>`（`202601`／`2026-01`／`2026.01`／`2026.8`）。
+const ROSTER_SHEET_RE = /^20\d{2}([.-]?\d{1,2})?$/;
+
+// HIST-2 fallback：冇任何分頁名對到 ROSTER_SHEET_RE 時（`202512-202601`、
+// `Feb+Mar`、`Mar`），改揀「可見、名唔係相片／預設工作表／Summary 類、而且
+// 搵到 Date 日期表頭」嘅分頁。
+// 前綴比對（容許尾巴 " (2)"／數字／copy，例如「Summary (2)」「工作表1 (2)」「Sheet1 (2)」「總表2」「相 (2)」）。
+const NON_ROSTER_SHEET_RE = /^(相片?(?=$|[\s\d(（_-])|photos?|工作表|sheet|summary|總結|總表|總數|統計)/i;
 
 export interface ParsedCellRow {
   /** 原檔行號（呢個保安員行嘅 row number），一個保安員行可以有多個 ParsedCellRow（逐日一格）。 */
@@ -459,7 +468,8 @@ function buildLayoutKey(sheets: ParsedSheet[]): string {
 }
 
 /** 解析一份更表 xlsx（buffer）。純結構輸出，冇任何 DB 依賴。 */
-export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName: string): Promise<ParseResult> {
+export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName: string, opts: { uploadMonth?: Date } = {}): Promise<ParseResult> {
+  const monthPrefix = opts.uploadMonth ? `${opts.uploadMonth.getUTCFullYear()}-${String(opts.uploadMonth.getUTCMonth() + 1).padStart(2, "0")}-` : null;
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(buffer as ExcelJS.Buffer);
@@ -469,20 +479,70 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
 
   const skippedSheets: Array<{ name: string; reason: string }> = [];
   const matchedSheets: ExcelJS.Worksheet[] = [];
+  const fallbackWarnings: string[] = [];
+  const nameUnmatched: ExcelJS.Worksheet[] = [];
   for (const ws of workbook.worksheets) {
     if (ws.state !== "visible") {
       skippedSheets.push({ name: ws.name, reason: `分頁狀態=${ws.state}（隱藏），跳過` });
       continue;
     }
     if (!ROSTER_SHEET_RE.test(ws.name.trim())) {
-      skippedSheets.push({ name: ws.name, reason: "分頁名唔係「<年份>」或「<年份>.<月>」，當非更表分頁跳過" });
+      nameUnmatched.push(ws);
       continue;
     }
     matchedSheets.push(ws);
   }
 
+  if (matchedSheets.length) {
+    for (const ws of nameUnmatched) {
+      skippedSheets.push({ name: ws.name, reason: "分頁名唔係「<年份>」或「<年份>.<月>」（亦接受 YYYYMM／YYYY-MM），當非更表分頁跳過" });
+    }
+  } else {
+    const fallbackCandidates: ExcelJS.Worksheet[] = [];
+    // HIST-2 fallback：揀有 Date 表頭、名唔屬相片／Summary 類嘅可見分頁。
+    for (const ws of nameUnmatched) {
+      if (NON_ROSTER_SHEET_RE.test(ws.name.trim())) {
+        skippedSheets.push({ name: ws.name, reason: "分頁名屬相片／預設工作表／Summary 類，當非更表分頁跳過" });
+        continue;
+      }
+      if (findDateHeaders(ws).length === 0) {
+        skippedSheets.push({ name: ws.name, reason: "分頁名唔符標準格式，而且搵唔到 Date 日期表頭，當非更表分頁跳過" });
+        continue;
+      }
+      fallbackCandidates.push(ws);
+    }
+    // 多過一個候選：只採用格數最多嗰個（避免複製分頁／統計分頁重複計格），其餘記 skipped＋needs-review 警告。
+    if (fallbackCandidates.length > 0) {
+      let best = fallbackCandidates[0]!;
+      if (fallbackCandidates.length > 1) {
+        // 有上載月份：先睇「Date 表頭落喺上載月份嘅日數」最多，平手先睇格數；冇上載月份只睇格數。
+        let bestScore: [number, number] = [-1, -1];
+        for (const ws of fallbackCandidates) {
+          const r = extractSheet(ws, ws.name);
+          const rows = "error" in r ? 0 : r.rows.length;
+          const inMonth = "error" in r || !monthPrefix ? 0 : r.headerDates.filter((x) => x.startsWith(monthPrefix)).length;
+          if (inMonth > bestScore[0] || (inMonth === bestScore[0] && rows > bestScore[1])) {
+            best = ws;
+            bestScore = [inMonth, rows];
+          }
+        }
+        for (const ws of fallbackCandidates) {
+          if (ws !== best) skippedSheets.push({ name: ws.name, reason: `分頁名唔符標準格式，同時有 Date 表頭嘅分頁超過一個，只採用上載月份表頭日數最多（平手睇格數）嘅「${best.name}」，此分頁跳過（避免重複計格），人手覆核` });
+        }
+        fallbackWarnings.push(`[分頁名 fallback] 有 ${fallbackCandidates.length} 個唔符標準名而有 Date 表頭嘅分頁，只採用「${best.name}」，需要人手覆核`);
+      }
+      matchedSheets.push(best);
+      fallbackWarnings.push(`[分頁名 fallback] 「${best.name}」唔符標準分頁名，因為有 Date 日期表頭而採用，人手覆核`);
+    }
+  }
+
   if (!matchedSheets.length) {
-    return { ok: false, fileName, error: "搵唔到可見嘅「<年份>」或「<年份>.<月>」更表工作表（例如 2026／2026.08）", skippedSheets };
+    return {
+      ok: false,
+      fileName,
+      error: "搵唔到可見嘅更表工作表（分頁名例如 2026／2026.08／202601，或有 Date 日期表頭嘅分頁）",
+      skippedSheets,
+    };
   }
 
   const sheets: ParsedSheet[] = [];
@@ -519,6 +579,7 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
   for (const s of sheets) {
     for (const w of s.warnings) warnings.push(`[${s.sheetName}] row ${w.row}：${w.reason}`);
   }
+  warnings.push(...fallbackWarnings);
   for (const skipped of skippedSheets) {
     warnings.push(`[分頁跳過] ${skipped.name}：${skipped.reason}`);
   }

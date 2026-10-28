@@ -18,6 +18,8 @@ import { canonicalHkid } from "@/lib/guard-fix/sources";
 import type { GuardFixPlan } from "@/lib/guard-fix/types";
 
 const SYSTEM_ACTOR = "system:guard-fix";
+/** HIST-2：歷史更表導入建出嚟嘅人嘅來源標記（guards.created_by、guard_staff_numbers／guard_phones.source）。 */
+export const HISTORICAL_ROSTER_SOURCE = "historical_roster";
 
 /** Opus 5.5 驗收：`pg_advisory_xact_lock` key——script 同 `POST /api/
  * guard-fix/runs/:id/apply` 共用，兩個 apply（兩個 run、或者 script＋頁
@@ -59,6 +61,9 @@ export interface ApplyGuardFixPlanOptions {
    * ——冇傳就跌返用 `plan.generatedAt` 嗰個月首日（保底；正式 call site
    * 應該傳 `guard_fix_runs.month`）。 */
   month?: Date;
+  /** HIST-2：歷史月份一鍵導入。`create_minimal` 起嘅新人 status=inactive，來源欄（created_by／工號／電話 source）標
+   * `historical_roster`，audit 加一行 `guard_fix_historical_roster`；工號／電話對到現有人嘅 link 路徑不變。 */
+  historicalRoster?: boolean;
 }
 
 /** 一個 transaction，冪等。回傳逐類 diff（create=呢次處理咗幾多、
@@ -152,6 +157,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       uNumber: string | null;
       defaultBrokerCode: string;
       diff: Diff;
+      historical?: boolean;
     }): Promise<string | null> {
       const hkidCanon = canonicalHkid(input.hkid);
       if (hkidCanon && existingHkids.has(hkidCanon)) {
@@ -184,8 +190,8 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
           hireDate: input.hireDate ? new Date(`${input.hireDate}T00:00:00.000Z`) : null,
           defaultBrokerId: broker?.id ?? null,
           employmentType: "cash_casual",
-          status: "active",
-          createdBy: SYSTEM_ACTOR,
+          status: input.historical ? "inactive" : "active",
+          createdBy: input.historical ? `${SYSTEM_ACTOR}:${HISTORICAL_ROSTER_SOURCE}` : SYSTEM_ACTOR,
         },
       });
       await writeAuditTx(tx, {
@@ -198,7 +204,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       });
 
       if (input.uNumber) {
-        const staffResult = await upsertCurrentStaffNumber(tx, { guardId: created.id, scheme: "U", number: input.uNumber, source: "system:guard-fix", createdBy: SYSTEM_ACTOR });
+        const staffResult = await upsertCurrentStaffNumber(tx, { guardId: created.id, scheme: "U", number: input.uNumber, source: input.historical ? HISTORICAL_ROSTER_SOURCE : "system:guard-fix", createdBy: SYSTEM_ACTOR });
         await syncLegacyStaffNoColumns(tx, created.id);
         await writeAuditTx(tx, { actorUserId: null, tableName: "guard_staff_numbers", rowId: staffResult.created.id, action: "create", after: staffResult.created, ip: null });
       }
@@ -210,7 +216,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
           (input.diff.telSkipped ??= []).push(`${input.seq}:tel_skipped_duplicate`);
           return;
         }
-        const pr = await createGuardPhone(tx, { guardId: created.id, tel: rawTel, isPrimary, source: "system:guard-fix", createdBy: SYSTEM_ACTOR });
+        const pr = await createGuardPhone(tx, { guardId: created.id, tel: rawTel, isPrimary, source: input.historical ? HISTORICAL_ROSTER_SOURCE : "system:guard-fix", createdBy: SYSTEM_ACTOR });
         await syncLegacyGuardContactColumns(tx, created.id, ["tel"]);
         await writeAuditTx(tx, { actorUserId: null, tableName: "guard_phones", rowId: pr.created.id, action: "create", after: { id: pr.created.id, guardId: pr.created.guardId, isPrimary: pr.created.isPrimary, source: pr.created.source }, ip: null });
       };
@@ -254,7 +260,11 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         uNumber: null,
         defaultBrokerCode: cm.defaultBrokerCode,
         diff: diffs.createMinimal,
+        historical: opts.historicalRoster === true,
       });
+      if (newGuardId && opts.historicalRoster) {
+        await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: newGuardId, action: "guard_fix_historical_roster", after: { id: newGuardId, source: HISTORICAL_ROSTER_SOURCE, status: "inactive" }, ip: null });
+      }
       if (newGuardId && cm.conservative) {
         // audit 留低「保守預設、待核」原因（guards 表冇 note 欄）。
         await writeAuditTx(tx, {

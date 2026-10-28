@@ -23,6 +23,7 @@ import { applyReconcileDecisions } from "./reconcile-apply";
 import { recomputeSettlement } from "./settlement-resync";
 import { hasParsedPostorderForMonth } from "@/lib/pricing/longterm-settlement";
 import { repriceMonthForSites } from "@/lib/pricing/reprice";
+import { isHistoricalMonth } from "@/lib/month-close/historical";
 
 /** 同 guard-fix 嗰個 key（7_710_250_925）刻意用另一個數字，兩個 lock
  * 唔會互相排隊（reconcile-all 淨係改 shift_records／guard_longterm_
@@ -80,7 +81,9 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
   // 驗收（Opus 5.5）：Postorder 上載咗但未套用引用佢嘅保安員配對修復計劃——
   // 長工崗位盤未跟總表更新（仍然用舊崗位／占比推算），提示先套用再重跑。
   const warnings: string[] = [];
-  const latestPostorder = await prisma.postorderUpload.findFirst({ where: { month: monthStartDate, status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { id: true } });
+  // HIST-2（補 HIST-1 漏）：歷史月份（month_closes.historical）冇價目卡、唔出糧，唔做 reprice，亦唔出「Postorder 未套用」警告。
+  const historical = await isHistoricalMonth(monthStartDate);
+  const latestPostorder = historical ? null : await prisma.postorderUpload.findFirst({ where: { month: monthStartDate, status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { id: true } });
   if (latestPostorder && !(await hasParsedPostorderForMonth(monthStartDate))) {
     warnings.push("本月最新 Postorder 已上載但未套用保安員配對修復計劃——長工崗位未跟總表更新（暫時沿用舊崗位／占比推算）；請先喺「保安員配對修復」計劃＋套用，再重新對數全月");
   }
@@ -110,7 +113,7 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
       })
     : [];
   const repriceSiteIds = [...new Set([...siteIds, ...resolvedSiteRows.map((r) => r.resolvedSiteId).filter((x): x is string => !!x)])];
-  const repriced = await repriceMonthForSites(monthStartDate, repriceSiteIds, actorUserId, ip);
+  const repriced = historical ? { scanned: 0, changed: 0 } : await repriceMonthForSites(monthStartDate, repriceSiteIds, actorUserId, ip);
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
 
   const perUpload: ReconcileAllPerUploadResult[] = [];

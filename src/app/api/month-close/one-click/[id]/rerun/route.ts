@@ -1,6 +1,7 @@
 // WP-ONE-CLICK Phase 1：`POST /api/month-close/one-click/:id/rerun`——
 // 卡死（`running` 超過 15 分鐘）或者 `failed` 嘅 run 可以重新執行；
 // job 本身逐步冪等（每步重跑安全），唔會累積重複動作。
+import { HIST_IMPORT_STALE_MS } from "@/lib/month-close/one-click-lock";
 import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -25,7 +26,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${ONE_CLICK_ADVISORY_LOCK_KEY})`);
       const other = await tx.monthCloseRun.findFirst({ where: { id: { not: id }, status: "running", applyStartedAt: { gt: staleBefore } }, select: { id: true } });
-      if (other) throw Conflict("另一個一鍵結算執行緊，等佢完成先再撳", { status: "busy" });
+      // HIST-2 M1：歷史月份一鍵導入跑緊（未卡死）亦互斥——兩邊同時 guard-fix 會對同一新人各建一次。
+      const otherHist = await tx.historicalImportRun.findFirst({ where: { status: "running", applyStartedAt: { gt: new Date(now.getTime() - HIST_IMPORT_STALE_MS) } }, select: { id: true } });
+      if (other || otherHist) throw Conflict("另一個一鍵結算執行緊，等佢完成先再撳", { status: "busy" });
       const claimed = await tx.monthCloseRun.updateMany({
         where: { id, OR: [{ status: "failed" }, { status: "running", applyStartedAt: { lt: staleBefore } }, { status: "running", applyStartedAt: null }] },
         data: { status: "running", applyStartedAt: now, finishedAt: null, errorMessage: null },

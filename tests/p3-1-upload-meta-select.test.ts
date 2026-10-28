@@ -18,6 +18,7 @@ const NEEDS_BYTES: Record<string, string> = {
   "lib/month-close/one-click.ts#1": "一鍵結算：解析 U Team 名單（loadPostorderForPlan 前）",
   "lib/month-close/one-click.ts#2": "一鍵結算：解析 Postorder（guard-fix 收斂 loop）",
   "lib/month-close/one-click.ts#3": "一鍵結算：step6 Postorder 對照",
+  "lib/month-close/historical-import.ts#1": "歷史月份一鍵導入：更表 vs Postorder 比對（解析 Postorder Roster 分頁）",
   "lib/month-close/auto/context.ts#1": "一鍵結算自動改動：Postorder 證據解析",
 };
 

@@ -37,6 +37,7 @@ export async function clearAll() {
   await prisma.monthCloseAutoChange.deleteMany({}); // WP-ONE-CLICK-AUTO：自動改動流水帳（FK 落 month_close_runs）
   await prisma.reconcileAllRun.deleteMany({}); // 唔好令前一個 test 檔留低嘅 running 對數 run 擋住下一個
   await prisma.monthCloseRun.deleteMany({});
+  await prisma.historicalImportRun.deleteMany({}); // HIST-2：歷史月份一鍵導入 run（唔好令前一個 test 留低嘅 running run 擋住下一個）
   await prisma.triageQuestion.deleteMany({ where: { session: { sourceType: { in: ["month_close", "whatsapp"] } } } }); // WP-ONE-CLICK-AUTO／W2 WhatsApp 分診題（唔跨檔累積）
   await prisma.triageSession.deleteMany({ where: { sourceType: { in: ["month_close", "whatsapp"] } } });
   await prisma.triagePersonApply.deleteMany({}); // 分診「最近一次包含呢個人」記錄（append 式）：每個 test 清走，唔好跨檔累積
