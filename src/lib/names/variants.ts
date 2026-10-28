@@ -38,3 +38,26 @@ export function normNameVariant(s: string | null | undefined): string {
   for (const ch of t) out += MAP.get(ch) ?? ch;
   return out;
 }
+
+// WA-9 (9)：同音／近形、真名單常見打錯嘅字對（左→右折疊）。**只用喺「近似候選」搜尋，唔入精確配對**——
+// 因為兩邊都係真實存在嘅字（例：璧／壁、煒／偉），精確配對時折疊會令兩個唔同人變成同名自動配錯；近似候選只出揀人題，由人確認。
+// 峯↔峰 已喺上面 VARIANT_PAIRS（異體字）。
+const CONFUSABLE_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ["壁", "璧"], // bì：名單寫「璧」、庫入面係「壁」（真實名單打錯案例，例：孫測璧／孫測壁）
+  ["昇", "升"], // shēng：同字異形
+  ["祐", "佑"], // yòu：同音同義，名字兩種寫法並存
+  ["堃", "坤"], // kūn：堃係坤嘅異體
+  ["煒", "偉"], // wěi：同音
+  ["暉", "輝"], // huī：同音
+  ["勳", "勛"], // xūn：異體
+  ["珮", "佩"], // pèi：同音
+  ["宏", "弘"], // hóng：同音
+];
+const CONFUSABLE = new Map<string, string>(CONFUSABLE_PAIRS.map(([a, b]) => [a, b]));
+
+/** normNameVariant 之上再折疊常見混淆字對——近似候選搜尋專用，唔可以用嚟做精確配對。 */
+export function normNameNear(s: string | null | undefined): string {
+  let out = "";
+  for (const ch of normNameVariant(s)) out += CONFUSABLE.get(ch) ?? ch;
+  return out;
+}

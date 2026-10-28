@@ -79,6 +79,7 @@ const REASON_LABEL: Record<string, string> = {
   card_not_card: "相入面唔係工卡",
   card_unreadable: "工卡讀唔到",
   card_confirm: "工卡相要你確認",
+  person_was_site_alias: "訊息得盤名、冇人名，暫當發訊人自己——請確認",
   row_low_confidence: "值勤表呢一行讀數信心偏低",
   card_suspect_second: "疑似同一張相仲有第二張工卡（只一個引擎讀到）",
   card_disputed: "工號讀數唔一致",

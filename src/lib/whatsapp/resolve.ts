@@ -6,7 +6,7 @@
 import { foldVariants } from "@/lib/names/variants";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { rosterNameKey } from "./name-key";
-import { guardsByName } from "./name-index";
+import { guardsByName, nearGuardsGlobal } from "./name-index";
 import { classifySiteName, type SiteNameCandidate } from "@/lib/month-close/auto/site-match";
 import type { GuardMatchIndex } from "@/lib/roster-upload/match";
 import { normalizeTelHk } from "@/lib/guards/identity";
@@ -53,7 +53,7 @@ export interface ResolveRepo {
 }
 
 /** 盤名候選＋所屬客戶（client_group 優先，冇就 client_name；用嚟判斷兄弟盤）。 */
-export type WaSite = SiteNameCandidate & { client?: string | null };
+export type WaSite = SiteNameCandidate & { client?: string | null; /** WA-9 (9)：盤嘅預設結算判頭（判頭群範圍用） */ brokerId?: string | null };
 
 export interface ResolveContext {
   ts: Date;
@@ -317,6 +317,9 @@ async function namedByName(name: string, ctx: ResolveContext, siteId: string | n
   const cands = [...new Set([...viaName, ...viaAlias])];
   if (cands.length === 1) return { guardId: cands[0]!, reasons: [], candidates: [], basis: viaName.includes(cands[0]!) ? "name" : "alias" };
   if (cands.length > 1) return { guardId: null, reasons: ["person_ambiguous"], candidates: await orderCandidates(cands, ctx, siteId), basis: "name_multi" };
+  // WA-9 (9)：精確配唔到 → 全庫近似候選（同姓＋至少 1 個相同字）出揀人題，唔自動配
+  const near = nearGuardsGlobal(ctx.index, name, 8);
+  if (near.length > 0) return { guardId: null, reasons: ["person_ambiguous"], candidates: await orderCandidates(near, ctx, siteId), basis: "name_near_global" };
   return { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "name_unmatched" };
 }
 
@@ -364,6 +367,9 @@ function pickByCode(types: ShiftTypeLite[], code: string): ShiftTypeLite[] {
   return types.filter((t) => t.code.trim().toLowerCase() === c);
 }
 
+/** WA-9 (9)：冇講明時段或更碼嘅一般「返工」字（已去走「更／班」同空白）——單一更別盤先套用 */
+const GENERIC_WORK_WORDS = new Set(["返工", "開工", "上", "到", "簽到", "當", "返", "返到", "出", "返咗", "開", "上工"]);
+
 export function resolveShift(shiftRaw: string | null | undefined, codeGuess: string | null | undefined, types: ShiftTypeLite[], wordMap: Record<string, string>): ShiftRes {
   const raw = (shiftRaw ?? "").normalize("NFKC").trim();
   if (!raw) return { shiftTypeId: null, reasons: ["shift_unmapped"], candidates: [], basis: "no_shift_word" };
@@ -392,6 +398,8 @@ export function resolveShift(shiftRaw: string | null | undefined, codeGuess: str
     if (r) return r;
     const byBucket = finish(types.filter((t) => t.startHour !== null && hourBucket(t.startHour) === hourBucket(tr.hour)), "time_range_bucket");
     if (byBucket) return byBucket;
+    // WA-9 (9)：該盤只有一個更別而且冇開工時間可對（唔會同時間段矛盾）→ 用嗰個
+    if (types.length === 1 && types[0]!.startHour === null) return { shiftTypeId: types[0]!.id, reasons: [], candidates: [], basis: "single_shift_type" };
     return { shiftTypeId: null, reasons: ["shift_unmapped"], candidates: [], basis: "time_range_unmapped" };
   }
   // 3) 時段
@@ -400,6 +408,12 @@ export function resolveShift(shiftRaw: string | null | undefined, codeGuess: str
     const m = types.filter((t) => t.startHour !== null && hourBucket(t.startHour) === b);
     const r = finish(m, "time_slot");
     if (r) return r;
+  }
+  // 3b) WA-9 (9)：該盤只有一個更別，用白名單先套用（OT／加班／半更／休息／英文更碼／「夜間」「日更」等一律唔套，照舊 shift_unmapped 出題）：
+  //   (i) 一般返工字（去走「更／班」同空白標點後）；(ii) 單字時段詞（bucketOf：早朝中午夜晚通宵）而該更別冇開工時間（有開工時間而同時段對得上，上面第 3 步已中；矛盾就唔套）。
+  if (types.length === 1) {
+    const plain = stripped.replace(/[\p{P}\p{S}]/gu, "");
+    if (GENERIC_WORK_WORDS.has(plain) || (b && types[0]!.startHour === null)) return { shiftTypeId: types[0]!.id, reasons: [], candidates: [], basis: "single_shift_type" };
   }
   // 4) LLM 猜嘅更碼只可以做候選（唔自動採用）
   const g = (codeGuess ?? "").trim();
@@ -463,6 +477,28 @@ function nameKeyOf(kind: IntentKind, ov: IntentOverride | undefined, raw: string
   return { name_key: rosterNameKey(groupId, date, raw) };
 }
 
+
+/**
+ * WA-9 (9)：LLM 唔識盤名清單，會將盤別名當人名（真例：「欣明夜更」→ persons=[欣明]、site_raw=null）。
+ * 喺人名解析之前：site_raw 為空時，persons[].raw（NFKC＋字形折疊後）**完全等於**範圍內某盤 canonical／別名 → 搬去 site_raw、從 persons 剔走（只搬第一個）。
+ * 範圍：盤口群＝群盤＋同客戶兄弟盤；判頭群＝該判頭預設結算旗下嘅盤；範圍空就全部盤。只做完全等於，唔做子串。
+ */
+function movePersonAliasToSite(it: ParsedIntent, ctx: ResolveContext): { siteRaw: string; persons: ParsedIntent["persons"] } | null {
+  if ((it.site_raw ?? "").trim() || it.persons.length === 0) return null;
+  let scope: readonly WaSite[] = [];
+  if (ctx.group.kind === "site" && ctx.group.siteId) {
+    const gs = ctx.sites.find((x) => x.id === ctx.group.siteId);
+    scope = ctx.sites.filter((x) => x.id === ctx.group.siteId || (!!gs?.client && x.client === gs.client));
+  } else if (ctx.group.kind === "broker" && ctx.group.brokerId) scope = ctx.sites.filter((x) => x.brokerId === ctx.group.brokerId);
+  if (scope.length === 0) scope = ctx.sites;
+  const names = new Set<string>();
+  for (const s of scope) for (const n of [s.canonicalName, ...s.aliases]) { const f = foldVariants(n).trim(); if (f) names.add(f); }
+  // 撞名保護：呢個字如果精確配到任何保安員姓名／別名（例：判頭代人報「欣明夜更」，欣明係人），唔搬，照舊行人名解析
+  const i = it.persons.findIndex((p) => { const n = normName(p.raw); const f = foldVariants(n); return f !== "" && names.has(f) && nameCandidates(n, ctx).length === 0; });
+  if (i < 0) return null;
+  return { siteRaw: it.persons[i]!.raw.trim(), persons: it.persons.filter((_, k) => k !== i) };
+}
+
 export async function resolveIntents(intents: readonly ParsedIntent[], ctx: ResolveContext): Promise<ResolvedIntent[]> {
   const out: ResolvedIntent[] = [];
   const seen = new Set<string>();
@@ -497,12 +533,16 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
     }
 
     // ---- 共用：盤口、日期、人
-    const site = ov?.site ?? resolveSite(it.site_raw, ctx);
+    const mv = ov ? null : movePersonAliasToSite(it, ctx);
+    const siteRawIn = mv ? mv.siteRaw : it.site_raw;
+    const personsIn = mv ? mv.persons : it.persons;
+    const site = ov?.site ?? resolveSite(siteRawIn, ctx);
     const dateRes = resolveDates({ raw: it.date?.raw ?? null, kind: it.date?.kind ?? null }, ctx.ts);
 
-    const workers: Array<{ raw: string | null; self: boolean }> = it.persons.filter((p) => p.role === "worker").map((p) => ({ raw: p.raw, self: SELF_WORDS.test(normName(p.raw)) }));
-    if (it.self_reference && !workers.some((w) => w.self)) workers.unshift({ raw: null, self: true });
-    const replaced = it.persons.filter((p) => p.role === "replaced");
+    const workers: Array<{ raw: string | null; self: boolean }> = personsIn.filter((p) => p.role === "worker").map((p) => ({ raw: p.raw, self: SELF_WORDS.test(normName(p.raw)) }));
+    // 盤名被搬走後冇人名剩 → 當發訊人自己（對唔到就 person_unknown）
+    if ((it.self_reference || (mv && workers.length === 0)) && !workers.some((w) => w.self)) workers.unshift({ raw: null, self: true });
+    const replaced = personsIn.filter((p) => p.role === "replaced");
 
     // 被替人（資訊）
     let replacedGuardId: string | null | undefined;
@@ -555,6 +595,12 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
           res.basis.date = dateRes.detail;
           if (dateRes.candidates.length) res.candidates.dates = dateRes.candidates;
         }
+        if (mv) {
+          pushUnique(res.notes, "person_was_site_alias");
+          res.basis.site = "person_was_site_alias";
+          // 搬完冇人名＝當發訊人自己，但冇第二重證據（LLM 已估錯過一次）→ 唔自動寫，出確認題
+          if (workers.length === 1 && workers[0]!.self && workers[0]!.raw === null && !it.self_reference) pushUnique(res.reasons, "person_was_site_alias");
+        }
         if (!ctx.group.autoWrite) pushUnique(res.notes, "group_auto_write_off");
         if (ov?.extraNotes) pushUnique(res.notes, ...ov.extraNotes);
 
@@ -569,7 +615,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
           confidence: conf,
           resolution: res,
           routed: "triage",
-          src: { person_raw: w.raw, ...(nameKeyOf(kind, ov, w.raw, d, res.reasons, ctx.group.id) ?? {}), site_raw: it.site_raw ?? null, date_raw: it.date?.raw ?? null, shift_raw: it.shift_raw ?? null, leave_raw: it.leave_raw ?? null, replaced_raw: replaced[0]?.raw ?? null },
+          src: { person_raw: w.raw, ...(nameKeyOf(kind, ov, w.raw, d, res.reasons, ctx.group.id) ?? {}), site_raw: siteRawIn ?? null, date_raw: it.date?.raw ?? null, shift_raw: it.shift_raw ?? null, leave_raw: it.leave_raw ?? null, replaced_raw: replaced[0]?.raw ?? null },
         };
 
         if (!AUTO_TYPES.has(kind)) {

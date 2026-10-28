@@ -8,8 +8,8 @@ import { addDays, dateInWindow, hkDateOf, isoToDbDate } from "./dates";
 import type { ParsedIntent } from "./parse";
 import { prismaCardDeps, siteAndShiftFor, type CardDeps } from "./card-resolve";
 import { rosterNameKey } from "./name-key";
-import { normNameVariant } from "@/lib/names/variants";
-import { guardsByName, nameViewOf } from "./name-index";
+import { normNameNear } from "@/lib/names/variants";
+import { guardsByName, nameViewOf, nearGuardsGlobal } from "./name-index";
 import { refineNames, type RosterList } from "./roster-list";
 import { resolveIntents, resolveShift, type IntentOverride, type ResolveContext, type ResolvedIntent } from "./resolve";
 
@@ -83,10 +83,13 @@ export function personForName(idx: ResolveContext["index"], name: string, scope:
   if (inScope.length === 0 && global.length === 1) return { guardId: null, reasons: ["person_ambiguous"], candidates: [global[0]!], basis: "roster_name_out_of_scope" };
   if (global.length > 0) return { guardId: null, reasons: ["person_ambiguous"], candidates: (inScope.length > 1 ? inScope : global).slice(0, MAX_CANDIDATES), basis: "roster_name_multi" };
   // 配唔到：候選＝同範圍、字形接近（共用字）嘅 guard
-  const chars = new Set([...normNameVariant(name)]);
-  const overlap = (g: string): number => [...normNameVariant(idx.nameByGuardId.get(g) ?? "")].filter((c) => chars.has(c)).length;
+  const chars = new Set([...normNameNear(name)]);
+  const overlap = (g: string): number => [...normNameNear(idx.nameByGuardId.get(g) ?? "")].filter((c) => chars.has(c)).length;
   const near = [...scope].filter((g) => overlap(g) > 0).sort((a, b) => overlap(b) - overlap(a) || a.localeCompare(b)).slice(0, MAX_CANDIDATES);
-  return near.length > 0 ? { guardId: null, reasons: ["person_ambiguous"], candidates: near, basis: "roster_name_unmatched" } : { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "roster_name_unmatched" };
+  if (near.length > 0) return { guardId: null, reasons: ["person_ambiguous"], candidates: near, basis: "roster_name_unmatched" };
+  // WA-9 (9)：範圍內冇近似 → 全庫同姓＋至少 1 個相同字（含壁／璧等混淆字）；只出揀人題，唔自動配
+  const wide = nearGuardsGlobal(idx, name, MAX_CANDIDATES);
+  return wide.length > 0 ? { guardId: null, reasons: ["person_ambiguous"], candidates: wide, basis: "roster_name_near_global" } : { guardId: null, reasons: ["person_unknown"], candidates: [], basis: "roster_name_unmatched" };
 }
 
 export interface RosterStats {

@@ -63,10 +63,10 @@ function toJson(v: unknown): Prisma.InputJsonValue {
 export async function loadRunContext(): Promise<Omit<RunContext, "llm">> {
   const { loadGuardMatchIndex } = await import("@/lib/roster-upload/guard-index");
   const [sites, index] = await Promise.all([
-    prisma.site.findMany({ where: { status: { in: ["active", "paused"] } }, select: { id: true, canonicalName: true, aliases: true, clientName: true, clientGroup: true } }),
+    prisma.site.findMany({ where: { status: { in: ["active", "paused"] } }, select: { id: true, canonicalName: true, aliases: true, clientName: true, clientGroup: true, defaultSettlementBrokerId: true } }),
     loadGuardMatchIndex(prisma),
   ]);
-  return { sites: sites.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases, client: s.clientGroup ?? s.clientName })), index };
+  return { sites: sites.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases, client: s.clientGroup ?? s.clientName, brokerId: s.defaultSettlementBrokerId })), index };
 }
 
 function rowFor(messageId: string, revision: number, idx: number, r: ResolvedIntent): Prisma.WhatsappIntentCreateManyInput {
