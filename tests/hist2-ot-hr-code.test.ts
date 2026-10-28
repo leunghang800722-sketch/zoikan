@@ -8,6 +8,6 @@ describe("OT<n>hr 代號", () => {
     expect(otHoursFromCode(code)).toBe(h);
   });
   it("唔似 OT 嘅仍然 unknown", () => {
-    for (const c of ["OThr", "OT1hrx", "OT-1", "x"]) expect(classifyCode(c)).toBe("unknown");
+    for (const c of ["OThr", "OT1hrx", "OT-1", "xx"]) expect(classifyCode(c)).toBe("unknown");
   });
 });
