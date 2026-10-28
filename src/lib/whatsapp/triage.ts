@@ -193,16 +193,50 @@ export async function insertWaQuestions(tx: Tx, sessionId: string, draftsIn: rea
   return { created, existing };
 }
 
-/** 同一訊息舊 revision（< belowRevision）嘅 open 題 → superseded。回受影響 session id。 */
+/**
+ * WA-9 (8)：被作廢嘅 `rn:`（群,日,名）共用題，如果仍有「其他訊息、未撤回、最新 revision」嘅 intent 指住佢（result_ref），
+ * 就唔可以靜靜雞冇咗——重開條題，並將歸屬（evidence.message／text／sent_at／sender）改去嗰個 intent 所屬訊息。
+ * 呼叫者已持有 TRIAGE_LOCK。回受影響 session id。
+ */
+async function rescueSharedNameQuestions(tx: Tx, superseded: ReadonlyArray<{ id: string; group_key: string }>, exceptMessageIds: ReadonlySet<string>): Promise<string[]> {
+  const sessions: string[] = [];
+  for (const q of superseded) {
+    if (!q.group_key.startsWith("rn:")) continue;
+    const cands = await tx.whatsappIntent.findMany({
+      where: { resultRef: q.id, revokedAt: null, supersededByRevision: null, message: { revokedAt: null } },
+      include: { message: { select: { messageId: true, revision: true, ts: true, text: true, senderGuardId: true, senderTelNorm: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const keep = cands.find((c) => !exceptMessageIds.has(c.messageId) && c.message.revision === c.messageRevision);
+    if (!keep) continue;
+    const row = await tx.triageQuestion.findUnique({ where: { id: q.id }, select: { sessionId: true, evidenceJson: true } });
+    if (!row) continue;
+    const ev = row.evidenceJson as unknown as WaEvidence;
+    const m = keep.message;
+    const next: WaEvidence = {
+      ...ev,
+      message: { message_id: m.messageId, revision: m.revision, idx: keep.idx, intent_id: keep.id },
+      sent_at: m.ts.toISOString(),
+      sender: { guard_id: m.senderGuardId, tel_tail4: m.senderTelNorm ? m.senderTelNorm.slice(-4) : null },
+      text: m.text,
+    };
+    await tx.triageQuestion.update({ where: { id: q.id }, data: { status: "open", evidenceJson: JSON.parse(JSON.stringify(next)) as Prisma.InputJsonValue } });
+    sessions.push(row.sessionId);
+  }
+  return sessions;
+}
+
+/** 同一訊息舊 revision（< belowRevision）嘅 open 題 → superseded（仍被其他訊息共用嘅 rn: 題會重開並改歸屬）。回受影響 session id。 */
 export async function supersedeWaQuestions(tx: Tx, messageId: string, belowRevision: number): Promise<string[]> {
-  const rows = await tx.$queryRaw<{ session_id: string }[]>`
+  const rows = await tx.$queryRaw<{ id: string; session_id: string; group_key: string }[]>`
     UPDATE triage_questions q SET status = 'superseded', updated_at = now()
     FROM triage_sessions s
     WHERE s.id = q.session_id AND s.source_type = 'whatsapp' AND q.status = 'open'
       AND q.evidence_json->'message'->>'message_id' = ${messageId}
       AND q.evidence_json->>'dedupe_key' IS NULL
       AND (q.evidence_json->'message'->>'revision')::int < ${belowRevision}::int
-    RETURNING q.session_id`;
+    RETURNING q.id, q.session_id, q.group_key`;
+  await rescueSharedNameQuestions(tx, rows, new Set([messageId]));
   const ids = [...new Set(rows.map((r) => r.session_id))];
   for (const id of ids) await refreshWaSession(tx, id);
   return ids;
@@ -291,14 +325,16 @@ export async function supersedeRevokedWaQuestions(): Promise<number> {
   if (Number(pending[0]?.n ?? 0) === 0) return 0;
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
-    const rows = await tx.$queryRaw<{ session_id: string }[]>`
+    const rows = await tx.$queryRaw<{ id: string; session_id: string; group_key: string }[]>`
       UPDATE triage_questions q SET status = 'superseded', updated_at = now()
       FROM triage_sessions s
       WHERE s.id = q.session_id AND s.source_type = 'whatsapp' AND q.status = 'open'
         AND q.evidence_json->'message'->>'message_id' IN (SELECT message_id FROM whatsapp_messages WHERE revoked_at IS NOT NULL)
-      RETURNING q.session_id`;
+      RETURNING q.id, q.session_id, q.group_key`;
+    // 共用 rn: 題如果另一條未撤回訊息仍指住佢 → 重開並改歸屬（唔好令另一邊靜靜雞冇題）
+    const rescued = await rescueSharedNameQuestions(tx, rows, new Set()); // 已撤回訊息嘅 intent 會被 revokedAt／message.revokedAt 條件排除
     for (const id of new Set(rows.map((r) => r.session_id))) await refreshWaSession(tx, id);
-    return rows.length;
+    return rows.length - rescued.length;
   });
 }
 

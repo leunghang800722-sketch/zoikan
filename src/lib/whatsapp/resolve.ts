@@ -158,7 +158,7 @@ function siteTextHits(rawF: string, sites: ResolveContext["sites"]): Array<{ sit
 }
 
 /**
- * 文字（已折疊）係咪群盤名嘅「明顯部分」：去空白＋小寫後長度 ≥2（純 ASCII 要 ≥3，避免「CP」之類），
+ * 文字（已折疊）係咪群盤名嘅「明顯部分」：去空白＋小寫後長度 ≥2（純 ASCII 同含中文前綴都要 ≥3，避免「CP」「數碼」之類），
  * 而且係群盤名（去空白）嘅前綴，或者等於群盤名按空格分開嘅其中一個 token。
  */
 export function isGroupNamePrefix(rawF: string, names: readonly string[]): boolean {
@@ -168,7 +168,8 @@ export function isGroupNamePrefix(rawF: string, names: readonly string[]): boole
   for (const n of names) {
     if (!n) continue;
     const flat = n.replace(/\s+/g, "").toLowerCase();
-    if (flat.startsWith(t)) return true;
+    // 前綴：含中文字要 ≥3 字（兩個字嘅通用詞太易誤中）；純 ASCII 已要求 ≥3
+    if (flat.startsWith(t) && (t.length >= 3 || !/[^\x00-\x7f]/.test(t))) return true;
     if (n.toLowerCase().split(/\s+/).some((tok) => tok === t)) return true;
   }
   return false;
@@ -290,6 +291,9 @@ async function resolveNamed(raw: string, ctx: ResolveContext, siteId: string | n
     if (hit) {
       // 工號指甲、名指乙（名有配到人而唔包含工號嗰位）→ 揀人題，兩邊都列
       if (nameCands.length > 0 && !nameCands.includes(hit)) return { guardId: null, reasons: ["person_ambiguous"], candidates: await orderCandidates([hit, ...nameCands], ctx, siteId), basis: "staff_number_name_mismatch" };
+      // 已離職／已取消嘅舊號：唔直接寫入，變單一候選嘅揀人題（一撳確認）
+      const st = ctx.index.byStaffNumber.get(stripped.number)?.status;
+      if (st !== undefined && st !== "current") return { guardId: null, reasons: ["person_ambiguous"], candidates: [hit], basis: "staff_number_former" };
       return { guardId: hit, reasons: [], candidates: [], basis: "staff_number" };
     }
     // 工號查唔到 → 用剝走工號後嘅淨名照舊配
@@ -349,7 +353,8 @@ export function parseTimeRangeStart(raw: string): { hour: number; minute: number
     const sp = (x: string): [number, number] => [Number(x.slice(0, -2)), Number(x.slice(-2))];
     const [h1, m1] = sp(d[1]!);
     const [h2, m2] = sp(d[2]!);
-    if (h1 < 24 && ok(h1, m1) && ok(h2, m2)) return { hour: h1, minute: m1 };
+    // 開始分鐘只收 00／15／30／45（排除「1027-1031」之類日期範圍）
+    if (h1 < 24 && m1 % 15 === 0 && ok(h1, m1) && ok(h2, m2)) return { hour: h1, minute: m1 };
   }
   return null;
 }
@@ -451,7 +456,7 @@ function unresolvedRow(kind: IntentKind, conf: number, res: Resolution, routed: 
   return { kind, workDate: null, siteId: null, guardId: null, shiftTypeId: null, leaveCode: null, hours: null, confidence: conf, resolution: res, routed, ...extra };
 }
 
-/** WA-9 (8)：短訊（LLM）路徑嘅 shift 揀人題帶同名單路徑一樣嘅 (群,日,名) key，兩邊互相去重。冇日期／冇名／工卡覆寫就唔帶。 */
+/** WA-9 (8)：短訊（LLM）路徑嘅 shift 揀人題帶同名單路徑一樣嘅 (群,日,名) key，兩邊互相去重。key 唔計更別（刻意同名單路徑 key 一致；已知取捨：同日同人同名未能確認時，早／夜兩條報工共用一題，由人確認身份後再補）。冇日期／冇名／工卡覆寫就唔帶。 */
 function nameKeyOf(kind: IntentKind, ov: IntentOverride | undefined, raw: string | null, date: string | null, reasons: readonly string[], groupId: string): { name_key: string } | null {
   if (kind !== "shift" || ov?.person || !raw || !date) return null;
   if (!reasons.includes("person_ambiguous") && !reasons.includes("person_unknown")) return null;

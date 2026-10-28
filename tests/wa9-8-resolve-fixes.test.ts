@@ -63,8 +63,9 @@ describe("WA-9 (8) A：群盤名前綴", () => {
   });
   it("isGroupNamePrefix：純 ASCII 要 ≥3 字；別名一樣算", () => {
     expect(isGroupNamePrefix("cp", ["數碼港 CP5"])).toBe(false);
-    expect(isGroupNamePrefix("數碼", ["數碼港 CP5"])).toBe(true);
-    expect(isGroupNamePrefix("港區", ["數碼港 CP5", "港區大樓"])).toBe(true);
+    expect(isGroupNamePrefix("數碼", ["數碼港 CP5"])).toBe(false); // 兩個中文字前綴太寬鬆
+    expect(isGroupNamePrefix("數碼港", ["數碼港 CP5"])).toBe(true);
+    expect(isGroupNamePrefix("港區大", ["數碼港 CP5", "港區大樓"])).toBe(true);
     expect(isGroupNamePrefix("碼港", ["數碼港 CP5"])).toBe(false);
   });
 });
@@ -80,6 +81,7 @@ describe("WA-9 (8) B：人名黐住工號", () => {
       { number: "U90369", guardId: "g1", status: "current" },
       { number: "U90370", guardId: "g2", status: "current" },
       { number: "MP9123", guardId: "g2", status: "current" },
+      { number: "U90555", guardId: "g1", status: "former" },
     ],
     phones: [],
   });
@@ -121,6 +123,14 @@ describe("WA-9 (8) B：人名黐住工號", () => {
     expect([...(r.resolution.candidates.guard_ids ?? [])].sort()).toEqual(["g1", "g2"]);
     expect(r.resolution.basis.person).toBe("staff_number_name_mismatch");
   });
+  it("命中已離職／舊號 → 單一候選嘅 person_ambiguous 題，唔直接寫入", async () => {
+    const r = await who("U90555孫測壹");
+    expect(r.guardId).toBeNull();
+    expect(r.resolution.reasons).toContain("person_ambiguous");
+    expect(r.resolution.candidates.guard_ids).toEqual(["g1"]);
+    expect(r.resolution.basis.person).toBe("staff_number_former");
+    expect(r.routed).toBe("triage");
+  });
   it("工號查唔到 → 用剝走工號後嘅淨名配；淨名都唔識／只有未知工號 → person_unknown", async () => {
     const a = await who("U90999孫測壹");
     expect(a.guardId).toBe("g1");
@@ -151,6 +161,7 @@ describe("WA-9 (8) C：判頭群時間段更別", () => {
     expect(parseTimeRangeStart("一更")).toBeNull();
     expect(parseTimeRangeStart("第一更 1900")).toBeNull();
     expect(parseTimeRangeStart("早更")).toBeNull();
+    expect(parseTimeRangeStart("1027-1031")).toBeNull(); // 日期範圍唔當時間段
   });
   it("城巴式：0700一1900 → D；1900-0700 → N（basis time_range_start）", () => {
     expect(r("0700一1900", cb)).toMatchObject({ shiftTypeId: "d", reasons: [], basis: "time_range_start" });

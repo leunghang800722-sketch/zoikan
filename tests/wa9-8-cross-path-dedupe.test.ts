@@ -7,6 +7,7 @@ import { ingestEvent } from "@/lib/whatsapp/ingest";
 import type { NormalizedWaEvent } from "@/lib/whatsapp/schema";
 import type { LlmClient } from "@/lib/ai/llm";
 import { rosterNameKey } from "@/lib/whatsapp/name-key";
+import { supersedeRevokedWaQuestions } from "@/lib/whatsapp/triage";
 
 const T0 = new Date("2026-10-05T05:00:00Z"); // HK 2026-10-05 13:00
 const NOW = new Date(T0.getTime() + 60_000);
@@ -84,5 +85,59 @@ describe("WA-9 (8) D：跨路徑 (群,日,名) 去重", () => {
     const live = await personQs();
     expect(live).toHaveLength(1);
     expect(live[0]!.groupKey).toBe(rosterNameKey(groupId, "2026-10-05", DUP));
+  });
+
+  // M1：兩條訊息共用同一條 rn: 題；其中一條撤回／編輯，另一條唔可以靜靜雞冇題
+  const revoke = async (mid: string, off: number) => {
+    await ingest({ ...ev(mid, "", off), kind: "revoked", eventId: `${mid}-revoke` });
+    await run(new Date(NOW.getTime() + (off + 60) * 1000));
+    await supersedeRevokedWaQuestions();
+  };
+  const expectSharedSurvives = async (survivor: string) => {
+    const open = await prisma.triageQuestion.findMany({ where: { status: "open", kind: "wa_person_ambiguous", session: { sourceType: "whatsapp" } } });
+    expect(open).toHaveLength(1);
+    const it = await prisma.whatsappIntent.findFirst({ where: { message: { messageId: survivor }, kind: "shift" } });
+    expect(it?.resultRef).toBe(open[0]!.id);
+  };
+  it("M1：名單先開題、短訊併入 → 撤回名單 → 仍有 1 條 open 題，歸屬改去短訊，短訊 resultRef 指住佢", async () => {
+    await ingest(ev("r1", ROSTER));
+    await run();
+    await ingest(ev("s1", SHORT, 60));
+    await run(new Date(NOW.getTime() + 120_000));
+    await revoke("r1", 120);
+    await expectSharedSurvives("s1");
+    const open = await prisma.triageQuestion.findMany({ where: { status: "open", session: { sourceType: "whatsapp" } } });
+    expect((open[0]!.evidenceJson as { message: { message_id: string } }).message.message_id).toBe("s1"); // 歸屬改去短訊
+  });
+  it("M1：短訊先開題、名單併入 → 撤回短訊 → 仍有 1 條 open 題，歸屬改去名單", async () => {
+    await ingest(ev("s1", SHORT));
+    await run();
+    await ingest(ev("r1", ROSTER, 60));
+    await run(new Date(NOW.getTime() + 120_000));
+    await revoke("s1", 120);
+    const open = await prisma.triageQuestion.findMany({ where: { status: "open", kind: "wa_person_ambiguous", session: { sourceType: "whatsapp" } } });
+    expect(open).toHaveLength(1);
+    expect((open[0]!.evidenceJson as { message: { message_id: string } }).message.message_id).toBe("r1");
+  });
+  it("M1：名單先開題、短訊併入 → 編輯名單（revision+1，唔再含該人）→ 仍有 1 條 open 題，歸屬改去短訊", async () => {
+    await ingest(ev("r1", ROSTER));
+    await run();
+    await ingest(ev("s1", SHORT, 60));
+    await run(new Date(NOW.getTime() + 120_000));
+    await ingest({ ...ev("r1", "*10月 報開工要自己打名，傳送簽到*\n\n*05/10/2026* \n孫測壹", 120), kind: "edited", eventId: "r1-edit" });
+    await run(new Date(NOW.getTime() + 240_000));
+    await supersedeRevokedWaQuestions();
+    await expectSharedSurvives("s1");
+  });
+  it("M1：短訊先開題、名單併入 → 編輯短訊（revision+1，改做另一個人）→ 仍有 1 條 open 題，歸屬改去名單", async () => {
+    await ingest(ev("s1", SHORT));
+    await run();
+    await ingest(ev("r1", ROSTER, 60));
+    await run(new Date(NOW.getTime() + 120_000));
+    await ingest({ ...ev("s1", "孫測壹今日開工", 120), kind: "edited", eventId: "s1-edit" });
+    await run(new Date(NOW.getTime() + 240_000));
+    const open = await prisma.triageQuestion.findMany({ where: { status: "open", kind: "wa_person_ambiguous", session: { sourceType: "whatsapp" } } });
+    expect(open).toHaveLength(1);
+    expect((open[0]!.evidenceJson as { message: { message_id: string } }).message.message_id).toBe("r1");
   });
 });
