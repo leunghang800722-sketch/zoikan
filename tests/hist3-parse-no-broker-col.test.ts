@@ -101,4 +101,41 @@ describe("roster parse：雞頭碼欄係時段（舊模板）", () => {
     expect(a.timeRaw).toBe("1930-0730");
     expect(a.rankRaw).toBe("夜更保安員");
   });
+
+  it("M1：只有第一行雞頭碼欄誤寫時段、其餘空白（時段欄／職級正常）→ 唔移欄", async () => {
+    const buf = await digitalPortXlsx([
+      { col2: "0700-1900", col3: "1930-0730", col4: "夜更保安員", staffNo: "U91001", name: "測試甲", codes: ["N", "N", "N"] },
+      { col2: null, col3: "0730-1930", col4: "早更保安員", staffNo: "U91002", name: "測試乙", codes: ["D", "D", "D"] },
+      { col2: null, col3: "0730-1930", col4: "早更保安員", staffNo: "U91003", name: "測試丙", codes: ["D", "D", "D"] },
+    ]);
+    const r = await parseRosterWorkbook(buf, "typo.xlsx");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const b = r.rows.find((x) => x.nameRaw === "測試乙")!;
+    expect(b.timeRaw).toBe("0730-1930");
+    expect(b.rankRaw).toBe("早更保安員");
+    expect(r.layoutKey).not.toContain("no-broker-col");
+  });
+
+  it("M1：雞頭碼欄、時段欄兩邊都係時段 → 唔移欄", async () => {
+    const buf = await digitalPortXlsx([
+      { col2: "0700-1900", col3: "1930-0730", col4: "夜更保安員", staffNo: "U91001", name: "測試甲", codes: ["N", "N", "N"] },
+      { col2: "0700-1900", col3: "0730-1930", col4: "早更保安員", staffNo: "U91002", name: "測試乙", codes: ["D", "D", "D"] },
+    ]);
+    const r = await parseRosterWorkbook(buf, "both-time.xlsx");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows.find((x) => x.nameRaw === "測試乙")!.timeRaw).toBe("0730-1930");
+    expect(r.layoutKey).not.toContain("no-broker-col");
+  });
+
+  it("S1：x 格係 marker 但逐格＋全檔都留警告（正式月份唔靜靜變唔計）", async () => {
+    const buf = await digitalPortXlsx([{ col2: "K", col3: "1930-0730", col4: "夜更保安員", staffNo: "U91001", name: "測試甲", codes: ["N", "x", "X"] }]);
+    const r = await parseRosterWorkbook(buf, "x.xlsx");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.codeKindBreakdown.marker).toBe(2);
+    expect(r.rows.filter((x) => x.codeKind === "marker").every((x) => x.warnings.some((w) => w.includes("空缺標記")))).toBe(true);
+    expect(r.warnings.some((w) => w.includes("[x 標記]") && w.includes("2 格"))).toBe(true);
+  });
 });

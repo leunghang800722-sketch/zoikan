@@ -193,20 +193,30 @@ function field(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMapping, name:
   return clean(rawCell(ws, row, col));
 }
 
-/** HIST-3：雞頭碼欄（由 mapping 計出嚟嘅位置）所有非空值都係 HHMM-HHMM 時段（至少一個）→ 舊模板冇雞頭碼欄、時段喺雞頭碼欄位置。 */
+/** HIST-3：舊模板冇雞頭碼欄、時段喺雞頭碼欄位置。三個條件全部要成立（免一個打錯字令成個 block 錯位）：
+ * (i) 雞頭碼欄所有非空值都係 HHMM-HHMM，而且有值嘅行數 ≥ 90% 人名行（人名行＝有姓名、非統計行、有任何身份欄值）；
+ * (ii) 原本時段欄（雞頭碼欄右手邊）冇一個值係 HHMM-HHMM（真舊模板嗰欄係職級文字；兩邊都係時段＝標準排法，唔移）。 */
 function brokerColHoldsTimeSlots(ws: ExcelJS.Worksheet, mapping: ColumnMapping, startRow: number, endRow: number): boolean {
   const col = fieldCol(mapping, "brokerCode");
+  const timeCol = fieldCol(mapping, "timeSlot");
   if (col === null) return false;
   let seen = 0;
+  let personRows = 0;
   for (let r = startRow; r <= endRow; r++) {
     const labelVal = clean(rawCell(ws, r, mapping.labelCol));
-    if (labelVal && STAT_ROW_LABELS.has(labelVal)) continue;
+    if (!labelVal || STAT_ROW_LABELS.has(labelVal)) continue;
+    if (!hasIdentitySignal(ws, r, mapping)) continue;
+    personRows += 1;
+    if (timeCol !== null) {
+      const t = clean(rawCell(ws, r, timeCol));
+      if (t !== null && normalizeTimeRange(t) !== null) return false;
+    }
     const v = clean(rawCell(ws, r, col));
     if (v === null) continue;
     if (normalizeTimeRange(v) === null) return false;
     seen += 1;
   }
-  return seen > 0;
+  return seen > 0 && seen >= personRows * 0.9;
 }
 
 function isoDateUTC(d: Date): string {
@@ -420,6 +430,10 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
           if (codeKind === "unknown") {
             rowWarnings.push(`格仔代號「${rawCode}」未喺對照表出現，人手覆核`);
           }
+          // HIST-3：x／X 係空缺標記（唔計更）；正式月份亦照認，但逐格留警告等人手確認，免靜靜由 unknown 變唔計。
+          if (codeKind === "marker" && /^x$/i.test(rawCode.trim())) {
+            rowWarnings.push("代號 x 當空缺標記，唔計更，人手確認係咪空缺");
+          }
           if (group.isMultiCol) {
             rowWarnings.push(`由合併格展開（第 ${idx + 1}/${totalDays} 日）`);
           }
@@ -597,6 +611,8 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
   for (const s of sheets) {
     for (const w of s.warnings) warnings.push(`[${s.sheetName}] row ${w.row}：${w.reason}`);
   }
+  const xMarkerCells = rows.filter((x) => x.codeKind === "marker" && /^x$/i.test(x.rawCode.trim())).length;
+  if (xMarkerCells > 0) warnings.push(`[x 標記] 有 ${xMarkerCells} 格代號 x 當空缺標記，唔計更，人手確認係咪空缺`);
   warnings.push(...fallbackWarnings);
   for (const skipped of skippedSheets) {
     warnings.push(`[分頁跳過] ${skipped.name}：${skipped.reason}`);
