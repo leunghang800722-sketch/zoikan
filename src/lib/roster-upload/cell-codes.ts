@@ -29,6 +29,9 @@ const BASE_CODE_KIND: Readonly<Record<string, CodeKind>> = {
   數據中心: "marker", // 數碼港 CP5 檔內指向數據中心盤嘅指針格
   // 8 月試算 patch 3：中更保安員（免稅店 1500-2330、東濤苑 1500-2300）。
   M: "shift",
+  // HIST-3：HKU座頭 1–3 月「x」＝空缺標記（同行有 C，2300-0715 行）——唔計更、唔出 needs_human。
+  x: "marker",
+  X: "marker",
 };
 
 // 8 月試算 patch 3：任何 `OT<數字>`（可帶小數，例如 OT3.5）都當 ot——

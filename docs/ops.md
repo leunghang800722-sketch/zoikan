@@ -601,6 +601,19 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 **Postorder CSV 同 xlsm**：歷史月份 xlsm 仍受 1.5MB 限制，1–6 月 xlsm 各 ~4.1MB，一律先轉 `Roster.csv`／`PostOrder.csv`（`data/2026-0N/postorder/csv/`）上載。
 
+### HIST-3 歷史導入第一輪真數據修正（2026-10-28）
+
+2026-03 第一輪（25 份上載 3,921 格，1,710 unresolved）暴露嘅根因修正。**全部只影響歷史月份（`month_closes.historical=true`）或者只喺 parser 見到特定舊模板先觸發；正式月份行為不變**（gate:roster-parse 36/36）。
+
+1. **舊模板冇雞頭碼欄**（啟航1331 1–3 月）：parser 偵測一個 block 嘅雞頭碼欄（由 layout 推算位置）所有非空值都係 `HHMM-HHMM` 時段 → 當冇雞頭碼欄（`noBrokerCol`，layout_key 帶 `no-broker-col`），`timeSlot`←該欄、`rank`←時段欄（職級文字），staffNo／tel 位置不變，制服尺碼欄唔讀。只要有一個值唔係時段就唔移（保守）。1、2 月仲有 `A`／`B` 代號照舊 unknown，唔估。
+2. **新盤時段欄唔係時間**（Arden `SG`／`SSG`／`ABS`、大坑畫展 `7.5hrs`）：歷史導入建**冇開始時間**更種（`start_time`／`end_time`／`hours` 全 null），以代號為鍵；盤已有同代號有效更種就唔另建。報告 `created.noTimeShiftTypes`（盤名＋代號）＋step 警告註明「時段未知，只計出勤」。正式月份照舊（出「時段解析唔到」警告／題）。
+3. **現有盤出現新代號／新時段**（M+ `M`、國泰城 `C`、熊貓展）：歷史導入對現有盤都由**未配到更種嘅格**推更種（code＋時段，同新盤規則），建完 reparse 該盤上載；正式月份仍只補「有效更種 = 0」嘅盤。
+4. **雞頭碼欄寫工時**（熊貓展 `11hrs`）：歷史月份雞頭碼對唔到 → **照寫入** `shift_records`，`settlement_broker_id`／`operational_broker_id` 留 null（唔用預設雞頭／同盤唯一雞頭補，免錯配），對數 roster entry `settlementReason=broker_code_unmatched_tolerated`；報告 `totals.brokerTolerated`／逐盤 `brokerTolerated` 計數。正式月份照舊 unresolved「雞頭碼對唔到」。
+5. **`x`／`X` 格**＝空缺標記（HKU座頭 2300-0715 行）：cell-codes 當 `marker`（唔計更、唔出 needs_human）。
+6. **歷史導入 run 開頭自動 reparse** 本月全部未取代／未作廢上載（含 confirmed、parse_failed；`reparseRosterUpload` 保持 upload id／version／status 不變），唔使逐張撳；單張失敗只記警告。已知：confirmed 上載 reparse 會重建 rows，令 `row:<id>` 對數決定孤兒（歷史月份無此類決定）。**保安員修復**歷史模式上限由 5 輪改 10 輪，並且每輪套用後 reparse **包括 confirmed 上載**（正式月份仍跳過 confirmed）——重跑（上載已 confirmed）時新配對先反映到 rows，plan 先收斂；仍未收斂就 needs_human「再撳一次歷史導入」。報告新增 `reparsedUploads`。
+
+**修正上線後操作**：喺各歷史月份撳「歷史月份：一鍵導入」即可（run 自己 reparse，唔使再逐張撳 `/reparse`）。
+
 ## SITE-SCHEME-1 盤工號體系預設建議（2026-10）
 
 老闆唔想逐個盤揀體系。流程：

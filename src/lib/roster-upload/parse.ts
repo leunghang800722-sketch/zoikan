@@ -19,7 +19,8 @@
 // ——盤名/更別/保安員/雞頭嘅對照留俾 `src/lib/roster-upload/match.ts`
 // （拎住呢度嘅輸出＋DB 查詢結果先做）。
 import ExcelJS from "exceljs";
-import { buildMapping, findDateHeaders, fieldCol, rawCell, LAYOUT_OFFSETS, type ColumnMapping, type LayoutName } from "./layout";
+import { buildMapping, findDateHeaders, fieldCol, rawCell, withTimeInBrokerCol, LAYOUT_OFFSETS, type ColumnMapping, type LayoutName } from "./layout";
+import { normalizeTimeRange } from "./time-range";
 import { classifyCode, otHoursFromCode, STAT_ROW_LABELS, type CodeKind } from "./cell-codes";
 
 function clean(value: unknown): string | null {
@@ -192,6 +193,32 @@ function field(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMapping, name:
   return clean(rawCell(ws, row, col));
 }
 
+/** HIST-3：舊模板冇雞頭碼欄、時段喺雞頭碼欄位置。三個條件全部要成立（免一個打錯字令成個 block 錯位）：
+ * (i) 雞頭碼欄所有非空值都係 HHMM-HHMM，而且有值嘅行數 ≥ 90% 人名行（人名行＝有姓名、非統計行、有任何身份欄值）；
+ * (ii) 原本時段欄（雞頭碼欄右手邊）冇一個值係 HHMM-HHMM（真舊模板嗰欄係職級文字；兩邊都係時段＝標準排法，唔移）。 */
+function brokerColHoldsTimeSlots(ws: ExcelJS.Worksheet, mapping: ColumnMapping, startRow: number, endRow: number): boolean {
+  const col = fieldCol(mapping, "brokerCode");
+  const timeCol = fieldCol(mapping, "timeSlot");
+  if (col === null) return false;
+  let seen = 0;
+  let personRows = 0;
+  for (let r = startRow; r <= endRow; r++) {
+    const labelVal = clean(rawCell(ws, r, mapping.labelCol));
+    if (!labelVal || STAT_ROW_LABELS.has(labelVal)) continue;
+    if (!hasIdentitySignal(ws, r, mapping)) continue;
+    personRows += 1;
+    if (timeCol !== null) {
+      const t = clean(rawCell(ws, r, timeCol));
+      if (t !== null && normalizeTimeRange(t) !== null) return false;
+    }
+    const v = clean(rawCell(ws, r, col));
+    if (v === null) continue;
+    if (normalizeTimeRange(v) === null) return false;
+    seen += 1;
+  }
+  return seen > 0 && seen >= personRows * 0.9;
+}
+
 function isoDateUTC(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -333,14 +360,15 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
 
   for (let i = 0; i < headers.length; i++) {
     const [dateRow, labelCol] = headers[i]!;
-    const mapping = buildMapping(ws, dateRow, labelCol);
+    let mapping = buildMapping(ws, dateRow, labelCol);
+    const startRow = mapping.headerRow + 1;
+    const endRow = i + 1 < headers.length ? headers[i + 1]![0] - 1 : ws.rowCount;
+    // HIST-3：雞頭碼欄值全部係時段 → 當冇雞頭碼欄（noBrokerCol），欄位向左移一格。
+    if (brokerColHoldsTimeSlots(ws, mapping, startRow, endRow)) mapping = withTimeInBrokerCol(mapping);
     for (const d of mapping.dateValues.values()) headerDates.add(isoDateUTC(d));
     layouts.add(mapping.layout);
     if (mapping.noBrokerCol) noBrokerCol = true;
     if (mapping.dateHeaderGap > maxGap) maxGap = mapping.dateHeaderGap;
-
-    const startRow = mapping.headerRow + 1;
-    const endRow = i + 1 < headers.length ? headers[i + 1]![0] - 1 : ws.rowCount;
 
     for (let r = startRow; r <= endRow; r++) {
       if (isRowBlank(ws, r, mapping)) continue;
@@ -401,6 +429,10 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
           const rowWarnings: string[] = [];
           if (codeKind === "unknown") {
             rowWarnings.push(`格仔代號「${rawCode}」未喺對照表出現，人手覆核`);
+          }
+          // HIST-3：x／X 係空缺標記（唔計更）；正式月份亦照認，但逐格留警告等人手確認，免靜靜由 unknown 變唔計。
+          if (codeKind === "marker" && /^x$/i.test(rawCode.trim())) {
+            rowWarnings.push("代號 x 當空缺標記，唔計更，人手確認係咪空缺");
           }
           if (group.isMultiCol) {
             rowWarnings.push(`由合併格展開（第 ${idx + 1}/${totalDays} 日）`);
@@ -579,6 +611,8 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
   for (const s of sheets) {
     for (const w of s.warnings) warnings.push(`[${s.sheetName}] row ${w.row}：${w.reason}`);
   }
+  const xMarkerCells = rows.filter((x) => x.codeKind === "marker" && /^x$/i.test(x.rawCode.trim())).length;
+  if (xMarkerCells > 0) warnings.push(`[x 標記] 有 ${xMarkerCells} 格代號 x 當空缺標記，唔計更，人手確認係咪空缺`);
   warnings.push(...fallbackWarnings);
   for (const skipped of skippedSheets) {
     warnings.push(`[分頁跳過] ${skipped.name}：${skipped.reason}`);

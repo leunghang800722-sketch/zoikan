@@ -75,6 +75,8 @@ export { ONE_CLICK_ADVISORY_LOCK_KEY };
 export const ONE_CLICK_STALE_MS = 15 * 60 * 1000;
 /** 保安員修復最多循環幾輪（dev 8 月實測第 3 輪仲有 3 個動作、第 4 輪先 0）。 */
 const GUARD_FIX_MAX_ROUNDS = 5;
+/** HIST-3：歷史導入一次做到收斂（上限 10 輪），唔靠人手再撳。 */
+const HIST_GUARD_FIX_MAX_ROUNDS = 10;
 
 export function monthCloseRunStalled(run: { status: string; applyStartedAt: Date | null }, now = new Date()): boolean {
   if (run.status !== "running") return false;
@@ -364,6 +366,8 @@ export async function stepPrecheck(month: Date, _actorUserId: string, _ip: strin
 export async function stepParseHealth(month: Date, actorUserId: string, auto?: AutoCollector, opts?: { historical?: boolean }) {
   const { start } = monthRange(month);
   const ctx = auto ?? new AutoCollector(null, start, actorUserId, null);
+  // HIST-3：歷史模式——自動建更種容許冇開始時間，同現有盤補新代號／新時段。
+  if (opts?.historical) ctx.historical = true;
   const warnings: string[] = [];
   const needsHuman: string[] = [];
 
@@ -432,6 +436,11 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
     needsHuman.push(`自動補更種失敗（${safeErrorSummary(e)}）——請去「盤」管理手動加更種`);
   }
 
+  // HIST-3：歷史模式建咗冇開始時間更種（時段欄唔係時間）——逐盤講明「時段未知，只計出勤」。
+  const noTimeBySite = new Map<string, string[]>();
+  for (const x of ctx.noTimeShiftTypes) noTimeBySite.set(x.siteName, [...(noTimeBySite.get(x.siteName) ?? []), x.code]);
+  for (const [siteName, codes] of noTimeBySite) warnings.push(`盤「${siteName}」更種「${[...new Set(codes)].join("、")}」時段欄唔係時間，已建冇開始時間更種（時段未知，只計出勤）`);
+
   // B. 更數異常自動拆解（重新讀返上載：有新指定嘅盤、rows 已經 reparse）。
   const assigned = await prisma.rosterUpload.findMany({
     where: { month: start, status: { notIn: ["superseded", "voided", "parse_failed"] }, siteId: { not: null } },
@@ -477,6 +486,7 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
       proposedSites,
       sitesAliased: ctx.summary.sitesAliased,
       shiftTypesCreated: ctx.summary.shiftTypesCreated,
+      noTimeShiftTypes: ctx.noTimeShiftTypes.map((x) => ({ site: x.siteName, code: x.code })),
       formatDiffWarnings: variance.legacyFlagged,
       varianceFlagged: variance.findings.length,
       varianceExplained: explainedCount,
@@ -514,7 +524,9 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
   let postorderUpload: Awaited<ReturnType<typeof prisma.postorderUpload.findFirst>> = null;
   let postorder: Awaited<ReturnType<typeof loadPostorderForPlan>> = undefined;
   let converged = false;
-  for (let round = 1; round <= GUARD_FIX_MAX_ROUNDS; round++) {
+  const maxRounds = opts?.historical ? HIST_GUARD_FIX_MAX_ROUNDS : GUARD_FIX_MAX_ROUNDS;
+  const reparseOpts = { txTimeoutMs: 10 * 60 * 1000, includeConfirmed: opts?.historical === true };
+  for (let round = 1; round <= maxRounds; round++) {
     // 注意：唔使喺呢度自己攞 GUARD_FIX_ADVISORY_LOCK_KEY——`applyGuardFixPlan()`
     // 下面已經喺自己嘅 transaction 入面攞緊呢把鎖（apply.ts:79），呢度淨係
     // build plan（讀），冇寫入，唔需要鎖；一鍵結算本身用另一把獨立鎖
@@ -596,7 +608,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     }
     try {
       const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: start, historicalRoster: opts?.historical === true });
-      const reparse = await reparseAllActiveUploads(prisma, start, { txTimeoutMs: 10 * 60 * 1000 });
+      const reparse = await reparseAllActiveUploads(prisma, start, reparseOpts);
       await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "applied", appliedAt: new Date(), resultJson: { diffs, reparse } as unknown as Prisma.InputJsonValue } });
     } catch (e) {
       await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "failed", resultJson: { error: safeErrorSummary(e) } as unknown as Prisma.InputJsonValue } });
@@ -605,8 +617,8 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
       throw new Error(`保安員修復第 ${round} 輪套用失敗：${safeErrorSummary(e)}`);
     }
   }
-  if (!converged && rounds.length === GUARD_FIX_MAX_ROUNDS) {
-    needsHuman.push(`保安員修復跑咗 ${GUARD_FIX_MAX_ROUNDS} 輪仲有新動作未收斂——再撳一次「一鍵結算」會接住做`);
+  if (!converged && rounds.length === maxRounds) {
+    needsHuman.push(opts?.historical ? `保安員修復跑咗 ${maxRounds} 輪仲有新動作未收斂——再撳一次「歷史導入」會接住做` : `保安員修復跑咗 ${maxRounds} 輪仲有新動作未收斂——再撳一次「一鍵結算」會接住做`);
   }
 
   // WP-ONE-CLICK-AUTO §31.3 D：needs_boss「要老闆核實」——有硬鍵（電話＋姓名）或者上月同盤同人已配對
@@ -621,7 +633,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     autoLinkedCells = res.cellsLinked;
     remaining = res.remaining;
     if (res.autoLinked > 0) {
-      await reparseAllActiveUploads(prisma, start, { txTimeoutMs: 10 * 60 * 1000 });
+      await reparseAllActiveUploads(prisma, start, reparseOpts);
     }
     if (res.remaining > 0) {
       const autoNote = auto ? "（已入分診，預填建議答案，一撳確認）" : "——要老闆喺「保安員配對修復」頁睇 needs_boss 逐條核實";

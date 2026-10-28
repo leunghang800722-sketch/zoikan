@@ -36,10 +36,26 @@ export interface ColumnMapping {
   // patch 1：呢個 block 嘅日期表頭同第一個真日期之間隔咗幾多欄（0=貼住，
   // 1/2=中間有額外欄，例如「日薪」）。
   dateHeaderGap: number;
+  // HIST-3：舊模板（例如啟航1331 1–3 月）冇雞頭碼欄，原本雞頭碼欄位置直接係時段（HHMM-HHMM）、
+  // 隔籬係職級——由 parse.ts 睇成個 block 嘅雞頭碼欄值全部係時段先設 true（同時 noBrokerCol=true）。
+  // 欄位向左移一格：timeSlot←雞頭碼欄、rank←時段欄；其餘（staffNo／tel／nameEn）位置不變；rank 欄位置（制服尺碼）唔讀。
+  timeInBrokerCol?: boolean;
+}
+
+/** HIST-3：呢個 block 嘅雞頭碼欄值全部係時段 → 當冇雞頭碼欄，欄位向左移一格。 */
+export function withTimeInBrokerCol(mapping: ColumnMapping): ColumnMapping {
+  return { ...mapping, timeInBrokerCol: true, noBrokerCol: true };
 }
 
 export function fieldCol(mapping: ColumnMapping, name: FieldName): number | null {
   const offsets = LAYOUT_OFFSETS[mapping.layout];
+  if (mapping.timeInBrokerCol) {
+    if (name === "brokerCode") return null;
+    const shifted = name === "timeSlot" ? offsets.brokerCode : name === "rank" ? offsets.timeSlot : offsets[name];
+    if (shifted === undefined) return null;
+    const c = mapping.labelCol + shifted;
+    return c >= 1 ? c : null;
+  }
   const off = offsets[name];
   if (off === undefined) return null;
   const col = mapping.labelCol + off;

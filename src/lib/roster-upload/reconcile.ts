@@ -20,6 +20,7 @@
 // site_id）。
 import { prisma } from "@/lib/db";
 import { monthStart as toMonthStart } from "@/lib/month-lock";
+import { historicalMonthKeys } from "@/lib/month-close/historical";
 import { normalizeTimeRange, shiftTypeTimeSlot } from "./time-range";
 import { createSettlementBrokerFallbackResolver } from "@/lib/pricing/settlement-broker-fallback";
 import {
@@ -64,6 +65,9 @@ export function buildUnresolvedKey(rowId: string): string {
 // 分辨「刻意留空、要人手揀」嘅 null 同「舊上載未 reparse」嘅 null（見
 // `loadReconcileInput()`）。兩邊要用同一份字面，改一邊要記得改埋另一邊。
 export const AMBIGUOUS_SUBSITE_WARNING_PREFIX = "子盤未定，歷史候選";
+
+/** HIST-3：歷史月份雞頭碼對唔到（例如熊貓展雞頭碼欄寫工時「11hrs」）→ 照寫入 shift_records，結算雞頭留 null，reason 記呢個值。 */
+export const BROKER_CODE_UNMATCHED_TOLERATED = "broker_code_unmatched_tolerated";
 
 export interface ReconcileRosterEntry {
   rowId: string;
@@ -296,6 +300,8 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
   // 揀（`AMBIGUOUS_SUBSITE_WARNING_PREFIX` 呢個 marker 就係嗰種 null，
   // 同「舊上載未 reparse」嘅 null 唔同——後者要靜靜跌返母盤，前者一定要
   // 入 unresolved，唔可以裝作「已經歸咗母盤」）。
+  // HIST-3：歷史月份（month_closes.historical）容忍雞頭碼對唔到。
+  const historicalKeys = await historicalMonthKeys();
   const prepared = ids.map((id) => {
     const upload = uploadById.get(id)!;
     const rows = rowsByUpload.get(id) ?? [];
@@ -432,6 +438,7 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
   for (const p of prepared) {
     const { upload, rowsWithEffectiveSite, effectiveSiteIds } = p;
     const monthKey = toMonthStart(upload.month).toISOString();
+    const historicalUpload = historicalKeys.has(toMonthStart(upload.month).getTime());
     const uploadMonthPrefix = toDateStr(toMonthStart(upload.month)).slice(0, 7);
     const shiftTypeCandidates: LeaveShiftTypeCandidate[] = effectiveSiteIds
       .flatMap((sid) => shiftTypesBySite.get(sid) ?? [])
@@ -486,7 +493,10 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
       if (!workDate.startsWith(`${uploadMonthPrefix}-`)) reasons.push(`格仔日期 ${workDate} 唔係上載月份（${uploadMonthPrefix}），唔可以寫入`);
       // 驗收修正（Opus 5.5，規則 8）：有雞頭碼但對唔到 brokers——唔准用
       // fallback 靜靜補（fallback 淨係俾「冇雞頭碼欄」嘅盤用）。
-      if (r.brokerCodeRaw && r.brokerCodeRaw.trim() && !r.settlementBrokerId) reasons.push(`雞頭碼「${r.brokerCodeRaw.trim()}」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析`);
+      // HIST-3：歷史月份容忍——照寫入，結算雞頭留 null（唔用 fallback／同盤唯一雞頭補，免錯配），reason 記 BROKER_CODE_UNMATCHED_TOLERATED。
+      const brokerUnmatched = !!(r.brokerCodeRaw && r.brokerCodeRaw.trim() && !r.settlementBrokerId);
+      const brokerTolerated = brokerUnmatched && historicalUpload && (r.codeKind === "shift" || r.codeKind === "ot" || r.codeKind === "leave");
+      if (brokerUnmatched && !brokerTolerated) reasons.push(`雞頭碼「${r.brokerCodeRaw!.trim()}」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析`);
       if (!r.guardId) reasons.push("保安員未配對");
 
       let shiftTypeId: string | null = r.shiftTypeId;
@@ -528,7 +538,7 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
       const guard = guardById.get(r.guardId);
       // 驗收（Opus 5.5）：呢行漏填雞頭碼、同盤其他行得一個雞頭 → 當呢行嘅
       // 「更表雞頭碼」（見上面 singleCodedBrokerForSite 註解）。
-      const rowBrokerId = r.settlementBrokerId ?? singleCodedBrokerForSite(r.effectiveSiteId);
+      const rowBrokerId = brokerTolerated ? null : (r.settlementBrokerId ?? singleCodedBrokerForSite(r.effectiveSiteId));
       if (guard && isLongtermEmploymentType(guard.employmentType)) {
         const siteId = r.effectiveSiteId as string; // 上面 reasons.length>0 已經 continue 咗，呢度一定非 null
         const lt = resolveLongtermSettlement({
@@ -563,7 +573,9 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
         // 長工第一層就漏咗呢個「payload 優先」嘅原則。
         settlementBrokerId = rowBrokerId;
         operationalBrokerId = rowBrokerId;
-        if (!settlementBrokerId) {
+        if (brokerTolerated) {
+          settlementReason = BROKER_CODE_UNMATCHED_TOLERATED;
+        } else if (!settlementBrokerId) {
           settlementBrokerId = await resolveFallback({
             guardId: r.guardId,
             siteId: r.effectiveSiteId,
