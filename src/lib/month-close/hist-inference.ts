@@ -12,7 +12,11 @@ export type HistInferenceRule =
   | "R3a" // 同名多候選全部係歷史導入 minimal guard → 合併
   | "R3b" // 一個本名完全相同＋其餘後綴變體 → 揀本名相同嗰個（變體如係 minimal 一併合併）
   | "R3c" // ≥2 個真實同名 guard → 用盤史揀
+  | "R3d" // 候選＝一個真實 guard＋其餘全部係歷史 minimal → 併入真實嗰個
   | "R4" // 同一次未配對集合內同名（工號唔同／其一冇工號）→ 當同一人
+  | "R6a" // U Team 名單同名多行但身份證一致（名單重複行）→ 用第一行（有身份證優先）create
+  | "R6b" // U Team 名單同名多行，更表電話剛好等於其中一行 → 用嗰行 create
+  | "R6c" // U Team 名單同名多行、分辨唔到（或選中行被拒）→ 唔用名單，按更表姓名建獨立保安員
   | "R5" // create_minimal 建人時電話撞 DB → 電話留空
   | "S1" // 單字母 unknown 代號按該行時段當出更
   | "S1n" // 單字母代號、時段解析唔到 → 冇開始時間更種（只計出勤）
@@ -29,7 +33,11 @@ export const HIST_RULE_CONFIDENCE: Readonly<Record<HistInferenceRule, number>> =
   R3a: 0.9,
   R3b: 0.9,
   R3c: 0.8,
+  R3d: 0.7,
   R4: 0.9,
+  R6a: 0.85,
+  R6b: 0.85,
+  R6c: 0.7,
   R5: 0.85,
   S1: 0.85,
   S1n: 0.7,
@@ -119,13 +127,34 @@ function editDistanceAtMostOne(a: string, b: string): boolean {
   return longer.slice(i + 1).join("") === shorter.slice(i).join("");
 }
 
-/** 兩個姓名係咪「同一個名嘅變體」：折返後相同，或者（≥4 字，3 字名相差一字多數係唔同人）相差 ≤1 字。 */
-export function isNameVariant(a: string | null | undefined, b: string | null | undefined): boolean {
+/** 3 字名「姓相同＋其餘兩字入面一字相同、另一字唔同」（形近／同音字筆誤；HIST-5.1）。fa／fb 已折返。 */
+function isThreeCharSurnameVariant(fa: string, fb: string): boolean {
+  const a = [...fa];
+  const b = [...fb];
+  if (a.length !== 3 || b.length !== 3 || a[0] !== b[0]) return false;
+  return (a[1] === b[1]) !== (a[2] === b[2]);
+}
+
+/** 嚴格變體：折返後相同，或者（≥4 字）相差 ≤1 字。3 字名相差一字唔包（見 isLooseNameVariant）。 */
+export function isStrictNameVariant(a: string | null | undefined, b: string | null | undefined): boolean {
   const fa = foldName(a);
   const fb = foldName(b);
   if (!fa || !fb) return false;
   if (fa === fb) return true;
   return [...fa].length >= 4 && [...fb].length >= 4 && editDistanceAtMostOne(fa, fb);
+}
+
+/** 寬鬆變體（HIST-5.1）：嚴格唔中，但係 3 字名「姓相同＋名其中一字相同＋另一字唔同」。用呢個中嗰陣信心降 0.05。 */
+export function isLooseNameVariant(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (isStrictNameVariant(a, b)) return false;
+  const fa = foldName(a);
+  const fb = foldName(b);
+  return !!fa && !!fb && isThreeCharSurnameVariant(fa, fb);
+}
+
+/** 兩個姓名係咪「同一個名嘅變體」：折返後相同，或者 ≥4 字相差 ≤1 字，或者 3 字名姓同＋名差一字（HIST-5.1）。 */
+export function isNameVariant(a: string | null | undefined, b: string | null | undefined): boolean {
+  return isStrictNameVariant(a, b) || isLooseNameVariant(a, b);
 }
 
 /** 抽出 7 位以上連續數字（電話／身份證類）打 [num]——evidence／reason 最後一道防線。 */

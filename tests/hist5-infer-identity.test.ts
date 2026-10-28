@@ -16,7 +16,7 @@ describe("HIST-5 純函數：姓名折返", () => {
     expect(foldName("測試陳張(摩)")).toBe(foldName("測試陳張"));
     expect(isNameVariant("测试陈张", "測試陳張")).toBe(true);
     expect(isNameVariant("測試阿甲甲", "測試阿甲乙")).toBe(true); // 相差一字（≥4 字）
-    expect(isNameVariant("測試甲", "測試乙")).toBe(false); // 3 字名相差一字多數係唔同人，唔當變體
+    expect(isNameVariant("測試甲", "測試乙")).toBe(true); // HIST-5.1：3 字名姓同＋名其中一字相同、另一字唔同 → 變體（反例見 hist5-1-uteam-dup.test.ts）
     expect(isNameVariant("測試阿甲", "測試阿乙")).toBe(true); // 4 字
     expect(isNameVariant("測試保安員甲", "完全唔同人名")).toBe(false);
   });

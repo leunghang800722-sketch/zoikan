@@ -343,7 +343,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     }
 
     for (const ca of plan.actions.create) {
-      await ensureNewGuard({
+      const createdGuardId = await ensureNewGuard({
         seq: ca.seq,
         nameZh: ca.nameZh,
         alias: ca.alias,
@@ -355,6 +355,8 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         defaultBrokerCode: ca.defaultBrokerCode,
         diff: diffs.create,
       });
+      // HIST-5.1：R6a／R6b（名單同名多行分辨後建人）推斷 audit。
+      if (createdGuardId && ca.inference) await writeInferenceAudit(createdGuardId, ca.inference);
     }
     for (const cm of plan.actions.createMinimal) {
       // 驗收（Opus 5.5）：工號衝突保守預設——同一個「工號＋更表姓名」已經

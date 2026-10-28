@@ -84,6 +84,8 @@ export interface CreateAction {
   uNumber: string | null; // scheme=U 嘅 number（可能冇——12 個冇 U 號用名單搵到嗰批）
   defaultBrokerCode: string;
   reason: string;
+  /** HIST-5.1：R6a／R6b（U Team 名單同名多行分辨後照名單建人）嘅 AI 推斷。 */
+  inference?: HistInference;
 }
 
 export interface CreateMinimalAction {
