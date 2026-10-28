@@ -291,19 +291,25 @@ export async function decideHistoricalIdentity(ctx: HistPlanContext, input: Hist
       if (overrideAlreadyThere) return overrideNotEffective(ctx, identity, [telGuardId]);
       const aNames = [a.nameZh, ...a.nameAliases];
       const variant = aNames.some((n) => isNameVariant(identity.nameRaw, n));
-      if (variant) {
-        // HIST-5.1：淨係「3 字名姓同、名差一字」（形近／同音）先中 → 信心降 0.05。
-        const loose = !aNames.some((n) => isStrictNameVariant(identity.nameRaw, n));
+      // HIST-5.1：淨係「3 字名姓同、名差一字」（形近／同音）先中 → 信心降 0.05。
+      // Opus 驗收 M3：寬鬆變體（3 字名姓同名差一字）同「共用電話」疊埋，最常見係兄弟姊妹（同姓＋同輩份字）——
+      // 要多一個佐證先 link：更表工號屬 A，或者 A 喺同盤（含子盤）±3 個月內有更次；冇佐證就當 R2c 建獨立人。
+      const loose = variant && !aNames.some((n) => isStrictNameVariant(identity.nameRaw, n));
+      const looseCorroboration = loose ? (snOwnerId === telGuardId ? "工號" : ((await historyCellsByGuard(ctx, [telGuardId], identity.siteIds)).get(telGuardId) ?? 0) > 0 ? "盤史" : null) : null;
+      if (variant && (!loose || looseCorroboration)) {
         const evidence = [
           `更表電話屬「${a.nameZh}」（${numbersText(ctx, telGuardId)}）`,
           `更表姓名${nameText}同「${a.nameZh}」係變體（簡繁／NFKC／後綴／相差一字${loose ? "；3 字名姓相同、名差一字（形近／同音）" : ""}）`,
+          ...(loose ? [looseCorroboration === "工號" ? `佐證：更表工號 ${sn} 屬「${a.nameZh}」` : `佐證：「${a.nameZh}」喺同一盤（含子盤）±3 個月內有更次`] : []),
           ...(snOwnerId && snOwnerId !== telGuardId ? [`更表工號 ${sn} 屬另一位「${guardName(ctx, snOwnerId)}」，唔加工號`] : []),
         ];
         const la = linkAction(ctx, identity, telGuardId, "R2b", `連結到「${a.nameZh}」並加更表用名做別名`, evidence, { addStaffNumber: true });
         if (loose && la.inference) la.inference = { ...la.inference, confidence: Math.round((la.inference.confidence - 0.05) * 100) / 100 };
         return { kind: "link", link: la, hints: [] };
       }
-      const evidence = [`更表電話屬另一位保安員「${a.nameZh}」，但更表姓名${nameText}DB 冇、同「${a.nameZh}」亦唔係變體`, "疑共用電話（家人／雞頭電話）→ 建獨立保安員，電話留空"];
+      const evidence = loose
+        ? [`更表電話屬另一位保安員「${a.nameZh}」，更表姓名${nameText}同佢只係 3 字名姓同、名差一字，而且冇工號／同盤史佐證`, "疑家人（同姓同輩份字）共用電話 → 建獨立保安員，電話留空"]
+        : [`更表電話屬另一位保安員「${a.nameZh}」，但更表姓名${nameText}DB 冇、同「${a.nameZh}」亦唔係變體`, "疑共用電話（家人／雞頭電話）→ 建獨立保安員，電話留空"];
       return {
         kind: "create_minimal",
         create: {
@@ -361,15 +367,19 @@ export async function decideHistoricalIdentity(ctx: HistPlanContext, input: Hist
     return mergeAction(keeper, "R3a", cands.filter((id) => id !== keeper.id), evidence);
   }
 
+  // R3c：用盤史揀
+  const hist = await historyCellsByGuard(ctx, cands, identity.siteIds);
+  const withHist = cands.filter((id) => (hist.get(id) ?? 0) > 0);
   // R3d（HIST-5.1）：剛好一個真實 guard，其餘全部係歷史導入 minimal → 併入真實嗰個（真實有同盤盤史信心 0.75，否則 0.7）。
+  // Opus 驗收 M2：放喺「盤史唯一」判斷之後——如果淨係 minimal 有同盤盤史（真實嗰個冇），照舊 R3c link minimal，唔可以將佢併入冇盤史嘅真實同名人。
   const realCands = candRows.filter((g) => !isHistoricalMinimalGuard(ctx, g));
-  if (realCands.length === 1) {
+  if (realCands.length === 1 && !(withHist.length === 1 && withHist[0] !== realCands[0]!.id)) {
     const keeper = realCands[0]!;
     const minimalIds = candRows.filter((g) => g.id !== keeper.id).map((g) => g.id);
-    const keeperHist = (await historyCellsByGuard(ctx, [keeper.id], identity.siteIds)).get(keeper.id) ?? 0;
+    const keeperHist = hist.get(keeper.id) ?? 0;
     const evidence = [
       `DB 同名候選 ${cands.length} 個：1 個真實保安員「${keeper.nameZh}」（${numbersText(ctx, keeper.id)}）＋${minimalIds.length} 個歷史導入 minimal guard（冇工號冇電話）`,
-      keeperHist > 0 ? `真實保安員喺同一盤（含子盤）±3 個月內有 ${keeperHist} 條更次` : "真實保安員喺同一盤±3 個月內冇更次",
+      keeperHist > 0 ? `真實保安員喺同一盤（含子盤）±3 個月內有 ${keeperHist} 條更次` : "真實保安員同 minimal 喺同一盤±3 個月內都冇更次",
       "minimal 嘅 shift_records／長工崗位／覆寫併入真實保安員",
     ];
     const d = mergeAction(keeper, "R3d", minimalIds, evidence);
@@ -379,10 +389,6 @@ export async function decideHistoricalIdentity(ctx: HistPlanContext, input: Hist
     }
     return d;
   }
-
-  // R3c：用盤史揀
-  const hist = await historyCellsByGuard(ctx, cands, identity.siteIds);
-  const withHist = cands.filter((id) => (hist.get(id) ?? 0) > 0);
   if (withHist.length === 1) {
     const pick = withHist[0]!;
     const g = ctx.guards.get(pick)!;

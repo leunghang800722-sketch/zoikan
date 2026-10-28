@@ -30,11 +30,13 @@ describe("HIST-5.1 純函數", () => {
     expect(uNumberKey(" ｕ９０１２３ ")).toBe("U90123");
     expect(uNumberKey("U 90123")).toBe("U90123");
     const idx = buildUTeamIndex([urow({ nameZh: "測試名單甲", uNumber: "Ｕ90123" })]);
-    expect(idx.byUNumber.get(uNumberKey("u 90123"))).toBeTruthy();
-    const rows = [urow({ nameZh: "測試名單乙", uNumber: "U90201", hkid: HK1, tel: "61230001" }), urow({ nameZh: "測試名單乙", uNumber: "U90202", hkid: HK2, tel: "61230002" })];
+    expect(idx.byUNumberKey.get(uNumberKey("u 90123"))).toBeTruthy();
+    // Opus 驗收 M1：正式模式鍵唔加 NFKC（同 HIST-5.1 之前一樣）——全形名單號唔會被半形更表號撞到。
+    expect(idx.byUNumber.get("U90123")).toBeUndefined();
+    const rows = [urow({ nameZh: "測試名單乙", uNumber: "U90201", hkid: HK1, tel: "90019871" }), urow({ nameZh: "測試名單乙", uNumber: "U90202", hkid: HK2, tel: "90019872" })];
     expect(pickUTeamDuplicateRow(rows, "u 90202", null)).toMatchObject({ via: "number" });
-    expect(pickUTeamDuplicateRow(rows, null, "61230002")).toMatchObject({ via: "R6b" });
-    expect(pickUTeamDuplicateRow(rows, null, "61239999")).toBeNull();
+    expect(pickUTeamDuplicateRow(rows, null, "90019872")).toMatchObject({ via: "R6b" });
+    expect(pickUTeamDuplicateRow(rows, null, "90019873")).toBeNull();
     // 身份證全部一致（含只有一行有）→ R6a，有身份證嗰行優先
     const same = [urow({ nameZh: "測試名單丙", uNumber: "U90301" }), urow({ nameZh: "測試名單丙", uNumber: "U90302", hkid: HK1 }), urow({ nameZh: "測試名單丙", uNumber: "U90303", hkid: HK1 })];
     expect(pickUTeamDuplicateRow(same, null, null)).toMatchObject({ via: "R6a", row: { uNumber: "U90302" } });
@@ -216,7 +218,8 @@ describe("HIST-5.1 R3d／3 字名變體（plan＋apply）", () => {
     const st = await mkShiftType(site.id, "D", "0700", "1900");
     const real = await mkGuard({ name: "測試同名真", aliases: ["測試同名乙"], staffNo: "U90501" });
     const minimal = await mkGuard({ name: "測試同名乙", status: "inactive", createdBy: HIST_BY });
-    await prisma.shiftRecord.create({ data: { guardId: minimal.id, siteId: site.id, shiftTypeId: st.id, workDate: new Date(Date.UTC(2026, 0, 5)), status: "confirmed", createdBy: "test" } });
+    // no_history＝兩個候選喺同盤 ±3 個月內都冇更次（Opus 驗收：minimal 嘅更次放喺窗口外，先係真 no_history；窗口內淨 minimal 有＝R3c link minimal，見 Opus M2 test）。
+    await prisma.shiftRecord.create({ data: { guardId: minimal.id, siteId: site.id, shiftTypeId: st.id, workDate: new Date(Date.UTC(2025, 9, 5)), status: "confirmed", createdBy: "test" } });
     await mkRows({ uploadId: upload.id, siteId: site.id, name: "測試同名乙", kind: "ambiguous" }, 2);
     const { plan, diffs } = await planAndApply();
     expect(plan.historical!.remaining).toHaveLength(0);
@@ -266,6 +269,9 @@ describe("HIST-5.1 R3d／3 字名變體（plan＋apply）", () => {
     const tel2 = fakeTel();
     const a = await mkGuard({ name: "測試甲", tel: tel1 });
     await mkGuard({ name: "測試乙", tel: tel2 });
+    // Opus 驗收 M3：寬鬆變體要多一個佐證——A 喺同盤 ±3 個月內有更次。
+    const stA = await mkShiftType(site.id, "D", "0700", "1900");
+    await prisma.shiftRecord.create({ data: { guardId: a.id, siteId: site.id, shiftTypeId: stA.id, workDate: new Date(Date.UTC(2026, 1, 10)), status: "confirmed", createdBy: "test" } });
     await mkRows({ uploadId: upload.id, siteId: site.id, name: "測丙甲", tel: tel1, rowIndex: 801 }, 2); // 姓同、中字差 → 變體
     await mkRows({ uploadId: upload.id, siteId: site.id, name: "李試乙", tel: tel2, rowIndex: 802 }, 2); // 姓唔同 → 唔係
     const { plan } = await planAndApply();
@@ -276,5 +282,51 @@ describe("HIST-5.1 R3d／3 字名變體（plan＋apply）", () => {
     expect(plan.actions.createMinimal).toHaveLength(1);
     expect(plan.actions.createMinimal[0]!.inference).toMatchObject({ rule: "R2c" });
     expect(plan.actions.createMinimal[0]!.tel).toBeNull();
+  });
+
+  // ---- Opus 驗收補測 ----
+  it("Opus M3：寬鬆變體（3 字名姓同名差一字）＋共用電話，冇工號／同盤史佐證 → 唔 link 電話主人，R2c 建獨立人 tel 留空", async () => {
+    const tel = fakeTel();
+    const a = await mkGuard({ name: "測家強", tel });
+    await mkRows({ uploadId: upload.id, siteId: site.id, name: "測家明", tel, rowIndex: 811 }, 2);
+    const { plan } = await planAndApply();
+    expect(plan.actions.link.filter((l) => l.guardId === a.id)).toHaveLength(0);
+    expect(plan.actions.createMinimal).toHaveLength(1);
+    expect(plan.actions.createMinimal[0]!.inference).toMatchObject({ rule: "R2c" });
+    expect(plan.actions.createMinimal[0]!.tel).toBeNull();
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: a.id } })).nameAliases).not.toContain("測家明");
+  });
+
+  it("Opus M3：寬鬆變體＋更表工號屬電話主人 → 工號＋電話已經係強證據，照原有路徑 link 電話主人", async () => {
+    const tel = fakeTel();
+    const a = await mkGuard({ name: "測家強", tel, staffNo: "U90821" });
+    await mkRows({ uploadId: upload.id, siteId: site.id, name: "測家明", tel, staffNo: "U90821", rowIndex: 812 }, 2);
+    const { plan } = await planAndApply();
+    expect(plan.actions.link).toHaveLength(1);
+    expect(plan.actions.link[0]).toMatchObject({ guardId: a.id });
+    expect(plan.actions.createMinimal).toHaveLength(0);
+  });
+
+  it("Opus M2：淨係歷史 minimal 有同盤盤史（真實同名冇）→ 照舊 R3c link minimal，唔 R3d 併入真實", async () => {
+    const st = await mkShiftType(site.id, "D", "0700", "1900");
+    const real = await mkGuard({ name: "測試同名真丁", aliases: ["測試同名丁"], staffNo: "U90531" });
+    const minimal = await mkGuard({ name: "測試同名丁", status: "inactive", createdBy: HIST_BY });
+    await prisma.shiftRecord.create({ data: { guardId: minimal.id, siteId: site.id, shiftTypeId: st.id, workDate: new Date(Date.UTC(2026, 1, 3)), status: "confirmed", createdBy: "test" } });
+    await mkRows({ uploadId: upload.id, siteId: site.id, name: "測試同名丁", kind: "ambiguous" }, 2);
+    const { plan } = await planAndApply();
+    expect(plan.actions.mergeGuards ?? []).toHaveLength(0);
+    expect(plan.actions.link).toHaveLength(1);
+    expect(plan.actions.link[0]).toMatchObject({ guardId: minimal.id });
+    expect(plan.actions.link[0]!.inference).toMatchObject({ rule: "R3c" });
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: real.id } })).mergedFrom).toEqual([]);
+  });
+
+  it("Opus M1：正式模式 U 號查表同 HIST-5.1 之前一樣（唔加 NFKC）；歷史模式先加", async () => {
+    const uRows = [urow({ nameZh: "測試全形號人", uNumber: "Ｕ90611" })];
+    await mkRows({ uploadId: upload.id, siteId: site.id, name: "測試全形號人", staffNo: "U90611", rowIndex: 821 }, 1);
+    const formal = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows: uRows, historical: false });
+    expect(formal.actions.create.filter((c) => c.reason === "U Team 名單 U 號搵到")).toHaveLength(0);
+    const hist = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows: uRows, historical: true });
+    expect(hist.actions.create.filter((c) => c.reason === "U Team 名單 U 號搵到")).toHaveLength(1);
   });
 });

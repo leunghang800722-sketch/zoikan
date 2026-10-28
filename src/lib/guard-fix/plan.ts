@@ -164,9 +164,14 @@ function findByTel(telRaw: string | null, telIndex: Map<string, Set<string>>): L
   return { method: "電話正規化後相同", guardId: [...ids][0]! };
 }
 
-function findByHkid(staffNoRaw: string | null, nameRaw: string, uTeam: UTeamIndex, hkidIndex: Map<string, Set<string>>): LinkMethodResult | null {
-  const uNumber = staffNoRaw ? uNumberKey(staffNoRaw) : null;
-  const uRow = (uNumber && uTeam.byUNumber.get(uNumber)) || (uTeam.byName.get(nameRaw)?.length === 1 ? uTeam.byName.get(nameRaw)![0] : null);
+/** U Team 名單按 U 號查行：正式模式同 HIST-5.1 之前一樣（normalizeStaffNumber＋byUNumber）；歷史模式再加 NFKC（uNumberKey＋byUNumberKey）。 */
+function uTeamRowByNumber(uTeam: UTeamIndex, staffNoRaw: string | null, historical: boolean): UTeamRow | undefined {
+  if (!staffNoRaw) return undefined;
+  return historical ? uTeam.byUNumberKey.get(uNumberKey(staffNoRaw)) : uTeam.byUNumber.get(normalizeStaffNumber(staffNoRaw));
+}
+
+function findByHkid(staffNoRaw: string | null, nameRaw: string, uTeam: UTeamIndex, hkidIndex: Map<string, Set<string>>, historical: boolean): LinkMethodResult | null {
+  const uRow = uTeamRowByNumber(uTeam, staffNoRaw, historical) || (uTeam.byName.get(nameRaw)?.length === 1 ? uTeam.byName.get(nameRaw)![0] : null);
   const canon = canonicalHkid(uRow?.hkid);
   if (!canon) return null;
   const ids = hkidIndex.get(canon);
@@ -594,7 +599,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     const defaultBrokerCode = resolveDefaultBrokerCode(representativeCell, brokerCandidates, brokerCodeById, siteAssignmentBrokerCodeBySite, siteLabel);
 
     const byTel = findByTel(identity.telRaw, telIndex);
-    const byHkid = findByHkid(identity.staffNoRaw, identity.nameRaw, uTeam, hkidIndex);
+    const byHkid = findByHkid(identity.staffNoRaw, identity.nameRaw, uTeam, hkidIndex, hist);
     const methodsFound = [byTel, byHkid].filter((x): x is LinkMethodResult => x !== null);
     const distinctGuardIds = new Set(methodsFound.map((m) => m.guardId));
 
@@ -695,8 +700,9 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       continue;
     }
 
-    const uNumber = identity.staffNoRaw ? uNumberKey(identity.staffNoRaw) : null;
-    const uRowByNumberExact = uNumber ? uTeam.byUNumber.get(uNumber) : undefined;
+    // Opus 驗收 M1：正式模式 U 號鍵同 HIST-5.1 之前一樣（normalizeStaffNumber）；歷史模式先加 NFKC。
+    const uNumber = identity.staffNoRaw ? (hist ? uNumberKey(identity.staffNoRaw) : normalizeStaffNumber(identity.staffNoRaw)) : null;
+    const uRowByNumberExact = uTeamRowByNumber(uTeam, identity.staffNoRaw, hist);
     const uRowsByName = uTeam.byName.get(identity.nameRaw) ?? [];
     let uRow = uRowByNumberExact ?? (uRowsByName.length === 1 ? uRowsByName[0] : undefined);
     let uRowByNumber = uRowByNumberExact;
@@ -793,7 +799,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
         secondaryTel: claim(secondaryTel),
         hkid: uRow.hkid,
         hireDate: uRow.hireDate,
-        uNumber: uRow.uNumber ? uNumberKey(uRow.uNumber) : uNumber,
+        uNumber: uRow.uNumber ? (hist ? uNumberKey(uRow.uNumber) : uRow.uNumber) : uNumber,
         defaultBrokerCode,
         reason: uRowByNumber ? "U Team 名單 U 號搵到" : dupPickRule ? `U Team 名單同名 ${uRowsByName.length} 行，${dupPickRule === "R6a" ? "身份證一致用第一行" : "更表電話對到其中一行"}（HIST5 ${dupPickRule}）` : "U Team 名單姓名搵到（冇 U 號）",
         ...(dupPickRule && histCtx ? { inference: uteamPickInference(histInputOf(identity), dupPickRule, uRowsByName.length) } : {}),

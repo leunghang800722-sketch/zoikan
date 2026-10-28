@@ -111,7 +111,10 @@ export async function parseUTeamWorkbookBuffer(buffer: Buffer | ArrayBuffer): Pr
 }
 
 export interface UTeamIndex {
+  /** 正式模式查表：key＝名單 U 號（解析時已 normalizeStaffNumber），查嘅一方用 normalizeStaffNumber——同 HIST-5.1 之前一模一樣。 */
   byUNumber: Map<string, UTeamRow>;
+  /** HIST-5.1（只限歷史模式）：key＝uNumberKey（再加 NFKC，全形 U 號都撞得到）。Opus 驗收 M1：正式模式唔用，保持配對零改變。 */
+  byUNumberKey: Map<string, UTeamRow>;
   /** 姓名（中文姓名／顯示名都試）→ 呢個名嘅全部候選（可能多過一個，
    * caller 要處理 ambiguous）。 */
   byName: Map<string, UTeamRow[]>;
@@ -124,6 +127,7 @@ export function uNumberKey(raw: string): string {
 
 export function buildUTeamIndex(rows: UTeamRow[]): UTeamIndex {
   const byUNumber = new Map<string, UTeamRow>();
+  const byUNumberKey = new Map<string, UTeamRow>();
   const byName = new Map<string, UTeamRow[]>();
   const addName = (name: string | null, row: UTeamRow) => {
     if (!name) return;
@@ -133,9 +137,12 @@ export function buildUTeamIndex(rows: UTeamRow[]): UTeamIndex {
     byName.get(key)!.push(row);
   };
   for (const row of rows) {
-    if (row.uNumber) byUNumber.set(uNumberKey(row.uNumber), row);
+    if (row.uNumber) {
+      byUNumber.set(row.uNumber, row);
+      byUNumberKey.set(uNumberKey(row.uNumber), row);
+    }
     addName(row.nameZh, row);
     if (row.displayName && row.displayName !== row.nameZh) addName(row.displayName, row);
   }
-  return { byUNumber, byName };
+  return { byUNumber, byUNumberKey, byName };
 }
