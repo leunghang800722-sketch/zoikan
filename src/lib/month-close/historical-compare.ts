@@ -13,7 +13,7 @@ export interface RosterSiteCells {
   cells: number;
 }
 
-export interface SiteCompareRow {
+interface SiteCompareRow {
   label: string;
   rosterCells: number;
   /** null＝Postorder 對唔到呢個盤。 */
@@ -92,7 +92,7 @@ export function compareRosterVsPostorder(sites: readonly RosterSiteCells[], post
 }
 
 /** 對數引擎 unresolved 原因（reconcile.ts 組嘅中文句，以「；」連接）歸類——報告只出類別＋格數。一格可有多個原因，所以類別格數加起嚟可以大過 unresolved 格數。 */
-export const UNRESOLVED_BUCKETS = {
+const UNRESOLVED_BUCKETS = {
   guard_unmatched: "保安員未配對",
   shift_type_unmatched: "更別／更種未配對或已作廢",
   date_outside_month: "格仔日期唔係上載月份",

@@ -59,7 +59,8 @@ const ROSTER_SHEET_RE = /^20\d{2}([.-]?\d{1,2})?$/;
 // HIST-2 fallback：冇任何分頁名對到 ROSTER_SHEET_RE 時（`202512-202601`、
 // `Feb+Mar`、`Mar`），改揀「可見、名唔係相片／預設工作表／Summary 類、而且
 // 搵到 Date 日期表頭」嘅分頁。
-const NON_ROSTER_SHEET_RE = /^(相|相片|photos?|工作表\s*\d*|sheet\s*\d*|summary|總結|總表)$/i;
+// 前綴比對（容許尾巴 " (2)"／數字／copy，例如「Summary (2)」「工作表1 (2)」「Sheet1 (2)」「總表2」「相 (2)」）。
+const NON_ROSTER_SHEET_RE = /^(相片?(?=$|[\s\d(（_-])|photos?|工作表|sheet|summary|總結|總表|總數|統計)/i;
 
 export interface ParsedCellRow {
   /** 原檔行號（呢個保安員行嘅 row number），一個保安員行可以有多個 ParsedCellRow（逐日一格）。 */
@@ -496,6 +497,7 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
       skippedSheets.push({ name: ws.name, reason: "分頁名唔係「<年份>」或「<年份>.<月>」（亦接受 YYYYMM／YYYY-MM），當非更表分頁跳過" });
     }
   } else {
+    const fallbackCandidates: ExcelJS.Worksheet[] = [];
     // HIST-2 fallback：揀有 Date 表頭、名唔屬相片／Summary 類嘅可見分頁。
     for (const ws of nameUnmatched) {
       if (NON_ROSTER_SHEET_RE.test(ws.name.trim())) {
@@ -506,8 +508,28 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
         skippedSheets.push({ name: ws.name, reason: "分頁名唔符標準格式，而且搵唔到 Date 日期表頭，當非更表分頁跳過" });
         continue;
       }
-      matchedSheets.push(ws);
-      fallbackWarnings.push(`[分頁名 fallback] 「${ws.name}」唔符標準分頁名，因為有 Date 日期表頭而採用，人手覆核`);
+      fallbackCandidates.push(ws);
+    }
+    // 多過一個候選：只採用格數最多嗰個（避免複製分頁／統計分頁重複計格），其餘記 skipped＋needs-review 警告。
+    if (fallbackCandidates.length > 0) {
+      let best = fallbackCandidates[0]!;
+      if (fallbackCandidates.length > 1) {
+        let bestRows = -1;
+        for (const ws of fallbackCandidates) {
+          const r = extractSheet(ws, ws.name);
+          const n = "error" in r ? 0 : r.rows.length;
+          if (n > bestRows) {
+            best = ws;
+            bestRows = n;
+          }
+        }
+        for (const ws of fallbackCandidates) {
+          if (ws !== best) skippedSheets.push({ name: ws.name, reason: `分頁名唔符標準格式，同時有 Date 表頭嘅分頁超過一個，只採用格數最多嘅「${best.name}」，此分頁跳過（避免重複計格），人手覆核` });
+        }
+        fallbackWarnings.push(`[分頁名 fallback] 有 ${fallbackCandidates.length} 個唔符標準名而有 Date 表頭嘅分頁，只採用「${best.name}」，需要人手覆核`);
+      }
+      matchedSheets.push(best);
+      fallbackWarnings.push(`[分頁名 fallback] 「${best.name}」唔符標準分頁名，因為有 Date 日期表頭而採用，人手覆核`);
     }
   }
 

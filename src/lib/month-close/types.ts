@@ -9,7 +9,7 @@ import type { AutoReport } from "./auto/types";
 // ＋原因」一致紀律），因為 `report_json` 經「一鍵結算」module 嘅 view
 // 會俾主管睇到（主管出廠未必有「保安員個人資料」view）。
 
-export const STEP_KEYS = [
+const STEP_KEYS = [
   "precheck",
   "parse_health",
   "guard_fix",

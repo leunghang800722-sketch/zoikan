@@ -99,4 +99,29 @@ describe("roster parse：fallback 分頁", () => {
     if (r.ok) return;
     expect(r.skippedSheets.some((s) => s.name === "Mar")).toBe(true);
   });
+
+  it("M2：Summary (2)／工作表1 (2)／相 (2)／Sheet1 (2)／總表2／統計 都唔當更表，格數唔重複計", async () => {
+    const wb = new ExcelJS.Workbook();
+    fillRoster(wb.addWorksheet("Mar"), "測試活動B", [d(3, 1), d(3, 2)]);
+    for (const n of ["Summary (2)", "工作表1 (2)", "相 (2)", "Sheet1 (2)", "總表2", "統計"]) fillRoster(wb.addWorksheet(n), "測試複製", [d(3, 1), d(3, 2)]);
+    const r = await parse(wb);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.totalCellCount).toBe(2);
+    expect(r.sheets.map((s) => s.sheetName)).toEqual(["Mar"]);
+    expect(r.skippedSheets).toHaveLength(6);
+  });
+
+  it("M2：多個唔符標準名而有 Date 表頭嘅分頁 → 只採用格數最多嗰個，其餘 skipped＋needs-review 警告", async () => {
+    const wb = new ExcelJS.Workbook();
+    fillRoster(wb.addWorksheet("Feb"), "測試活動C", [d(2, 1)]);
+    fillRoster(wb.addWorksheet("Feb+Mar"), "測試活動C", [d(2, 1), d(2, 2), d(3, 1)]);
+    const r = await parse(wb);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.totalCellCount).toBe(3);
+    expect(r.sheets.map((s) => s.sheetName)).toEqual(["Feb+Mar"]);
+    expect(r.skippedSheets.map((s) => s.name)).toEqual(["Feb"]);
+    expect(r.warnings.some((w) => w.includes("只採用"))).toBe(true);
+  });
 });

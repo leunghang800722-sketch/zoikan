@@ -14,6 +14,8 @@ vi.mock("@/lib/pricing/reprice", async (importOriginal) => {
 
 import { repriceMonthForSites } from "@/lib/pricing/reprice";
 import { POST as startImport, GET as listImport } from "@/app/api/month-close/historical-import/route";
+import { POST as startOneClick } from "@/app/api/month-close/one-click/route";
+import { POST as rerunOneClick } from "@/app/api/month-close/one-click/[id]/rerun/route";
 import { POST as createUpload } from "@/app/api/roster-uploads/route";
 import { POST as postPostorder } from "@/app/api/guard-fix/postorder/route";
 import { markHistoricalMonth } from "@/lib/month-close/historical";
@@ -58,7 +60,7 @@ async function staffListXlsx(): Promise<Buffer> {
   ws.getRow(1).getCell(14).value = "員工編號";
   ws.getRow(2).getCell(14).value = "U99001";
   ws.getRow(2).getCell(16).value = "測試名單人";
-  ws.getRow(2).getCell(10).value = "90019998";
+  ws.getRow(2).getCell(10).value = fakeTel();
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -114,7 +116,7 @@ describe("HIST-2 guard-fix：歷史導入建人", () => {
     await prisma.rosterUploadRow.create({
       data: { uploadId: upload.id, rowIndex: 5, workDate: new Date("2026-03-04"), rawCode: "D", codeKind: "shift", resolvedSiteId: site.id, staffNoRaw: null, nameRaw: "測試歷史人甲", telRaw: tel, guardMatch: "unmatched" },
     });
-    const plan = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows: [{ uNumber: "U90002", nameZh: "測試歷史人甲", displayName: null, tel: "61239999", hkid: null, hkidNote: null, hireDate: null, employeeStatus: null }] });
+    const plan = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows: [{ uNumber: "U90002", nameZh: "測試歷史人甲", displayName: null, tel: fakeTel(), hkid: null, hkidNote: null, hireDate: null, employeeStatus: null }] });
     expect(plan.actions.createMinimal).toHaveLength(1);
     await applyGuardFixPlan({ prisma, plan, planOnly: false, month: MAR, historicalRoster: true });
     const g = await prisma.guard.findFirstOrThrow({ where: { nameZh: "測試歷史人甲" }, include: { phones: true } });
@@ -127,7 +129,7 @@ describe("HIST-2 guard-fix：歷史導入建人", () => {
     await prisma.rosterUploadRow.create({
       data: { uploadId: upload.id, rowIndex: 6, workDate: new Date("2026-03-05"), rawCode: "D", codeKind: "shift", resolvedSiteId: site.id, staffNoRaw: null, nameRaw: "測試歷史人乙", telRaw: fakeTel(), guardMatch: "unmatched" },
     });
-    const plan2 = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows: [{ uNumber: "U90003", nameZh: "測試歷史人乙", displayName: null, tel: "61239998", hkid: null, hkidNote: null, hireDate: null, employeeStatus: null }] });
+    const plan2 = await buildGuardFixPlan({ prisma, month: MAR, uTeamRows: [{ uNumber: "U90003", nameZh: "測試歷史人乙", displayName: null, tel: fakeTel(), hkid: null, hkidNote: null, hireDate: null, employeeStatus: null }] });
     await applyGuardFixPlan({ prisma, plan: plan2, planOnly: false, month: MAR });
     expect((await prisma.guard.findFirstOrThrow({ where: { nameZh: "測試歷史人乙" } })).status).toBe("active");
   });
@@ -149,10 +151,10 @@ describe("HIST-2 純函數", () => {
     expect(out.join("")).not.toContain("一撳確認");
   });
 
-  it("histImportRunStalled：running 超過 15 分鐘先算卡死", () => {
+  it("histImportRunStalled：running 超過 30 分鐘先算卡死", () => {
     const now = new Date();
-    expect(histImportRunStalled({ status: "running", applyStartedAt: new Date(now.getTime() - 16 * 60_000) }, now)).toBe(true);
-    expect(histImportRunStalled({ status: "running", applyStartedAt: new Date(now.getTime() - 5 * 60_000) }, now)).toBe(false);
+    expect(histImportRunStalled({ status: "running", applyStartedAt: new Date(now.getTime() - 31 * 60_000) }, now)).toBe(true);
+    expect(histImportRunStalled({ status: "running", applyStartedAt: new Date(now.getTime() - 16 * 60_000) }, now)).toBe(false);
     expect(histImportRunStalled({ status: "failed", applyStartedAt: new Date(now.getTime() - 60 * 60_000) }, now)).toBe(false);
   });
 
@@ -204,6 +206,22 @@ describe("HIST-2 POST/GET /api/month-close/historical-import", () => {
     expect((await startImport(jsonReq("http://x/api/month-close/historical-import", sup, "POST", { month: "2026-03" }))).status).toBe(403);
   });
 
+  it("M1：歷史導入 run 未卡死 → 一鍵結算 POST 同 rerun 都 409 busy；卡死（>30 分鐘）先放行", async () => {
+    const hist = await prisma.historicalImportRun.create({ data: { month: MAR, status: "running", startedById: fx.userIds["老闆"], applyStartedAt: new Date() } });
+    const res = await startOneClick(jsonReq("http://x/api/month-close/one-click", cookie, "POST", { month: "2026-09" }));
+    expect(res.status).toBe(409);
+    expect(await prisma.monthCloseRun.count()).toBe(0);
+    const failed = await prisma.monthCloseRun.create({ data: { month: new Date(Date.UTC(2026, 8, 1)), status: "failed", startedById: fx.userIds["老闆"] } });
+    const rr = await rerunOneClick(jsonReq(`http://x/api/month-close/one-click/${failed.id}/rerun`, cookie, "POST"), { params: Promise.resolve({ id: failed.id }) });
+    expect(rr.status).toBe(409);
+    expect((await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: failed.id } })).status).toBe("failed");
+    // 25 分鐘仲未算卡死（門檻 30 分鐘）
+    await prisma.historicalImportRun.update({ where: { id: hist.id }, data: { applyStartedAt: new Date(Date.now() - 25 * 60_000) } });
+    expect((await startOneClick(jsonReq("http://x/api/month-close/one-click", cookie, "POST", { month: "2026-09" }))).status).toBe(409);
+    await prisma.historicalImportRun.update({ where: { id: hist.id }, data: { applyStartedAt: new Date(Date.now() - 35 * 60_000) } });
+    expect((await startOneClick(jsonReq("http://x/api/month-close/one-click", cookie, "POST", { month: "2026-09" }))).status).not.toBe(409);
+  });
+
   it("非歷史月份 409 not_historical_month；冇 month 400", async () => {
     const res = await startImport(jsonReq("http://x/api/month-close/historical-import", cookie, "POST", { month: "2026-03" }));
     expect(res.status).toBe(409);
@@ -215,7 +233,7 @@ describe("HIST-2 POST/GET /api/month-close/historical-import", () => {
     await markHistoricalMonth(MAR, fx.userIds["老闆"], { ip: null });
     await prisma.historicalImportRun.create({ data: { month: MAR, status: "running", startedById: fx.userIds["老闆"], applyStartedAt: new Date() } });
     await expect(claimHistoricalImportRun(MAR, fx.userIds["老闆"])).rejects.toMatchObject({ status: 409 });
-    await prisma.historicalImportRun.updateMany({ data: { applyStartedAt: new Date(Date.now() - 20 * 60_000) } });
+    await prisma.historicalImportRun.updateMany({ data: { applyStartedAt: new Date(Date.now() - 35 * 60_000) } });
     await expect(claimHistoricalImportRun(MAR, fx.userIds["老闆"])).resolves.toBeTruthy();
   });
 

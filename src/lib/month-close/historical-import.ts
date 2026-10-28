@@ -19,13 +19,13 @@ import { reconcileUpload } from "@/lib/roster-upload/reconcile";
 import { HISTORICAL_ROSTER_SOURCE } from "@/lib/guard-fix/apply";
 import { AutoCollector } from "./auto/context";
 import { loadPostorderEvidence } from "./auto/postorder-evidence";
-import { ONE_CLICK_ADVISORY_LOCK_KEY } from "./one-click-lock";
+import { ONE_CLICK_ADVISORY_LOCK_KEY, HIST_IMPORT_STALE_MS } from "./one-click-lock";
 import { stepParseHealth, stepGuardFix, stepReconcileApply, ONE_CLICK_STALE_MS } from "./one-click";
 import { StepRunner, jobErrorMessage, type StepRecordOf } from "./step-runner";
-import { bucketUnresolvedReason, compareRosterVsPostorder, UNRESOLVED_BUCKETS, type PostorderRosterCompare, type UnresolvedBucket } from "./historical-compare";
+import { bucketUnresolvedReason, compareRosterVsPostorder, type PostorderRosterCompare, type UnresolvedBucket } from "./historical-compare";
 
-export const HIST_IMPORT_STEP_KEYS = ["precheck", "parse_health", "guard_fix", "reconcile_apply", "postorder_compare", "report"] as const;
-export type HistImportStepKey = (typeof HIST_IMPORT_STEP_KEYS)[number];
+const HIST_IMPORT_STEP_KEYS = ["precheck", "parse_health", "guard_fix", "reconcile_apply", "postorder_compare", "report"] as const;
+type HistImportStepKey = (typeof HIST_IMPORT_STEP_KEYS)[number];
 const HIST_IMPORT_STEP_LABELS: Record<HistImportStepKey, string> = {
   precheck: "前置檢查",
   parse_health: "盤／更種建檔",
@@ -34,13 +34,13 @@ const HIST_IMPORT_STEP_LABELS: Record<HistImportStepKey, string> = {
   postorder_compare: "更表 vs Postorder",
   report: "報告",
 };
-export type HistImportStepRecord = StepRecordOf<HistImportStepKey>;
+type HistImportStepRecord = StepRecordOf<HistImportStepKey>;
 
-export function emptyHistImportSteps(): HistImportStepRecord[] {
+function emptyHistImportSteps(): HistImportStepRecord[] {
   return HIST_IMPORT_STEP_KEYS.map((key) => ({ key, label: HIST_IMPORT_STEP_LABELS[key], status: "pending", startedAt: null, finishedAt: null, numbers: {}, warnings: [], needsHuman: [] }));
 }
 
-export interface HistImportCounts {
+interface HistImportCounts {
   sites: number;
   shiftTypes: number;
   guards: number;
@@ -48,7 +48,7 @@ export interface HistImportCounts {
   historicalGuards: number;
 }
 
-export interface HistImportSiteReport {
+interface HistImportSiteReport {
   siteLabel: string;
   cells: number;
   written: number;
@@ -72,21 +72,23 @@ export interface HistImportReport {
 }
 
 export function histImportRunStalled(run: { status: string; applyStartedAt: Date | null }, now = new Date()): boolean {
-  return run.status === "running" && !!run.applyStartedAt && now.getTime() - run.applyStartedAt.getTime() > ONE_CLICK_STALE_MS;
+  return run.status === "running" && !!run.applyStartedAt && now.getTime() - run.applyStartedAt.getTime() > HIST_IMPORT_STALE_MS;
 }
 
-/** 認領一個新 run（同一鍵結算共用 advisory lock，兩邊互斥）：必須係歷史月份、未鎖、冇另一個未卡死嘅一鍵結算／歷史導入 run。 */
+/** 認領一個新 run（同一鍵結算共用 advisory lock，雙向互斥：一鍵結算 POST／rerun 亦會查未卡死嘅歷史導入 run）：
+ * 必須係歷史月份、未鎖、冇另一個未卡死嘅一鍵結算（15 分鐘門檻）／歷史導入（30 分鐘門檻，HIST_IMPORT_STALE_MS）run。 */
 export async function claimHistoricalImportRun(month: Date, startedById: string): Promise<string> {
   const m = toMonthStart(month);
   const now = new Date();
   const staleBefore = new Date(now.getTime() - ONE_CLICK_STALE_MS);
+  const histStaleBefore = new Date(now.getTime() - HIST_IMPORT_STALE_MS);
   return prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${ONE_CLICK_ADVISORY_LOCK_KEY})`);
     const mc = await tx.monthClose.findUnique({ where: { month: m }, select: { historical: true, lockedAt: true } });
     if (!mc?.historical) throw new ApiError(409, "not_historical_month", `${m.toISOString().slice(0, 7)} 未標做歷史月份，先用 POST /api/month-closes { historical: true } 標記`);
     if (mc.lockedAt) throw Conflict("呢個月已經鎖定，唔可以再導入");
     const otherOneClick = await tx.monthCloseRun.findFirst({ where: { status: "running", applyStartedAt: { gt: staleBefore } }, select: { id: true } });
-    const otherHist = await tx.historicalImportRun.findFirst({ where: { status: "running", applyStartedAt: { gt: staleBefore } }, select: { id: true } });
+    const otherHist = await tx.historicalImportRun.findFirst({ where: { status: "running", applyStartedAt: { gt: histStaleBefore } }, select: { id: true } });
     if (otherOneClick || otherHist) throw Conflict("另一個一鍵結算／歷史導入執行緊，等佢完成先再撳", { status: "busy" });
     const created = await tx.historicalImportRun.create({ data: { month: m, status: "running", startedById, applyStartedAt: now, stepsJson: emptyHistImportSteps() as unknown as Prisma.InputJsonValue } });
     return created.id;
@@ -308,4 +310,3 @@ async function buildHistImportReport(start: Date, runner: StepRunner<HistImportS
   };
 }
 
-export { UNRESOLVED_BUCKETS };

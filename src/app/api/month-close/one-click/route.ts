@@ -5,6 +5,7 @@
 // `GET /api/month-close/one-click?month=`——run 歷史。P3-1.6：預設只回摘要欄（唔帶 steps／report，
 // 列表由 ~160 KB 降到幾 KB）；`?include=full` 先帶全份 steps／report（同舊版一模一樣）；
 // 單一 run 全份用 `GET /api/month-close/one-click/:id`。
+import { HIST_IMPORT_STALE_MS } from "@/lib/month-close/one-click-lock";
 import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -33,7 +34,9 @@ export async function POST(req: Request) {
       // HIST-1.1：拎咗鎖之後再確認唔係歷史月份（標記歷史月份用同一把鎖，防「檢查後先被標記」嘅並發）
       if ((await tx.monthClose.findUnique({ where: { month }, select: { historical: true } }))?.historical) throw new ApiError(409, "historical_month", `${month.toISOString().slice(0, 7)} 係歷史月份（只用嚟上載更表計假期結餘），唔做一鍵結算`);
       const other = await tx.monthCloseRun.findFirst({ where: { status: "running", applyStartedAt: { gt: staleBefore } }, select: { id: true } });
-      if (other) throw Conflict("另一個一鍵結算執行緊，等佢完成先再撳", { status: "busy" });
+      // HIST-2 M1：歷史月份一鍵導入跑緊（未卡死）亦互斥——兩邊同時 guard-fix 會對同一新人各建一次。
+      const otherHist = await tx.historicalImportRun.findFirst({ where: { status: "running", applyStartedAt: { gt: new Date(now.getTime() - HIST_IMPORT_STALE_MS) } }, select: { id: true } });
+      if (other || otherHist) throw Conflict("另一個一鍵結算執行緊，等佢完成先再撳", { status: "busy" });
       const created = await tx.monthCloseRun.create({ data: { month, status: "running", startedById: session.userId, applyStartedAt: now } });
       return created.id;
     });

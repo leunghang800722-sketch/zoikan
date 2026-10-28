@@ -33,7 +33,8 @@ const BASE_CODE_KIND: Readonly<Record<string, CodeKind>> = {
 
 // 8 月試算 patch 3：任何 `OT<數字>`（可帶小數，例如 OT3.5）都當 ot——
 // 唔淨係列死嘅 OT1。
-const OT_PATTERN_RE = /^OT(\d+(?:\.\d+)?)$/i;
+// HIST-2：亦容許 `OT1hr`／`OT1hrs`／`OT1h`（HKU 座頭 1–3 月寫法）。
+const OT_PATTERN_RE = /^OT(\d+(?:\.\d+)?)(?:hrs?|h)?$/i;
 
 export function classifyCode(rawCode: string): CodeKind {
   const trimmed = rawCode.trim();

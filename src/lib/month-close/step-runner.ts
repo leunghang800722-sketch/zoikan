@@ -3,7 +3,7 @@
 // 由 one-click.ts 內部 class 抽出嚟，行為不變。
 import { safeErrorSummary } from "@/lib/api/http";
 
-export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
+type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface StepRecordOf<K extends string> {
   key: K;

@@ -64,7 +64,7 @@ const REASON_LABEL: Record<string, string> = {
   other: "其他",
 };
 
-export function isHistoricalCandidateMonth(month: string): boolean {
+function isHistoricalCandidateMonth(month: string): boolean {
   return /^\d{4}-\d{2}$/.test(month) && month < HIST_MAX;
 }
 

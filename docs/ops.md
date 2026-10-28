@@ -583,16 +583,17 @@ npm run db:backfill-shift-staff-numbers -- --month 2026-08 # 只做某月（可�
 
 **操作步驟（每個月 1–6 月重複；全部喺「更表上載」頁 `/roster-uploads` 同「長工糧」頁）**
 1. **標歷史**：更表上載頁揀 1–6 月 → 見導航卡「呢個月係 2026-07 前月份，先標做歷史月份」→ 撳「標做歷史月份」（`POST /api/month-closes {historical:true}`，HIST-1）。
-2. **上載更表**：該月 `roster/*.xlsx` 逐個（`<input multiple>` 一次過）上載，月份揀同一個月。分頁名 `202601`／`2026-01`／`2026.01` 都認；冇標準分頁名（例如 `202512-202601`、`Feb+Mar`、`Mar`）會 fallback 揀有 Date 表頭嘅可見分頁（相／工作表N／Summary 類照跳），警告列明。表頭月份同上載月份唔同嘅檔（例如放喺 5 月資料夾嘅「5月補4月更」）要用**表頭月份**（4 月）上載，否則格仔會變 unresolved「日期唔係上載月份」。跨月活動檔（`Feb+Mar`）喺 2 月、3 月各上載一次，只寫該月嗰部分，另一個月嗰啲格會列做 unresolved（預期）。
+2. **上載更表**：該月 `roster/*.xlsx` 逐個（`<input multiple>` 一次過）上載，月份揀同一個月。分頁名 `202601`／`2026-01`／`2026.01` 都認；冇標準分頁名（例如 `202512-202601`、`Feb+Mar`、`Mar`）會 fallback 揀有 Date 表頭嘅可見分頁（名以 相／工作表／Sheet／Summary／總表／總數／統計 開頭嘅照跳，連「Summary (2)」呢類複製分頁）；多過一個候選只採用格數最多嗰個，其餘 skipped＋警告。表頭月份同上載月份唔同嘅檔（例如放喺 5 月資料夾嘅「5月補4月更」）要用**表頭月份**（4 月）上載，否則格仔會變 unresolved「日期唔係上載月份」。跨月活動檔（`Feb+Mar`）喺 2 月、3 月各上載一次，只寫該月嗰部分，另一個月嗰啲格會列做 unresolved（預期）。
 3. **Postorder CSV**：`POST /api/guard-fix/postorder`（保安員配對修復頁同一個上載）用 CSV 路徑（`roster_csv`＋`postorder_csv`＋`month`）。歷史月份照常可用（xlsm 4MB 超 1.5MB 上限，只可 CSV）。上載後 status=parsed 先有用。建議**先上載 Postorder 再一鍵導入**——自動建盤會用 Postorder 客戶名／別名，亦可做更表 vs Postorder 比對。
 4. **一鍵導入**：已標歷史嘅月份，上載頁出「歷史月份：一鍵導入」掣（`POST /api/month-close/historical-import {month}`，202 背景跑，頁面 poll）。可以重複撳（冪等）。見下面「歷史導入做啲乜」。
 5. **結餘 dry-run**：全部 1–6 月導入完，去長工糧頁（`/reports/longterm-payroll`）「歷史假期結餘回填」卡 → 揀 `2026-06 月底`（勾「已有 7 月起結餘行就加落去」）→「先睇差異（唔寫入）」→ 逐人睇前後數字。
 6. **套用**：確認後撳「確認套用」（`POST /api/leave-balances/opening-from-rosters {as_of:"2026-06", apply:true, merge_into_existing:true}`，糧務:create）。每人寫 audit，另有 summary audit。
 
 **歷史導入做啲乜**（`src/lib/month-close/historical-import.ts`，**重用**一鍵結算 step function，唔複製邏輯）
-- 只限 `month_closes.historical=true` 月份（否則 409 `not_historical_month`）；已鎖 409；另一個未卡死（<15 分鐘）嘅一鍵結算／歷史導入 run 在跑 → 409 busy（同一鍵結算共用 advisory lock `ONE_CLICK_ADVISORY_LOCK_KEY`）。卡死（`running` 超過 15 分鐘）唔擋新 run，新 run 接手（每步冪等）。
+- 只限 `month_closes.historical=true` 月份（否則 409 `not_historical_month`）；已鎖 409；另一個未卡死（<15 分鐘）嘅一鍵結算／歷史導入 run 在跑 → 409 busy（同一鍵結算共用 advisory lock `ONE_CLICK_ADVISORY_LOCK_KEY`）。卡死門檻 **30 分鐘**（`HIST_IMPORT_STALE_MS`；一個月 ~30 份檔、guard-fix 單個 tx 上限 20 分鐘，15 分鐘會令仍在跑嘅 run 被誤判）；超過先唔擋新 run，新 run 接手（每步冪等）。**互斥雙向**：一鍵結算 POST／rerun 見到未卡死嘅歷史導入 run 亦回 409 busy。
 - 步驟（新表 `historical_import_runs`，migration `20261102000000_hist2_historical_import_runs`，純 CREATE TABLE）：①前置檢查 → ②`stepParseHealth`（自動建缺少嘅盤／子盤／更種／別名，規則同一鍵結算；歷史月份略過更數異常拆解）→ ③`stepGuardFix`（plan＋apply 循環；工號／電話對到現有人就 link，唔建新；對唔到嘅 `create_minimal` 保守建人，但 **status=inactive**，`guards.created_by=system:guard-fix:historical_roster`，工號／電話 source=`historical_roster`，audit action `guard_fix_historical_roster`；U Team 名單整行嘅 `create` 照舊 active）→ ④`stepReconcileApply`（`runReconcileAllForMonth`）→ ⑤更表 vs Postorder（Roster 分頁）逐盤格數比對 → ⑥報告。**唔跑**：長工結算草稿、自動定價、計數、糧、介紹費、鎖月、健康。
 - **reconcile-all 歷史月份補漏（HIST-1 漏）**：`runReconcileAllForMonth` 對 `historical` 月份**跳過 reprice**（`repriced={0,0}`）同「Postorder 已上載但未套用」警告。
+- **無還原**：歷史導入自動建盤／更種／別名**冇 journal、冇一撳還原**（唔似一鍵結算 `month_close_auto_changes`），只有 audit 可追；新建嘅人用 `created_by=…:historical_roster` 搵。
 - 報告（`report_json`，只有盤名＋數字，冇姓名／工號／電話）：逐盤 格數／已寫入（對數 match）／roster_only／settlement_diff／unresolved 同原因分類（保安員未配對、更別未配對、日期唔係本月、盤／子盤未定、雞頭碼對唔到、請假推斷唔到更別；一格可有多個原因）；新建盤／更種／停用保安員／盤別名；Postorder 逐盤格數＋差異＋「Postorder 有人當值但冇更表盤對到」（按物業短代號）；`needs_human`。歷史導入唔開分診題，step 文字已改寫成「請人手處理」。
 - 更表 vs Postorder 比對：Postorder「雞頭名」子欄非空＝該崗位該日有人當值，按崗位行（物業名稱＋更份）計當月日數，用 `rowsForSite()` 按盤名／別名配盤；更表側計 shift＋OT 格（請假唔計）。**注意**：更表入面未入代號表嘅真更別（例如 1／2 月啟航1331 嘅 `A`／`B`）係 `unknown`，唔入對數，所以會同 Postorder 差；本機消化報告有逐盤列出。
 
