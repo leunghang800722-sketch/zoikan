@@ -45,6 +45,9 @@ export type AuditAction =
   // （after 淨係 {id, conservative, note}，冇 PII）。
   | "guard_fix_conservative_default"
   | "guard_fix_historical_roster"
+  // HIST-5：歷史導入 AI 推斷（規則＋信心＋依據，無 PII）／R3 合併同名 minimal guard。
+  | "guard_fix_inference"
+  | "guard_fix_merge"
   // WP-PRICE（老闆 2026-09-16 拍板）：`POST /api/shift-records/reprice`
   // 一個月/一個盤重新計價，一次過覆蓋整段範圍嘅 snapshot（價目卡改咗
   // 要生效）——一行 audit（table_name="shift_records"，row_id=

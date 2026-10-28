@@ -286,6 +286,15 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
     decisionPlans.push({ input, item, pricing: null });
   }
 
+  // HIST-5 S4：歷史上載嘅跨月格寫入目標月份——目標月份要未鎖（loader 已過濾，呢度再守一次）。
+  const crossTargetMonths = new Set<number>();
+  for (const p of [...shiftPlans, ...otPlans]) {
+    if (!p.item.roster) continue;
+    const target = toMonthStart(new Date(`${p.item.roster.workDate}T00:00:00.000Z`));
+    if (target.getTime() !== month.getTime()) crossTargetMonths.add(target.getTime());
+  }
+  for (const t of crossTargetMonths) await assertMonthNotLocked({ workDate: new Date(t), actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
+
   // ---- transaction 之前計好 snapshot --------------------------------
   const settlementDiffIds = [...shiftPlans, ...otPlans].filter((p) => p.item.category === "settlement_diff").map((p) => p.item.system!.id);
   const settlementDiffRecords = settlementDiffIds.length

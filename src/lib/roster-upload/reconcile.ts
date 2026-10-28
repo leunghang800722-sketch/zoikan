@@ -33,6 +33,7 @@ import {
 } from "@/lib/pricing/longterm-settlement";
 import type { Prisma } from "@prisma/client";
 import { ROSTER_UPLOAD_META_SELECT, type RosterUploadMeta } from "@/lib/roster-upload/meta-select";
+import { CROSS_MONTH_DUPLICATE_MARK, OUT_OF_SCOPE_MARK } from "@/lib/month-close/hist-inference";
 
 export type ReconcileCategory = "match" | "roster_only" | "system_only" | "guard_diff" | "settlement_diff" | "shift_type_diff" | "unresolved";
 
@@ -302,6 +303,7 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
   // 入 unresolved，唔可以裝作「已經歸咗母盤」）。
   // HIST-3：歷史月份（month_closes.historical）容忍雞頭碼對唔到。
   const historicalKeys = await historicalMonthKeys();
+  const lockedMonthKeys = new Set((await prisma.monthClose.findMany({ where: { lockedAt: { not: null } }, select: { month: true } })).map((m) => m.month.getTime()));
   const prepared = ids.map((id) => {
     const upload = uploadById.get(id)!;
     const rows = rowsByUpload.get(id) ?? [];
@@ -435,6 +437,27 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
     }),
   );
 
+  // HIST-5 S4：歷史月份上載嘅跨月格——目標月份係未鎖歷史月份先有得寫；已有 (保安員,日期,盤) 更次＝跨月重複。
+  const crossMonthRows = prepared.flatMap((p) =>
+    historicalKeys.has(toMonthStart(p.upload.month).getTime())
+      ? p.rowsWithEffectiveSite.filter((r) => !!r.guardId && !!r.effectiveSiteId && toDateStr(r.workDate).slice(0, 7) !== toDateStr(toMonthStart(p.upload.month)).slice(0, 7))
+      : [],
+  );
+  type CrossRecord = { id: string; guardId: string; siteId: string; workDate: Date; shiftTypeId: string; settlementBrokerId: string | null; operationalBrokerId: string | null; recordType: string; leaveCode: string | null; status: string; source: string | null; provenance: Prisma.JsonValue };
+  const crossExisting = new Map<string, CrossRecord[]>(); // `${guardId}|${siteId}|${date}` → 現有（非 cancelled）更次
+  if (crossMonthRows.length > 0) {
+    const recs = await prisma.shiftRecord.findMany({
+      where: { guardId: { in: [...new Set(crossMonthRows.map((r) => r.guardId as string))] }, siteId: { in: [...new Set(crossMonthRows.map((r) => r.effectiveSiteId as string))] }, workDate: { in: [...new Set(crossMonthRows.map((r) => r.workDate.getTime()))].map((t) => new Date(t)) }, status: { not: "cancelled" } },
+      select: { id: true, guardId: true, siteId: true, workDate: true, shiftTypeId: true, settlementBrokerId: true, operationalBrokerId: true, recordType: true, leaveCode: true, status: true, source: true, provenance: true },
+    });
+    for (const rec of recs) {
+      const k = `${rec.guardId}|${rec.siteId}|${toDateStr(rec.workDate)}`;
+      const list = crossExisting.get(k);
+      if (list) list.push(rec);
+      else crossExisting.set(k, [rec]);
+    }
+  }
+
   for (const p of prepared) {
     const { upload, rowsWithEffectiveSite, effectiveSiteIds } = p;
     const monthKey = toMonthStart(upload.month).toISOString();
@@ -474,6 +497,7 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
 
     const rosterEntries: ReconcileRosterEntry[] = [];
     const unresolvedEntries: ReconcileUnresolvedEntry[] = [];
+    const ownCrossRecords: CrossRecord[] = []; // HIST-5 S4：已由呢份上載寫入目標歷史月份嘅跨月更次（配返 roster entry 做 match）
 
     for (const r of rowsWithEffectiveSite) {
       const workDate = toDateStr(r.workDate);
@@ -490,7 +514,23 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
       // 驗收修正（Opus 5.5）：格仔日期唔係上載月份——唔准寫入（之前實測會
       // 寫入另一個月，包括已鎖定月份：assertMonthNotLocked 淨係 check 上載
       // 月份）。
-      if (!workDate.startsWith(`${uploadMonthPrefix}-`)) reasons.push(`格仔日期 ${workDate} 唔係上載月份（${uploadMonthPrefix}），唔可以寫入`);
+      if (!workDate.startsWith(`${uploadMonthPrefix}-`)) {
+        if (!historicalUpload) {
+          reasons.push(`格仔日期 ${workDate} 唔係上載月份（${uploadMonthPrefix}），唔可以寫入`);
+        } else {
+          // HIST-5 S4：歷史上載嘅跨月格分三類。
+          const targetKey = toMonthStart(new Date(`${workDate}T00:00:00.000Z`)).getTime();
+          if (!historicalKeys.has(targetKey) || lockedMonthKeys.has(targetKey)) {
+            reasons.push(`格仔日期 ${workDate} 屬 ${workDate.slice(0, 7)}，目標月份唔係未鎖嘅歷史月份（${OUT_OF_SCOPE_MARK}，唔寫入）`);
+          } else if (r.guardId && r.effectiveSiteId) {
+            const existing = crossExisting.get(`${r.guardId}|${r.effectiveSiteId}|${workDate}`) ?? [];
+            const own = existing.find((e) => e.shiftTypeId === r.shiftTypeId && (e.provenance as { upload_id?: string } | null)?.upload_id === upload.id);
+            if (own) ownCrossRecords.push(own);
+            else if (existing.length > 0) reasons.push(`格仔日期 ${workDate} 屬 ${workDate.slice(0, 7)}，該 (保安員,日期,盤) 已有更次（${CROSS_MONTH_DUPLICATE_MARK}，已由另一月檔案寫入，唔重複寫）`);
+            // 冇現有更次＝照常落 roster entry，roster_only 套用時直接寫入目標歷史月份。
+          }
+        }
+      }
       // 驗收修正（Opus 5.5，規則 8）：有雞頭碼但對唔到 brokers——唔准用
       // fallback 靜靜補（fallback 淨係俾「冇雞頭碼欄」嘅盤用）。
       // HIST-3：歷史月份容忍——照寫入，結算雞頭留 null（唔用 fallback／同盤唯一雞頭補，免錯配），reason 記 BROKER_CODE_UNMATCHED_TOLERATED。
@@ -615,7 +655,7 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
 
     const systemBySite = systemByMonth.get(monthKey) ?? new Map<string, SystemRecord[]>();
     const systemRecordsRaw: SystemRecord[] = systemSiteIdsOf(p).flatMap((sid) => systemBySite.get(sid) ?? []);
-    const systemEntries: ReconcileSystemEntry[] = systemRecordsRaw.map((s) => ({
+    const systemEntries: ReconcileSystemEntry[] = [...systemRecordsRaw, ...ownCrossRecords].map((s) => ({
       id: s.id,
       workDate: toDateStr(s.workDate),
       siteId: s.siteId,

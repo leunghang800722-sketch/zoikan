@@ -382,6 +382,23 @@ export function matchShiftType(
   return { id: null, ambiguous: true, candidateTimeSlots: matches.map((c) => c.timeSlot ?? "（未設時段）"), rankAttempted };
 }
 
+/** HIST-5 S1／S3：單字母／跨盤代號「按該行時段當出更」——唔睇 code，搵該盤同時段嘅更種（任何 code）：
+ * 剛好一個就用；多過一個用 rank 收窄；仲係多過一個／冇 → null（唔准估；冇嘅話由自動建更種補）。 */
+export function matchShiftTypeBySlot(siteId: string | null, timeRaw: string | null, rankRaw: string | null | undefined, candidates: readonly ShiftTypeCandidate[]): ShiftTypeMatchResult {
+  if (!siteId) return { id: null, ambiguous: false };
+  const slot = normalizeTimeRange(timeRaw);
+  if (!slot) return { id: null, ambiguous: false };
+  const sameSlot = candidates.filter((c) => c.siteId === siteId && c.timeSlot === slot);
+  if (sameSlot.length === 1) return { id: sameSlot[0]!.id, ambiguous: false };
+  if (sameSlot.length > 1) {
+    const rankKind = classifyRank(rankRaw);
+    const narrowed = narrowByRank(sameSlot, rankKind);
+    if (narrowed.length === 1) return { id: narrowed[0]!.id, ambiguous: false, matchedViaRank: true };
+    return { id: null, ambiguous: true, candidateTimeSlots: sameSlot.map((c) => c.timeSlot ?? "（未設時段）"), rankAttempted: rankKind !== null };
+  }
+  return { id: null, ambiguous: false };
+}
+
 /** WP-STAFF-IMPORT B2：逐格配對依據（寫入 `roster_upload_rows.match_basis`）。
  * `name_only`＝淨靠姓名配到（無工號／電話佐證），上載頁／待處理摘要出警告。 */
 type GuardMatchBasis = "staff_no" | "tel" | "name_tel" | "name_only" | "alias" | "override";
@@ -420,6 +437,8 @@ export interface GuardMatchResult {
    * 並記低「呢個工號＋呢個姓名 → 嗰個保安員」。`service.ts` 加「工號衝突
    * 待核」warning。optional：舊 call site／測試唔使改。 */
   matchedViaStaffNoConflictOverride?: boolean;
+  /** HIST-5：命中嘅 guard_match_overrides.reason（`HIST5 …` 開頭＝歷史導入 AI 推斷覆寫；其餘＝舊「工號衝突保守預設」）。 */
+  overrideReason?: string;
   /** WP-STAFF-IMPORT B2：配對依據；配唔到＝null。optional：舊 call site／測試唔使改。 */
   matchBasis?: GuardMatchBasis | null;
   /** WP-STAFF-IMPORT B2：靠電話（全表唯一）配到，但更表姓名同系統本名／別名唔同。 */
@@ -438,6 +457,8 @@ export interface GuardCandidate {
 export interface GuardMatchIndex {
   /** 驗收（Opus 5.5）：`${正規化工號}\u0000${更表姓名}` → guardId（工號衝突保守預設；optional，舊測試自己砌 index 唔使改）。 */
   staffNoConflictOverrides?: ReadonlyMap<string, string>;
+  /** HIST-5：override key → reason（同 staffNoConflictOverrides 同 key；optional）。 */
+  staffNoConflictOverrideReasons?: ReadonlyMap<string, string>;
   /** 正規化工號（含 current／former，`guard_staff_numbers.number`）→
    * {guardId, status}——status 俾 (b) 判斷係咪靠已取消號配到。 */
   byStaffNumber: ReadonlyMap<string, { guardId: string; status: string }>;
@@ -497,12 +518,14 @@ export function buildGuardMatchIndex(rows: {
   // WP-GUARD-FIX：`nameAliases` 做 optional——舊 call site（例如
   // scripts/opening/build-aug-plan.ts，7 月開賬未有呢個欄嘅概念）唔傳都
   // 得，當冇別名（`[]`），唔影響原有工號／姓名／電話配對行為。
-  guards: readonly (GuardCandidate & { tel: string | null; staffNo: string | null; staffNoMw: string | null; nameAliases?: readonly string[] })[];
+  guards: readonly (GuardCandidate & { tel: string | null; staffNo: string | null; staffNoMw: string | null; nameAliases?: readonly string[]; mergedFrom?: readonly string[] })[];
   staffNumbers: readonly { number: string; guardId: string; status: string }[];
   phones: readonly { guardId: string; tel: string }[];
   /** 驗收（Opus 5.5）：`guard_match_overrides`（未作廢）——工號衝突保守預設。 */
-  matchOverrides?: readonly { staffNo: string; nameRaw: string; guardId: string }[];
+  matchOverrides?: readonly { staffNo: string; nameRaw: string; guardId: string; reason?: string }[];
 }): GuardMatchIndex {
+  // HIST-5：已被歷史導入合併走嘅 guard（mergedFrom 帶 `merged_into:<id>`）唔再參與配對（否則同名候選永遠 ≥2）。
+  const guardRows = rows.guards.filter((g) => !isMergedAwayGuard(g));
   const byStaffNumber = new Map<string, { guardId: string; status: string }>();
   const cardsByGuardId = new Map<string, Map<string, string>>();
   for (const sn of rows.staffNumbers) {
@@ -514,7 +537,7 @@ export function buildGuardMatchIndex(rows: {
   const staffNoByGuardId = new Map<string, string | null>();
   const nameByGuardId = new Map<string, string>();
   const aliasesByGuardId = new Map<string, readonly string[]>();
-  for (const g of rows.guards) {
+  for (const g of guardRows) {
     staffNoByGuardId.set(g.id, g.staffNo);
     nameByGuardId.set(g.id, g.nameZh.trim());
     aliasesByGuardId.set(g.id, g.nameAliases ?? []);
@@ -531,7 +554,7 @@ export function buildGuardMatchIndex(rows: {
     if (!telsByGuard.has(p.guardId)) telsByGuard.set(p.guardId, new Set());
     telsByGuard.get(p.guardId)!.add(normalizeTel(p.tel));
   }
-  for (const g of rows.guards) {
+  for (const g of guardRows) {
     const name = g.nameZh.trim();
     if (!byName.has(name)) byName.set(name, []);
     byName.get(name)!.push(g.id);
@@ -572,9 +595,21 @@ export function buildGuardMatchIndex(rows: {
   const byTel = new Map<string, string[]>([...byTelSets].map(([k, v]) => [k, [...v]]));
 
   const staffNoConflictOverrides = new Map<string, string>();
-  for (const o of rows.matchOverrides ?? []) staffNoConflictOverrides.set(overrideKey(normalizeStaffNumber(o.staffNo), o.nameRaw.trim()), o.guardId);
+  const staffNoConflictOverrideReasons = new Map<string, string>();
+  for (const o of rows.matchOverrides ?? []) {
+    // HIST-5：staffNo 空字串＝「淨姓名」override（更表冇工號嗰啲格）。
+    const key = overrideKey(o.staffNo ? normalizeStaffNumber(o.staffNo) : "", o.nameRaw.trim());
+    staffNoConflictOverrides.set(key, o.guardId);
+    if (o.reason) staffNoConflictOverrideReasons.set(key, o.reason);
+  }
 
-  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId, staffNoConflictOverrides, byTel, cardsByGuardId };
+  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId, staffNoConflictOverrides, staffNoConflictOverrideReasons, byTel, cardsByGuardId };
+}
+
+/** HIST-5：guard 已被歷史導入合併入另一個（mergedFrom 帶 `merged_into:<id>`）。 */
+export const MERGED_INTO_PREFIX = "merged_into:";
+export function isMergedAwayGuard(g: { mergedFrom?: readonly string[] | null }): boolean {
+  return !!g.mergedFrom?.some((x) => x.startsWith(MERGED_INTO_PREFIX));
 }
 
 function overrideKey(staffNoNorm: string, name: string): string {
@@ -624,24 +659,29 @@ function matchGuardInner(
 ): GuardMatchResult {
   let staffNoProvidedButNotFound = false;
   const rowName = params.nameRaw?.trim() || null;
+  // 驗收（Opus 5.5）：工號衝突保守預設——完全相同嘅「工號＋更表姓名」組合先會命中（見 GuardMatchOverride 註解）。
+  // HIST-5：更表冇工號嘅格用 staffNo="" 嘅淨姓名 override；override 排喺工號／電話／姓名層之前。
+  if (rowName) {
+    const snForOverride = params.staffNoRaw ? normalizeStaffNumber(params.staffNoRaw) : "";
+    const ovKey = overrideKey(snForOverride, rowName);
+    const overrideGuardId = index.staffNoConflictOverrides?.get(ovKey);
+    if (overrideGuardId) {
+      return {
+        guardId: overrideGuardId,
+        guardMatch: "by_name",
+        matchedViaFormerStaffNo: false,
+        staffNoMismatch: false,
+        staffNoBelongsToOther: false,
+        matchedViaAlias: false,
+        matchedViaStaffNoConflictOverride: true,
+        overrideReason: index.staffNoConflictOverrideReasons?.get(ovKey),
+        matchBasis: "override",
+      };
+    }
+  }
   if (params.staffNoRaw) {
     const normalized = normalizeStaffNumber(params.staffNoRaw);
     if (normalized) {
-      // 驗收（Opus 5.5）：工號衝突保守預設——完全相同嘅「工號＋更表姓名」
-      // 組合先會命中（見 GuardMatchOverride 註解）。
-      const overrideGuardId = rowName ? index.staffNoConflictOverrides?.get(overrideKey(normalized, rowName)) : undefined;
-      if (overrideGuardId) {
-        return {
-          guardId: overrideGuardId,
-          guardMatch: "by_name",
-          matchedViaFormerStaffNo: false,
-          staffNoMismatch: false,
-          staffNoBelongsToOther: false,
-          matchedViaAlias: false,
-          matchedViaStaffNoConflictOverride: true,
-          matchBasis: "override",
-        };
-      }
       const viaNumber = index.byStaffNumber.get(normalized);
       if (viaNumber) {
         // B1-8 第 3 項：staff_no 命中真實存在嘅保安員，但呢行姓名同嗰個

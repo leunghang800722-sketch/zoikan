@@ -110,7 +110,8 @@ interface DeriveOpts {
  * 冇傳（新盤建盤，上載未指定盤）＝全部格。
  */
 async function deriveShiftTypeGroups(uploadId: string, forSiteId?: string, opts: DeriveOpts = {}): Promise<{ groups: ShiftTypeGroup[]; unparsedCodes: string[] }> {
-  const siteFilter = forSiteId ? { OR: [{ resolvedSiteId: forSiteId }, { resolvedSiteId: null, upload: { siteId: forSiteId } }] } : {};
+  // HIST-5 S2：歷史模式只計「解析後實際盤」就係呢個盤嘅格（母盤本身冇子盤標記嘅格歸母盤——HKU座頭 OT／同 code 唔同時段更種之前因為母盤被跳過而漏建）。
+  const siteFilter = forSiteId ? (opts.historical ? { resolvedSiteId: forSiteId } : { OR: [{ resolvedSiteId: forSiteId }, { resolvedSiteId: null, upload: { siteId: forSiteId } }] }) : {};
   // 歷史模式：只睇未配到更種嘅格（現有盤已配好嘅格唔使再推更種）。
   const unmatchedFilter = opts.historical ? { shiftTypeId: null } : {};
   const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId, codeKind: { in: ["shift", "ot"] }, ...siteFilter, ...unmatchedFilter }, select: { rawCode: true, timeRaw: true, codeKind: true } });
@@ -148,7 +149,7 @@ type GroupAction =
  * 同 key（code 大細楷不分＋開工時間）已存在：有效 → skip；已作廢 → 只有「由一鍵 undo 作廢」而且收工時間＋鐘數同上載推出嘅完全一樣先復原；
  * 其餘（人手作廢、或者收工／鐘數唔同）→ blocked（唔復原、唔另建，出題）。
  */
-async function classifyGroup(siteId: string, g: ShiftTypeGroup): Promise<{ action: GroupAction; start: Date | null; end: Date | null; hours: number | null }> {
+async function classifyGroup(siteId: string, g: ShiftTypeGroup, historical = false): Promise<{ action: GroupAction; start: Date | null; end: Date | null; hours: number | null; code?: string }> {
   // 歷史模式冇開始時間更種：盤已經有同代號嘅有效更種（任何開工時間）就唔另建（否則同代號多候選、時段又收窄唔到會變歧義）。
   if (g.noTime) {
     const anySameCode = await prisma.shiftType.findFirst({ where: { siteId, code: { equals: g.code, mode: "insensitive" }, voidedAt: null }, select: { id: true } });
@@ -159,7 +160,19 @@ async function classifyGroup(siteId: string, g: ShiftTypeGroup): Promise<{ actio
   const hours = g.ot ? otHoursFromCode(g.code) : g.slot ? slotHours(g.slot) : null;
   const exists = await prisma.shiftType.findFirst({ where: { siteId, code: { equals: g.code, mode: "insensitive" }, startTime: start } });
   if (!exists) return { action: { kind: "create" }, start, end, hours };
-  if (!exists.voidedAt) return { action: { kind: "skip" }, start, end, hours };
+  if (!exists.voidedAt) {
+    // HIST-5 S2：同 code＋同開工時間但收工時間唔同（DB unique 淨睇 code＋開工）——歷史模式用現有慣例嘅「-N」後綴另建更種
+    // （matchShiftType 用 codeFamily 將 D／D-2 當同一代號家族，再按時段收窄）。已有規格完全一樣嘅 -N 就 skip（冪等）。
+    if (historical && g.slot && !g.ot && !sameTime(exists.endTime, end)) {
+      for (let n = 2; n < 20; n++) {
+        const variantCode = `${g.code}-${n}`;
+        const v = await prisma.shiftType.findFirst({ where: { siteId, code: { equals: variantCode, mode: "insensitive" }, startTime: start } });
+        if (!v) return { action: { kind: "create" }, start, end, hours, code: variantCode };
+        if (!v.voidedAt && sameTime(v.endTime, end)) return { action: { kind: "skip" }, start, end, hours };
+      }
+    }
+    return { action: { kind: "skip" }, start, end, hours };
+  }
   const undone = await prisma.monthCloseAutoChange.findFirst({ where: { kind: "shift_type_created", refId: exists.id, status: "undone" }, select: { id: true } });
   const identical = sameTime(exists.endTime, end) && sameHours(exists.hours, hours);
   if (undone && identical) return { action: { kind: "revive", stId: exists.id, code: exists.code }, start, end, hours };
@@ -188,7 +201,7 @@ async function ensureShiftTypesFromUpload(
   let created = 0;
   const blocked: string[] = [];
   for (const g of groups) {
-    const { action, start, end, hours } = await classifyGroup(site.id, g);
+    const { action, start, end, hours, code: variantCode } = await classifyGroup(site.id, g, ctx.historical);
     if (action.kind === "skip") continue;
     if (action.kind === "blocked") {
       blocked.push(action.reason);
@@ -209,10 +222,10 @@ async function ensureShiftTypesFromUpload(
     }
     try {
       const st = await prisma.shiftType.create({
-        data: { siteId: site.id, code: g.code, startTime: start, endTime: end, hours: hours !== null ? new Prisma.Decimal(hours) : null, billingGroup: "per_shift", createdBy: ctx.actorUserId },
+        data: { siteId: site.id, code: variantCode ?? g.code, startTime: start, endTime: end, hours: hours !== null ? new Prisma.Decimal(hours) : null, billingGroup: "per_shift", createdBy: ctx.actorUserId },
       });
       await ctx.audit({ tableName: "shift_types", rowId: st.id, action: "create", after: st });
-      await ctx.journal({ kind: "shift_type_created", refTable: "shift_types", refId: st.id, summary: `盤「${site.canonicalName}」自動建更種「${g.code}」${g.slot ? `（${g.slot}）` : g.noTime ? "（時段未知，只計出勤）" : ""}`, detail: { shiftTypeId: st.id, siteId: site.id } });
+      await ctx.journal({ kind: "shift_type_created", refTable: "shift_types", refId: st.id, summary: `盤「${site.canonicalName}」自動建更種「${variantCode ?? g.code}」${g.slot ? `（${g.slot}）` : g.noTime ? "（時段未知，只計出勤）" : ""}`, detail: { shiftTypeId: st.id, siteId: site.id } });
       if (g.noTime) ctx.noTimeShiftTypes.push({ siteName: site.canonicalName, code: g.code });
       created++;
     } catch (e) {
@@ -293,7 +306,8 @@ export async function planShiftTypesForSite(siteId: string, month: Date, opts: D
   const none: ShiftTypePlan = { eligible: false, uploadIds: [], creatable: 0, revivable: 0, unparsedCodes: [], blocked: [] };
   // 正式月份：只補「有效更種 = 0」嘅盤。歷史模式（HIST-3）：現有盤亦補（只睇未配到更種嘅格推出嚟嘅新代號／新時段）。
   if (!opts.historical && (await prisma.shiftType.count({ where: { siteId, voidedAt: null } })) > 0) return none;
-  if ((await prisma.site.count({ where: { parentSiteId: siteId } })) > 0) return none;
+  // 母盤（有子盤）正式月份刻意冇更種；歷史模式（HIST-5 S2）容許——母盤自己嘅格（冇子盤標記）都要有更種先落到。
+  if (!opts.historical && (await prisma.site.count({ where: { parentSiteId: siteId } })) > 0) return none;
   const uploads = await prisma.rosterUpload.findMany({
     where: { month, status: { in: ["parsed", "confirmed"] }, OR: [{ siteId }, { rows: { some: { resolvedSiteId: siteId } } }] },
     select: { id: true },
@@ -307,7 +321,7 @@ export async function planShiftTypesForSite(siteId: string, month: Date, opts: D
   for (const u of uploads) {
     const d = await deriveShiftTypeGroups(u.id, siteId, opts);
     for (const g of d.groups) {
-      const { action } = await classifyGroup(siteId, g);
+      const { action } = await classifyGroup(siteId, g, opts.historical === true);
       const k = `${g.code.toUpperCase()}|${g.slot ?? ""}`;
       if (action.kind === "create") create.add(k);
       else if (action.kind === "revive") revive.add(k);
@@ -404,7 +418,7 @@ export async function ensureShiftTypesForEmptySites(ctx: AutoCollector, month: D
     // 歷史模式：現有盤冇新代號／新時段要補（creatable／revivable／blocked 全 0）→ 行返「更種比上載新就補 reparse」路。
     const nothingToDo = ctx.historical && plan.eligible && plan.creatable === 0 && plan.revivable === 0 && plan.blocked.length === 0;
     if (!plan.eligible || nothingToDo) {
-      if ((await prisma.site.count({ where: { parentSiteId: siteId } })) > 0) continue;
+      if (!ctx.historical && (await prisma.site.count({ where: { parentSiteId: siteId } })) > 0) continue;
       const pending = await uploadsStaleAgainstShiftTypes(siteId, month);
       if (pending.length === 0) continue;
       const ok = await rematch(pending);

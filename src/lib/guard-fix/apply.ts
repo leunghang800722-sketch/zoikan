@@ -15,7 +15,9 @@ import { createGuardPhone, syncLegacyGuardContactColumns, normalizeTel, isValidT
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
 import { assertMonthNotLocked } from "@/lib/month-lock";
 import { canonicalHkid } from "@/lib/guard-fix/sources";
-import type { GuardFixPlan } from "@/lib/guard-fix/types";
+import type { GuardFixPlan, OverrideKey } from "@/lib/guard-fix/types";
+import { HIST5_OVERRIDE_REASON_PREFIX, maskLongDigits, type HistInference } from "@/lib/month-close/hist-inference";
+import { MERGED_INTO_PREFIX } from "@/lib/roster-upload/match";
 
 const SYSTEM_ACTOR = "system:guard-fix";
 /** HIST-2：歷史更表導入建出嚟嘅人嘅來源標記（guards.created_by、guard_staff_numbers／guard_phones.source）。 */
@@ -40,6 +42,8 @@ function emptyDiff(): Diff {
 }
 
 export interface ApplyGuardFixPlanDiffs {
+  /** HIST-5：R3 合併同名歷史導入 minimal guard。 */
+  mergeGuards: Diff;
   link: Diff;
   create: Diff;
   createMinimal: Diff;
@@ -68,11 +72,17 @@ export interface ApplyGuardFixPlanOptions {
   historicalRoster?: boolean;
 }
 
+/** HIST-5：guard_match_overrides.reason／audit 用嘅一行推斷說明（規則＋信心＋決定＋依據；無電話／身份證）。 */
+function inferenceReason(inf: HistInference): string {
+  return maskLongDigits(`${HIST5_OVERRIDE_REASON_PREFIX} ${inf.rule}（信心 ${inf.confidence}）：${inf.decision}｜依據：${inf.evidence.join("；")}`).slice(0, 1500);
+}
+
 /** 一個 transaction，冪等。回傳逐類 diff（create=呢次處理咗幾多、
  * skip=跳過幾多＋原因）。 */
 export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise<ApplyGuardFixPlanDiffs> {
   const { prisma, plan, planOnly } = opts;
   const diffs: ApplyGuardFixPlanDiffs = {
+    mergeGuards: emptyDiff(),
     link: emptyDiff(),
     create: emptyDiff(),
     createMinimal: emptyDiff(),
@@ -91,6 +101,96 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     const existingHkids = new Set(
       (await tx.guard.findMany({ where: { hkid: { not: null } }, select: { hkid: true } })).map((g) => canonicalHkid(g.hkid)).filter((x): x is string => !!x),
     );
+
+    // HIST-5：寫 guard_match_overrides（staffNo 空字串＝淨姓名）。已有同 guard 嘅有效 override＝冪等不動。回傳係咪真係寫咗。
+    const overrideNeeded = async (key: OverrideKey, guardId: string): Promise<boolean> => {
+      const existing = await tx.guardMatchOverride.findUnique({ where: { staffNo_nameRaw: { staffNo: key.staffNo, nameRaw: key.nameRaw } } });
+      return !(existing && existing.voidedAt === null && existing.guardId === guardId);
+    };
+    const writeOverride = async (key: OverrideKey, guardId: string, inference: HistInference): Promise<void> => {
+      const reason = inferenceReason(inference);
+      const ov = await tx.guardMatchOverride.upsert({
+        where: { staffNo_nameRaw: { staffNo: key.staffNo, nameRaw: key.nameRaw } },
+        create: { staffNo: key.staffNo, nameRaw: key.nameRaw, guardId, reason, createdBy: SYSTEM_ACTOR },
+        update: { guardId, reason, voidedAt: null, voidedBy: null },
+      });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "guard_match_overrides", rowId: ov.id, action: "create", after: { id: ov.id, guardId, rule: inference.rule, confidence: inference.confidence }, ip: null });
+    };
+    const writeInferenceAudit = async (guardId: string, inference: HistInference): Promise<void> => {
+      await writeAuditTx(tx, {
+        actorUserId: null,
+        tableName: "guards",
+        rowId: guardId,
+        action: "guard_fix_inference",
+        after: { id: guardId, rule: inference.rule, confidence: inference.confidence, decision: maskLongDigits(inference.decision), evidence: inference.evidence.map(maskLongDigits), cells: inference.cells },
+        ip: null,
+      });
+    };
+
+    // -----------------------------------------------------------------
+    // 0. merge_guards（HIST-5 R3）——合併同名歷史導入 minimal guard：shift_records／長工崗位／覆寫改指保留者，
+    //    被合併者 inactive＋mergedFrom 記 `merged_into:<id>`（matchGuard 之後唔再當候選）。
+    // -----------------------------------------------------------------
+    for (const ma of plan.actions.mergeGuards ?? []) {
+      const keeper = await tx.guard.findUnique({ where: { id: ma.keepGuardId }, select: { id: true, nameAliases: true, mergedFrom: true } });
+      if (!keeper) {
+        diffs.mergeGuards.skip.push(`${ma.seq}（保留者 guard_id 搵唔到，可能已刪）`);
+        continue;
+      }
+      const toMerge: Array<{ id: string; mergedFrom: string[] }> = [];
+      for (const gid of ma.mergeGuardIds) {
+        const g = await tx.guard.findUnique({ where: { id: gid }, select: { id: true, mergedFrom: true } });
+        if (g && !g.mergedFrom.some((x) => x.startsWith(MERGED_INTO_PREFIX))) toMerge.push(g);
+      }
+      let needsStaffNo = false;
+      if (ma.addStaffNumber) {
+        const existing = await tx.guardStaffNumber.findUnique({ where: { number: ma.addStaffNumber.number } });
+        const hasCurrent = await tx.guardStaffNumber.findFirst({ where: { guardId: ma.keepGuardId, scheme: ma.addStaffNumber.scheme, status: "current" }, select: { id: true } });
+        needsStaffNo = !existing && !hasCurrent;
+      }
+      const needsAlias = !!ma.addAlias && !keeper.nameAliases.includes(ma.addAlias);
+      const overridesToWrite: OverrideKey[] = [];
+      for (const k of ma.addOverrides) if (await overrideNeeded(k, ma.keepGuardId)) overridesToWrite.push(k);
+      if (toMerge.length === 0 && !needsStaffNo && !needsAlias && overridesToWrite.length === 0) {
+        diffs.mergeGuards.skip.push(`${ma.seq}（已經合併／登記晒，冪等跳過）`);
+        continue;
+      }
+      diffs.mergeGuards.create.push(ma.seq);
+      if (planOnly) continue;
+      const keeperKeys = new Set((await tx.shiftRecord.findMany({ where: { guardId: ma.keepGuardId }, select: { workDate: true, shiftTypeId: true } })).map((r) => `${r.workDate.toISOString().slice(0, 10)}|${r.shiftTypeId}`));
+      for (const g of toMerge) {
+        const recs = await tx.shiftRecord.findMany({ where: { guardId: g.id }, select: { id: true, workDate: true, shiftTypeId: true } });
+        const movable = recs.filter((r) => !keeperKeys.has(`${r.workDate.toISOString().slice(0, 10)}|${r.shiftTypeId}`));
+        // 撞 guardId_workDate_shiftTypeId unique 嘅跳過唔動（留喺被合併者）。
+        if (movable.length) await tx.shiftRecord.updateMany({ where: { id: { in: movable.map((r) => r.id) } }, data: { guardId: ma.keepGuardId } });
+        for (const r of movable) keeperKeys.add(`${r.workDate.toISOString().slice(0, 10)}|${r.shiftTypeId}`);
+        const posts = await tx.guardLongtermPost.updateMany({ where: { guardId: g.id }, data: { guardId: ma.keepGuardId } });
+        await tx.guardMatchOverride.updateMany({ where: { guardId: g.id }, data: { guardId: ma.keepGuardId } });
+        await tx.guard.update({ where: { id: g.id }, data: { status: "inactive", mergedFrom: [...g.mergedFrom, `${MERGED_INTO_PREFIX}${ma.keepGuardId}`] } });
+        await writeAuditTx(tx, {
+          actorUserId: null,
+          tableName: "guards",
+          rowId: g.id,
+          action: "guard_fix_merge",
+          after: { id: g.id, merged_into: `${MERGED_INTO_PREFIX}${ma.keepGuardId}`, moved_shift_records: movable.length, skipped_conflicts: recs.length - movable.length, moved_longterm_posts: posts.count, rule: ma.inference.rule, confidence: ma.inference.confidence, reason: inferenceReason(ma.inference) },
+          ip: null,
+        });
+      }
+      if (toMerge.length) {
+        const kp = await tx.guard.findUniqueOrThrow({ where: { id: ma.keepGuardId }, select: { mergedFrom: true } });
+        await tx.guard.update({ where: { id: ma.keepGuardId }, data: { mergedFrom: [...new Set([...kp.mergedFrom, ...toMerge.map((g) => g.id)])] } });
+      }
+      if (needsAlias && ma.addAlias) {
+        await tx.guard.update({ where: { id: ma.keepGuardId }, data: { nameAliases: [...new Set([...keeper.nameAliases, ma.addAlias])] } });
+      }
+      if (needsStaffNo && ma.addStaffNumber) {
+        const sr = await upsertCurrentStaffNumber(tx, { guardId: ma.keepGuardId, scheme: ma.addStaffNumber.scheme, number: ma.addStaffNumber.number, source: opts.historicalRoster ? HISTORICAL_ROSTER_SOURCE : "system:guard-fix", createdBy: SYSTEM_ACTOR });
+        await syncLegacyStaffNoColumns(tx, ma.keepGuardId);
+        await writeAuditTx(tx, { actorUserId: null, tableName: "guard_staff_numbers", rowId: sr.created.id, action: "create", after: sr.created, ip: null });
+      }
+      for (const k of overridesToWrite) await writeOverride(k, ma.keepGuardId, ma.inference);
+      await writeInferenceAudit(ma.keepGuardId, ma.inference);
+    }
 
     // -----------------------------------------------------------------
     // 1. link——登記工號／加別名到現有保安員。
@@ -119,7 +219,9 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         }
       }
       const needsAlias = !!la.addAlias && !guard.nameAliases.includes(la.addAlias);
-      if (!needsStaffNo && !needsAlias) {
+      const linkOverridesToWrite: OverrideKey[] = [];
+      for (const k of la.addOverrides ?? []) if (await overrideNeeded(k, la.guardId)) linkOverridesToWrite.push(k);
+      if (!needsStaffNo && !needsAlias && linkOverridesToWrite.length === 0) {
         diffs.link.skip.push(`${la.seq}（已經登記晒，冪等跳過）`);
         continue;
       }
@@ -143,6 +245,10 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         await tx.guard.update({ where: { id: la.guardId }, data: { nameAliases: nextAliases } });
         await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: la.guardId, action: "update", after: { id: la.guardId }, ip: null });
       }
+      if (la.inference) {
+        for (const k of linkOverridesToWrite) await writeOverride(k, la.guardId, la.inference);
+        await writeInferenceAudit(la.guardId, la.inference);
+      }
     }
 
     // -----------------------------------------------------------------
@@ -157,6 +263,10 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       hkid: string | null;
       hireDate: string | null;
       uNumber: string | null;
+      /** HIST-5：uNumber 嘅 scheme（冇傳＝U）。 */
+      uScheme?: string;
+      /** HIST-5：額外別名（R4 併入嘅變體名）。 */
+      aliases?: string[];
       defaultBrokerCode: string;
       diff: Diff;
       historical?: boolean;
@@ -187,7 +297,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       const created = await tx.guard.create({
         data: {
           nameZh: input.nameZh,
-          nameAliases: input.alias ? [input.alias] : [],
+          nameAliases: [...new Set([...(input.alias ? [input.alias] : []), ...(input.aliases ?? [])].filter((a) => a && a !== input.nameZh))],
           hkid: input.hkid,
           hireDate: input.hireDate ? new Date(`${input.hireDate}T00:00:00.000Z`) : null,
           defaultBrokerId: broker?.id ?? null,
@@ -206,7 +316,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       });
 
       if (input.uNumber) {
-        const staffResult = await upsertCurrentStaffNumber(tx, { guardId: created.id, scheme: "U", number: input.uNumber, source: input.historical ? HISTORICAL_ROSTER_SOURCE : "system:guard-fix", createdBy: SYSTEM_ACTOR });
+        const staffResult = await upsertCurrentStaffNumber(tx, { guardId: created.id, scheme: input.uScheme ?? "U", number: input.uNumber, source: input.historical ? HISTORICAL_ROSTER_SOURCE : "system:guard-fix", createdBy: SYSTEM_ACTOR });
         await syncLegacyStaffNoColumns(tx, created.id);
         await writeAuditTx(tx, { actorUserId: null, tableName: "guard_staff_numbers", rowId: staffResult.created.id, action: "create", after: staffResult.created, ip: null });
       }
@@ -264,11 +374,19 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         secondaryTel: null,
         hkid: null,
         hireDate: null,
-        uNumber: null,
+        uNumber: cm.staffNumber?.number ?? null,
+        uScheme: cm.staffNumber?.scheme,
+        aliases: cm.aliases,
         defaultBrokerCode: cm.defaultBrokerCode,
         diff: diffs.createMinimal,
         historical: opts.historicalRoster === true,
       });
+      if (newGuardId && cm.inference) {
+        // HIST-5：覆寫（每個併入嘅身份一條）＋推斷 audit（含 R4 併入身份原有嘅推斷）。
+        for (const k of cm.overrides ?? []) await writeOverride(k, newGuardId, cm.inference);
+        await writeInferenceAudit(newGuardId, cm.inference);
+        for (const extra of cm.extraInferences ?? []) await writeInferenceAudit(newGuardId, extra);
+      }
       if (newGuardId && opts.historicalRoster) {
         await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: newGuardId, action: "guard_fix_historical_roster", after: { id: newGuardId, source: HISTORICAL_ROSTER_SOURCE, status: "inactive" }, ip: null });
       }

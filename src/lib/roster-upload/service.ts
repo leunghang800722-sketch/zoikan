@@ -33,6 +33,7 @@ import {
   matchSite,
   matchBroker,
   matchShiftType,
+  matchShiftTypeBySlot,
   matchGuard,
   staffNoCardHit,
   resolveRosterUploadSite,
@@ -43,6 +44,9 @@ import {
 } from "./match";
 import { externalBrokerForRow, type ExternalBrokerLite } from "./external-alias";
 import { ROSTER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
+import { HIST5_OVERRIDE_REASON_PREFIX, S1_ROW_WARNING, S1_NO_TIME_ROW_WARNING, S3_ROW_WARNING } from "@/lib/month-close/hist-inference";
+import { foldVariants } from "@/lib/names/variants";
+import { normalizeTimeRange } from "./time-range";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -157,7 +161,37 @@ async function matchRowsAndSummarize(
   // 時段完全一樣，例如數碼港 CP5「D」）嗰陣俾 rank_raw 第三層收窄用。
   const shiftTypes: ShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup }));
 
-  const guardIndex = await loadGuardMatchIndex(tx);
+  // HIST-5：歷史月份（month_closes.historical）——unknown 代號推斷（S1 單字母＝呢行自己嘅更；S3 跨盤代號＝另一個盤嘅名／別名）。
+  const historicalMonth = !!(await tx.monthClose.findUnique({ where: { month: monthStart(month) }, select: { historical: true } }))?.historical;
+  // HIST-5（Opus 驗收 M1）：歷史導入 AI 推斷嘅淨姓名覆寫只喺歷史月份生效（正式月份同名新人唔會被搶走）。
+  const guardIndex = await loadGuardMatchIndex(tx, { includeHistInferenceOverrides: historicalMonth });
+  const siteCodeKey = (s: string): string => foldVariants(s).toUpperCase().replace(/[\s()（）]/g, "");
+  const crossSiteTargetByKey = new Map<string, string>();
+  if (historicalMonth) {
+    const multiCharUnknown = parseResult.rows.some((r) => r.codeKind === "unknown" && !/^[A-Z]$/.test(r.rawCode.trim()) && r.rawCode.trim().length >= 2);
+    if (multiCharUnknown) {
+      const allSites = await tx.site.findMany({ select: { id: true, canonicalName: true, aliases: true } });
+      const dupKeys = new Set<string>();
+      for (const st of allSites) {
+        for (const nm of [st.canonicalName, ...st.aliases]) {
+          // 盤名尾括號內嘅短代號（「數碼港 Cyberport (CP5)」→ CP5）一併當鍵。
+          const inner = nm.normalize("NFKC").match(/\(([^()]{2,12})\)\s*$/)?.[1];
+          for (const k of [siteCodeKey(nm), ...(inner ? [siteCodeKey(inner)] : [])]) {
+            if (k.length < 2) continue;
+            const prev = crossSiteTargetByKey.get(k);
+            if (prev && prev !== st.id) dupKeys.add(k);
+            crossSiteTargetByKey.set(k, st.id);
+          }
+        }
+      }
+      for (const k of dupKeys) crossSiteTargetByKey.delete(k); // 同一個代號對到兩個盤＝唔准估
+      const extraSiteIds = [...new Set([...crossSiteTargetByKey.values()])].filter((id) => !shiftTypeSiteIds.includes(id));
+      if (extraSiteIds.length) {
+        const extra = await tx.shiftType.findMany({ where: { siteId: { in: extraSiteIds }, voidedAt: null }, select: { id: true, siteId: true, code: true, startTime: true, endTime: true, billingGroup: true } });
+        for (const s of extra) shiftTypes.push({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup });
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------
   // WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）：對數頁大量「未寫子
@@ -349,7 +383,29 @@ async function matchRowsAndSummarize(
       // §15.5 原語意）。
     }
 
-    const shiftTypeMatch = matchShiftType(r.rawCode, r.codeKind, effectiveSiteId, r.timeRaw, shiftTypes, r.rankRaw);
+    // HIST-5 S1／S3（只限歷史月份）：unknown 代號推斷成「呢行自己嘅更」。
+    let rowCodeKind = r.codeKind;
+    let rowSiteId = effectiveSiteId;
+    let hist5Inferred = false;
+    if (historicalMonth && r.codeKind === "unknown") {
+      const code = r.rawCode.trim();
+      if (/^[A-Z]$/.test(code)) {
+        rowCodeKind = "shift";
+        hist5Inferred = true;
+        warnings.push(normalizeTimeRange(r.timeRaw) ? S1_ROW_WARNING : S1_NO_TIME_ROW_WARNING);
+      } else {
+        const target = crossSiteTargetByKey.get(siteCodeKey(code));
+        if (target && target !== effectiveSiteId) {
+          rowCodeKind = "shift";
+          hist5Inferred = true;
+          rowSiteId = target;
+          effectiveSiteId = target;
+          warnings.push(S3_ROW_WARNING);
+        }
+      }
+    }
+    let shiftTypeMatch = matchShiftType(r.rawCode, rowCodeKind, rowSiteId, r.timeRaw, shiftTypes, r.rankRaw);
+    if (hist5Inferred && !shiftTypeMatch.id && !shiftTypeMatch.ambiguous) shiftTypeMatch = matchShiftTypeBySlot(rowSiteId, r.timeRaw, r.rankRaw, shiftTypes);
     const guardResult = guardResults[rowPos]!;
     if (guardResult.guardMatch === "unmatched") unmatchedGuardCount += 1;
     if (guardResult.guardMatch === "ambiguous") ambiguousGuardCount += 1;
@@ -395,8 +451,13 @@ async function matchRowsAndSummarize(
     // WP-GUARD-FIX（老闆 2026-09-25 要求）：靠別名（`guards.name_aliases`）
     // 配到——留痕俾會計知呢個人個本名同更表寫嘅唔同，唔係純粹信賴巧合。
     if (guardResult.matchedViaStaffNoConflictOverride) {
-      staffNoMismatchCount += 1;
-      warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人：已按保安員配對修復保守預設配對到按更表姓名建立嘅獨立保安員（工號衝突待核）`);
+      if (guardResult.overrideReason?.startsWith(HIST5_OVERRIDE_REASON_PREFIX)) {
+        // HIST-5：歷史導入 AI 推斷覆寫（見 guard_match_overrides.reason 規則＋依據）。
+        warnings.push("由歷史導入 AI 推斷覆寫配對（規則同依據見 guard_match_overrides.reason／導入報告）");
+      } else {
+        staffNoMismatchCount += 1;
+        warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人：已按保安員配對修復保守預設配對到按更表姓名建立嘅獨立保安員（工號衝突待核）`);
+      }
     }
     if (guardResult.telNameConflict) {
       warnings.push("電話對到一位保安員、但更表姓名對到另一位，唔會自動配對，人手覆核");
@@ -416,7 +477,7 @@ async function matchRowsAndSummarize(
       // 個）——講明畀會計，唔係淨係睇咗時段就放棄。
       const rankNote = shiftTypeMatch.rankAttempted ? "，已用 rank 收窄但仍未夠" : "";
       warnings.push(`更別配對到多過一個候選（時段：${candidateList}${rankNote}），人手覆核`);
-    } else if ((r.codeKind === "shift" || r.codeKind === "ot") && !shiftTypeMatch.id) {
+    } else if ((rowCodeKind === "shift" || rowCodeKind === "ot") && !shiftTypeMatch.id) {
       unmatchedShiftTypeCount += 1;
       warnings.push(`更別「${r.rawCode}」對唔到 shift_types，人手覆核`);
     }
@@ -427,7 +488,7 @@ async function matchRowsAndSummarize(
       subSiteName: r.subSiteName,
       workDate: new Date(`${r.workDate}T00:00:00.000Z`),
       rawCode: r.rawCode,
-      codeKind: r.codeKind,
+      codeKind: rowCodeKind,
       shiftTypeId: shiftTypeMatch.id,
       resolvedSiteId: effectiveSiteId,
       resolvedSiteManual,
