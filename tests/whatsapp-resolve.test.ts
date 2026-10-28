@@ -114,7 +114,7 @@ describe("W1 resolve：人", () => {
     expect(r.guardId).toBe("g2");
   });
   it("識唔到嘅名 → person_unknown", async () => {
-    const r = await one(mk({ self_reference: false, persons: [{ raw: "測試無名氏", role: "worker" }] }));
+    const r = await one(mk({ self_reference: false, persons: [{ raw: "吳無名氏", role: "worker" }] }));
     expect(r.resolution.reasons).toContain("person_unknown");
     expect(r.routed).toBe("triage");
   });
