@@ -1448,6 +1448,26 @@ model MonthCloseRun {
   @@map("month_close_runs")
 }
 
+// HIST-2：歷史月份（2026-07 前、month_closes.historical=true）一鍵導入嘅執行紀錄——同 month_close_runs 一樣嘅「認領＋15 分鐘卡死復原」pattern，
+// 但步驟集同報告形狀唔同（建盤／更種／人＋逐盤對數結果＋Postorder 逐盤比對），所以獨立一張表，唔污染一鍵結算 run（markable 檢查會數 month_close_runs）。
+// steps_json／report_json 一律冇 PII（盤名＋數字）。
+model HistoricalImportRun {
+  id             String    @id @default(uuid())
+  month          DateTime  @db.Date // 月份第一日
+  status         String    @default("running") // running／done／failed
+  startedById    String    @map("started_by_id")
+  startedAt      DateTime  @default(now()) @map("started_at")
+  finishedAt     DateTime? @map("finished_at")
+  applyStartedAt DateTime? @map("apply_started_at")
+  currentStep    String?   @map("current_step")
+  stepsJson      Json      @default("[]") @map("steps_json")
+  reportJson     Json?     @map("report_json")
+  errorMessage   String?   @map("error_message")
+
+  @@index([month, startedAt])
+  @@map("historical_import_runs")
+}
+
 // ---------------------------------------------------------------------------
 // WP-ONE-CLICK-AUTO（§31，老闆 2026-10-08）：一鍵結算「自動改動」流水帳——
 // 每個 `auto` 信心嘅自動改動（加盤別名／建盤／建更種／建價卡／改價 snapshot／
