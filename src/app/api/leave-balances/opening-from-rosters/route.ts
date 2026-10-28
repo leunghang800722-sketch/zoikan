@@ -31,7 +31,7 @@ export async function POST(req: Request) {
         ip: getClientIp(req),
         auditEachRow: true,
       });
-      return ok(brandSafeResponse(result as unknown as Record<string, unknown>));
+      return ok(brandSafeResponse({ as_of: result.as_of, year: result.year, apply: result.apply, counts: result.counts, rows: result.rows }));
     } catch (e) {
       // lib 對「合併模式 as-of 太遲」等用中文 Error 拒絕——轉 409 俾前端顯示。
       if (e instanceof Error && e.constructor === Error) throw Conflict(e.message);
