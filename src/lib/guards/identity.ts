@@ -7,13 +7,14 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { Conflict, BadRequest } from "../api/errors";
 
 import { canonicalHkid, hkidCheckDigitValid } from "./hkid-pure";
+import { stripInvisibleChars } from "./tel-pure";
 export { canonicalHkid, hkidSearchKey, formatHkid, hkidCheckDigitValid } from "./hkid-pure";
 
 /** 電話正規化（香港）：去空白／連字符／括號／點；`+852`／`852`／`00852` 前綴 + 8 位 → 8 位；
  * 其餘（國際號）保留 `+` 同數字。冇有效內容 → null。 */
 export function normalizeTelHk(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  let s = raw.normalize("NFKC").replace(/[\s\-().]+/g, "");
+  let s = stripInvisibleChars(raw).replace(/[\-().]+/g, "");
   if (!s) return null;
   const m = s.match(/^(?:\+|00)?852(\d{8})$/);
   if (m) s = m[1]!;

@@ -190,7 +190,10 @@ function hasIdentitySignal(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMa
 function field(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMapping, name: (typeof IDENTITY_FIELDS)[number]): string | null {
   const col = fieldCol(mapping, name);
   if (col === null) return null;
-  return clean(rawCell(ws, row, col));
+  const v = clean(rawCell(ws, row, col));
+  // HIST-4：電話欄剝走隱形 Unicode 控制／格式字元（U+202C 等），NBSP 等空白變普通空格。
+  if (v !== null && name === "tel") return v.normalize("NFKC").replace(/[\p{Zs}\t\n\r]+/gu, " ").replace(/[\p{Cc}\p{Cf}]/gu, "").trim() || null;
+  return v;
 }
 
 /** HIST-3：舊模板冇雞頭碼欄、時段喺雞頭碼欄位置。三個條件全部要成立（免一個打錯字令成個 block 錯位）：

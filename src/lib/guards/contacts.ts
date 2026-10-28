@@ -50,6 +50,7 @@
 //   `syncLegacyGuardContactColumns()`。
 import type { Prisma, GuardPhone, GuardEmergencyContact, GuardAddress } from "@prisma/client";
 import { BadRequest } from "../api/errors";
+import { stripInvisibleChars } from "./tel-pure";
 import { writeAudit } from "../audit";
 
 type Tx = Prisma.TransactionClient;
@@ -162,7 +163,8 @@ async function healLegacyContactBeforeWrite(tx: Tx, guardId: string, group: Lega
 /** 正規化：去空白／連字符（`\s`／`-`），同 `staff-numbers.ts
  * normalizeStaffNumber()` 一致嘅簡單字符類 replace 手法。 */
 export function normalizeTel(raw: string): string {
-  return raw.replace(/[\s-]+/g, "");
+  // HIST-4：先 NFKC＋剝走所有 Unicode Cc／Cf／Zs 隱形／空白字元（U+202C、U+200B、U+FEFF、NBSP 等），再剝連字符。
+  return stripInvisibleChars(raw).replace(/-+/g, "");
 }
 
 // 8 位香港號（純數字）或者 `+` 開頭國際號——正規化之後統一用呢條 regex
@@ -214,7 +216,8 @@ export interface CreateGuardPhoneResult {
 export async function createGuardPhone(tx: Tx, input: CreateGuardPhoneInput): Promise<CreateGuardPhoneResult> {
   const tel = normalizeTel(input.tel);
   if (!isValidTel(tel)) {
-    throw BadRequest(`電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）：${tel}`);
+    // HIST-4：訊息唔准帶電話原值（PII）——只講欄位＋原因（長度）。
+    throw BadRequest(`電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭；長度 ${tel.length}）`);
   }
   await lockGuardRowForContactWrite(tx, input.guardId);
   // 自癒：加電話之前，如果呢個 guard 嘅 legacy `tel` 有值但 `guard_
